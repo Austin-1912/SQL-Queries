@@ -1,0 +1,95 @@
+/*SELECT 
+    t1.[ObjectName1],
+    t1.[ObjectName2],
+   CASE
+        WHEN t2.[Int1] = 0 THEN t2.[Text12]
+        ELSE CAST(t2.[Int1] AS NVARCHAR)
+    END AS EmployeeID,
+    t2.[PersonnelTypeID],
+    t3.[Name],  -- Adding the PersonnelType from the third table
+	Case
+		WHEN t1.ObjectName2 LIKE 'APAC_PI%' THEN 'Taguig City'
+		WHEN t1.ObjectName2 LIKE 'APAC_PH%' THEN 'Quezon City'
+		WHEN t1.ObjectName2 LIKE '%PUN%' THEN 'Pune'
+		ELSE t1.PartitionName2
+	END AS Location,
+	t1.PartitionName2,
+    DATEADD(MINUTE, -1 * t1.[MessageLocaleOffset], t1.[MessageUTC]) AS LocaleMessageTime,
+	t1.MessageType
+INTO 
+    #CombinedEmployeeData  -- Temporary table
+FROM 
+    [ACVSUJournal_00010020].[dbo].[ACVSUJournalLog] AS t1  -- Replace with your actual table name
+INNER JOIN 
+    [ACVSCore].[Access].[Personnel] AS t2  -- Replace with the actual table name
+ON 
+    t1.ObjectIdentity1 = t2.GUID
+INNER JOIN 
+    [ACVSCore].[Access].[PersonnelType] AS t3  -- Replace with the actual table name containing PersonnelType
+ON 
+    t2.[PersonnelTypeId] = t3.[ObjectID];
+	SELECT DISTINCT
+    [ObjectName1],
+    [Name],
+	EmployeeID,
+	Location,
+	Messagetype,
+    CONVERT(DATE, LocaleMessageTime) AS Date
+	FROM 
+    #CombinedEmployeeData  -- Use the temporary table with combined data
+	WHERE 
+    CONVERT (DATE, LocaleMessageTime) = '2025-05-5' 
+	AND PartitionName2 IN ('APAC.Default', 'CN.Beijing', 'JP.Tokyo', 'PH.Manila', 'MY.Kuala Lumpur') 
+	AND MessageType = 'CardAdmitted';
+	*/
+	
+
+
+	WITH CombinedEmployeeData AS (
+    SELECT
+        t1.[ObjectName1],
+        t1.[ObjectName2],
+        CASE
+            WHEN t2.[Int1] = 0 THEN t2.[Text12]
+            ELSE CAST(t2.[Int1] AS NVARCHAR)
+        END AS EmployeeID,
+        t2.[PersonnelTypeID],
+        t3.[Name] AS PersonnelTypeName,
+		t1.Objectidentity1 AS EmployeeIdentity,
+        CASE
+            WHEN t1.ObjectName2 LIKE 'APAC_PI%' THEN 'Taguig City'
+            WHEN t1.ObjectName2 LIKE 'APAC_PH%' THEN 'Quezon City'
+            WHEN t1.ObjectName2 LIKE '%PUN%' THEN 'Pune'
+            ELSE t1.PartitionName2
+        END AS Location,
+        t1.PartitionName2,
+        DATEADD(MINUTE, -1 * t1.[MessageLocaleOffset], t1.[MessageUTC]) AS LocaleMessageTime,
+        t1.MessageType
+    FROM
+        [ACVSUJournal_00010027].[dbo].[ACVSUJournalLog] AS t1
+        INNER JOIN [ACVSCore].[Access].[Personnel] AS t2 ON t1.ObjectIdentity1 = t2.GUID
+        INNER JOIN [ACVSCore].[Access].[PersonnelType] AS t3 ON t2.PersonnelTypeID = t3.ObjectID
+    WHERE
+        t1.MessageType = 'CardAdmitted'
+        AND t1.PartitionName2 IN ('APAC.Default', 'CN.Beijing', 'JP.Tokyo', 'PH.Manila', 'MY.Kuala Lumpur')
+        AND CONVERT(DATE, DATEADD(MINUTE, -1 * t1.[MessageLocaleOffset], t1.[MessageUTC])) = '2025-05-20'
+),
+RankedEmployeeData AS (
+    SELECT *,
+        ROW_NUMBER() OVER (PARTITION BY EmployeeIdentity, CONVERT(DATE, LocaleMessageTime) ORDER BY LocaleMessageTime DESC) AS rn
+    FROM
+        CombinedEmployeeData
+)
+SELECT
+    [ObjectName1],
+    PersonnelTypeName,
+    EmployeeID,
+    Location,
+    MessageType,
+    CONVERT(DATE, LocaleMessageTime) AS Date
+FROM
+    RankedEmployeeData
+WHERE
+    rn = 1;
+
+	--DROP Table #CombinedEmployeeData;
