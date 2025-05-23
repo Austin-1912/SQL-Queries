@@ -1,0 +1,23 @@
+SELECT
+    log.ObjectName1 AS [Employee Name],
+    AC.Int1 AS [Employee ID],
+    DATEADD(MINUTE, -1 * log.[MessageLocaleOffset], log.[MessageUTC]) AS LocaleMessageTime
+FROM
+    ACVSUJournal_00010027.dbo.ACVSUJournalLog AS log
+Inner Join ACVSCore.Access.Personnel AC
+	ON log.ObjectIdentity1 = AC.GUID
+INNER JOIN
+    ACVSUJournal_00010020.dbo.ACVSUJournalLogxmlShred AS xmls
+    ON log.XMLGuid = xmls.GUID
+WHERE
+    log.PartitionName2 = 'Apac.Default'
+    AND xmls.Value = 'OutDirection'
+    AND (
+        CAST(FORMAT(LocaleMessageTime, 'HH:mm') AS TIME) >= '20:00'
+        OR CAST(FORMAT(log.LocaleMessageTime, 'HH:mm') AS TIME) < '06:00'
+    )
+GROUP BY
+    log.ObjectName1,
+    log.Int1
+ORDER BY
+    [Last Out Time] DESC;
