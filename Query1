@@ -1,51 +1,73 @@
-WITH CombinedEmployeeData AS (
+WITH MainDoorSwipes AS (
     SELECT
         t1.ObjectName1 AS EmployeeName,
         CASE
             WHEN t2.Int1 = 0 THEN t2.Text12
             ELSE CAST(t2.Int1 AS NVARCHAR)
         END AS EmployeeID,
-        t3.Name AS PersonnelTypeName,
         DATEADD(MINUTE, -1 * t1.MessageLocaleOffset, t1.MessageUTC) AS LocaleMessageTime,
-        t1.XMLGuid
+        x.Value AS Direction,
+        t1.ObjectName2
     FROM
-        [ACVSUJournal_00010024].[dbo].[ACVSUJournalLog] AS t1
+        [ACVSUJournal_00010027].[dbo].[ACVSUJournalLog] AS t1
     INNER JOIN [ACVSCore].[Access].[Personnel] AS t2
         ON t1.ObjectIdentity1 = t2.GUID
     INNER JOIN [ACVSCore].[Access].[PersonnelType] AS t3
         ON t2.PersonnelTypeID = t3.ObjectID
+    INNER JOIN [ACVSUJournal_00010027].[dbo].[ACVSUJournalLogxmlShred] AS x
+        ON t1.XMLGuid = x.GUID
     WHERE
         t1.MessageType = 'CardAdmitted'
         AND t1.PartitionName2 = 'APAC.Default'
-        AND DATEADD(MINUTE, -1 * t1.MessageLocaleOffset, t1.MessageUTC) >= '2025-01-01'
         AND t3.Name = 'Employee'
+        AND DATEADD(MINUTE, -1 * t1.MessageLocaleOffset, t1.MessageUTC) >= '2025-05-01'
+        -- Main Door filter placeholder
+        AND t1.ObjectName2 IN ('APAC_IN_PUN_2NDFLR_RECPTION TO WORKSTATION DOOR_10:05:4B',
+							'APAC_IN_PUN_PODIUM_MAIN PODIUM RIGHT ENTRY-DOOR NEW',
+							'APAC_IN_PUN_PODIUM_MAIN PODIUM LEFT ENTRY-DOOR NEW',
+							'APAC_IN_PUN_TOWER B_MAIN RECEPTION DOOR','APAC_IN_PUN_TOWER B_LIFT LOBBY DOOR',
+							'APAC_IN_PUN_PODIUM_YELLOW_MAIN LIFT LOBBY-DOOR NEW','APAC_IN_PUN_PODIUM_RED_MAIN LIFT LOBBY ENTRY 1-DOOR',
+							'APAC_IN_PUN_PODIUM_P-1 TURNSTILE 1-DOOR', 'APAC_IN_PUN_PODIUM_P-1 TURNSTILE 2-DOOR',
+							'APAC_IN_PUN_PODIUM_P-1 TURNSTILE 3-DOOR', 'APAC_IN_PUN_PODIUM_P-1 TURNSTILE 4-DOOR',
+							'APAC_IN_PUN_PODIUM_P-1 TURNSTILE 2 -OUT DOOR','
+							APAC_IN_PUN-PODIUM_P-1 TURNSTILE 3 -OUT DOOR','APAC_IN_PUN_PODIUM_P-1 TURNSTILE 1-OUT DOOR',
+							'APAC_IN_PUN_PODIUM_P-1 TURNSTILE 4 -OUT DOOR', 'APAC_IN_PUN_PODIUM_ST 1-DOOR 1 (RED)',
+							'APAC_IN_PUN_PODIUM_ST 1 DOOR 2 (YELLOW)'
+)  
+        AND x.Value IN ('InDirection', 'OutDirection')
 ),
  
-EmployeeOutDirections AS (
+RankedSwipes AS (
     SELECT
-        c.EmployeeName,
-        c.EmployeeID,
-        c.LocaleMessageTime
+        *,
+        LEAD(LocaleMessageTime) OVER (PARTITION BY EmployeeID ORDER BY LocaleMessageTime) AS NextSwipeTime,
+        LEAD(Direction) OVER (PARTITION BY EmployeeID ORDER BY LocaleMessageTime) AS NextDirection
     FROM
-        CombinedEmployeeData c
-    INNER JOIN [ACVSUJournal_00010024].[dbo].[ACVSUJournalLogxmlShred] AS x
-        ON c.XMLGuid = x.GUID
+        MainDoorSwipes
+),
+ 
+FlaggedBreaks AS (
+    SELECT
+        EmployeeName,
+        EmployeeID,
+        LocaleMessageTime AS OutTime,
+        NextSwipeTime AS InTime,
+        DATEDIFF(MINUTE, LocaleMessageTime, NextSwipeTime) AS MinutesDiff
+    FROM
+        RankedSwipes
     WHERE
-        x.Value = 'OutDirection'
-        AND (
-            CAST(c.LocaleMessageTime AS TIME) >= '20:00:00'
-            OR CAST(c.LocaleMessageTime AS TIME) < '06:00:00'
-        )
+        Direction = 'OutDirection'
+        AND NextDirection = 'InDirection'
+        AND DATEDIFF(MINUTE, LocaleMessageTime, NextSwipeTime) >= 120
 )
  
 SELECT
     EmployeeName,
     EmployeeID,
-    MAX(LocaleMessageTime) AS LastOutTime
+    OutTime,
+    InTime,
+    MinutesDiff
 FROM
-    EmployeeOutDirections
-GROUP BY
-    EmployeeName,
-    EmployeeID
+    FlaggedBreaks
 ORDER BY
-    LastOutTime DESC;
+    OutTime DESC;
