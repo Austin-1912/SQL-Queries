@@ -115,63 +115,29 @@ def check_alerts_for_server(server_config):
 check_alerts_for_server(DB_CONFIG)
 
 
-PS C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\scripts> & "c:/Users/W0019058/OneDrive - Western Union/Desktop/CCURE-Comparison/.venv/Scripts/python.exe" "c:/Users/W0019058/OneDrive - Western Union/Desktop/CCURE-Comparison/Scripts/compare_profiles.py"
-Loading Excel files...
-Fetching SQL data...
 Traceback (most recent call last):
-  File "c:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\Scripts\compare_profiles.py", line 83, in <module>
+  File "C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\.venv\Lib\site-packages\pandas\core\indexes\base.py", line 3812, in get_loc
+    return self._engine.get_loc(casted_key)
+           ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "pandas/_libs/index.pyx", line 167, in pandas._libs.index.IndexEngine.get_loc
+  File "pandas/_libs/index.pyx", line 196, in pandas._libs.index.IndexEngine.get_loc
+  File "pandas/_libs/hashtable_class_helper.pxi", line 7088, in pandas._libs.hashtable.PyObjectHashTable.get_item
+  File "pandas/_libs/hashtable_class_helper.pxi", line 7096, in pandas._libs.hashtable.PyObjectHashTable.get_item
+KeyError: 'W iPass ID'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\scripts\compare_profiles.py", line 83, in <module>
     run_comparison()
     ~~~~~~~~~~~~~~^^
-  File "c:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\Scripts\compare_profiles.py", line 69, in run_comparison
-    sql_df = fetch_sql_data()
-  File "c:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\Scripts\compare_profiles.py", line 20, in fetch_sql_data
-    query = db_config.build_sql_query()
-            ^^^^^^^^^^^^^^^^^^^^^^^^^
-AttributeError: module 'config.db_config' has no attribute 'build_sql_query'
-
--------------------------------------------------------------------------------------------------------------------------
-import os
-
-import pyodbc
- 
-DB_CONFIG = {
-
-    'SQL_SERVER': 'SRVWUDEN0890V',
-
-    'SQL_DB': 'ACVSCore',
-
-    'SQL_USER': 'GSOC_Test',
-
-    'SQL_PASSWORD': 'Westerngsoc@2025',
-
-    'trusted_connection': False
-
-}
- 
-FILE_PATHS = {
-
-    'excel_file_1': r"C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\data\Active Contractors Sheet.xls",
-
-    'excel_file_2': r"C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\data\Active Employees sheet.xlsx",
-
-    'output_report': r"C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\data\comparison_report.xlsx"
-
-}
- 
-def get_sql_connection(SQL_SERVER, SQL_DB, SQL_USER, SQL_PASSWORD):
-
-    try:
-
-        return pyodbc.connect(
-
-            f"DRIVER={{ODBC Driver 17 for SQL Server}};"
-
-            f"SERVER={SQL_SERVER};DATABASE={SQL_DB};UID={SQL_USER};PWD={SQL_PASSWORD}"
-
-        )
-
-    except Exception as e:
-
-        print(f"Connection error for server {SQL_SERVER}: {e}")
-
-        return None
+  File "C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\scripts\compare_profiles.py", line 74, in run_comparison
+    all_excel_ids = prepare_id_sets(contractors_df, employees_df)
+  File "C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\scripts\compare_profiles.py", line 37, in prepare_id_sets
+    contractors_df['W iPass ID'].astype(str)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+  File "C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\.venv\Lib\site-packages\pandas\core\frame.py", line 4107, in __getitem__
+    indexer = self.columns.get_loc(key)
+  File "C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\.venv\Lib\site-packages\pandas\core\indexes\base.py", line 3819, in get_loc
+    raise KeyError(key) from err
+KeyError: 'W iPass ID'
