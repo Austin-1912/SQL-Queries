@@ -128,3 +128,50 @@ Traceback (most recent call last):
     conn = db_config.get_sql_connection(
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 AttributeError: module 'config.db_config' has no attribute 'get_sql_connection'
+
+-------------------------------------------------------------------------------------------------------------------------
+import os
+
+import pyodbc
+ 
+DB_CONFIG = {
+
+    'SQL_SERVER': 'SRVWUDEN0890V',
+
+    'SQL_DB': 'ACVSCore',
+
+    'SQL_USER': 'GSOC_Test',
+
+    'SQL_PASSWORD': 'Westerngsoc@2025',
+
+    'trusted_connection': False
+
+}
+ 
+FILE_PATHS = {
+
+    'excel_file_1': r"C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\data\Active Contractors Sheet.xls",
+
+    'excel_file_2': r"C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\data\Active Employees sheet.xlsx",
+
+    'output_report': r"C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\data\comparison_report.xlsx"
+
+}
+ 
+def get_sql_connection(SQL_SERVER, SQL_DB, SQL_USER, SQL_PASSWORD):
+
+    try:
+
+        return pyodbc.connect(
+
+            f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+
+            f"SERVER={SQL_SERVER};DATABASE={SQL_DB};UID={SQL_USER};PWD={SQL_PASSWORD}"
+
+        )
+
+    except Exception as e:
+
+        print(f"Connection error for server {SQL_SERVER}: {e}")
+
+        return None
