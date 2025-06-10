@@ -115,34 +115,16 @@ def check_alerts_for_server(server_config):
 check_alerts_for_server(DB_CONFIG)
 
 
-PS C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\scripts> python compare_profiles.py
+PS C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\scripts> & "c:/Users/W0019058/OneDrive - Western Union/Desktop/CCURE-Comparison/.venv/Scripts/python.exe" "c:/Users/W0019058/OneDrive - Western Union/Desktop/CCURE-Comparison/Scripts/compare_profiles.py"
 Loading Excel files...
+Fetching SQL data...
 Traceback (most recent call last):
-  File "C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\scripts\compare_profiles.py", line 83, in <module>
+  File "c:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\Scripts\compare_profiles.py", line 83, in <module>
     run_comparison()
     ~~~~~~~~~~~~~~^^
-  File "C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\scripts\compare_profiles.py", line 66, in run_comparison
-    contractors_df, employees_df = load_excel_data()
-                                   ~~~~~~~~~~~~~~~^^
-  File "C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\scripts\compare_profiles.py", line 28, in load_excel_data
-    employees_df = pd.read_excel(db_config.FILE_PATHS['excel_file_2'])
-  File "C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\.venv\Lib\site-packages\pandas\io\excel\_base.py", line 495, in read_excel
-    io = ExcelFile(
-        io,
-    ...<2 lines>...
-        engine_kwargs=engine_kwargs,
-    )
-  File "C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\.venv\Lib\site-packages\pandas\io\excel\_base.py", line 1550, in __init__
-    ext = inspect_excel_format(
-        content_or_path=path_or_buffer, storage_options=storage_options
-    )
-  File "C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\.venv\Lib\site-packages\pandas\io\excel\_base.py", line 1402, in inspect_excel_format
-    with get_handle(
-         ~~~~~~~~~~^
-        content_or_path, "rb", storage_options=storage_options, is_text=False
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    ) as handle:
-    ^
-  File "C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\.venv\Lib\site-packages\pandas\io\common.py", line 882, in get_handle
-    handle = open(handle, ioargs.mode)
-PermissionError: [Errno 13] Permission denied: 'C:\\Users\\W0019058\\OneDrive - Western Union\\Desktop\\CCURE-Comparison\\data\\Active Employees sheet.xlsx'
+  File "c:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\Scripts\compare_profiles.py", line 69, in run_comparison
+    sql_df = fetch_sql_data()
+  File "c:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\Scripts\compare_profiles.py", line 10, in fetch_sql_data
+    conn = db_config.get_sql_connection(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'config.db_config' has no attribute 'get_sql_connection'
