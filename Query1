@@ -48,8 +48,25 @@ def build_sql_query():
 
     return """
 
-      SELECT TOP 10 *
-      FROM ACVSCore.Access.Personnel
+      SELECT DISTINCT
+    AP.ObjectID AS "AccountName",
+    AP.Name AS "Emp Name",
+	CASE AP.Int1
+        WHEN 0 THEN AP.Text12
+        ELSE CAST(AP.Int1 AS NVARCHAR)
+    END AS "EmployeeID",
+	AP.text9 AS Temp_Badge_No,
+    PT.Name AS "PersonnelType",
+	Text10 AS Manager_Name,
+	Int4 As Manager_WU_ID
+FROM
+    ACVSCore.Access.Personnel AP
+    Full JOIN ACVSCore.Access.Credential ACR ON AP.Name = ACR.Name
+    Full JOIN ACVSCore.Access.PersonnelType PT ON PT.ObjectID = AP.PersonnelTypeID
+WHERE
+    AP.Disabled = 0
+ORDER BY
+    "AccountName" ASC;
 
     """
  
