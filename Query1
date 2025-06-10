@@ -124,10 +124,10 @@ Traceback (most recent call last):
     ~~~~~~~~~~~~~~^^
   File "c:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\Scripts\compare_profiles.py", line 69, in run_comparison
     sql_df = fetch_sql_data()
-  File "c:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\Scripts\compare_profiles.py", line 10, in fetch_sql_data
-    conn = db_config.get_sql_connection(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-AttributeError: module 'config.db_config' has no attribute 'get_sql_connection'
+  File "c:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\Scripts\compare_profiles.py", line 20, in fetch_sql_data
+    query = db_config.build_sql_query()
+            ^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'config.db_config' has no attribute 'build_sql_query'
 
 -------------------------------------------------------------------------------------------------------------------------
 import os
