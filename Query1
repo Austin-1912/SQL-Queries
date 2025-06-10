@@ -113,4 +113,10 @@ def check_alerts_for_server(server_config):
 # Call the function to test
 
 check_alerts_for_server(DB_CONFIG)
- 
+
+
+PS C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\scripts> python compare_profiles.py                
+Traceback (most recent call last):                                                                                        
+  File "C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\scripts\compare_profiles.py", line 2, in <module>
+    from config import db_config
+ModuleNotFoundError: No module named 'config'
