@@ -1,73 +1,99 @@
-WITH MainDoorSwipes AS (
-    SELECT
-        t1.ObjectName1 AS EmployeeName,
-        CASE
-            WHEN t2.Int1 = 0 THEN t2.Text12
-            ELSE CAST(t2.Int1 AS NVARCHAR)
-        END AS EmployeeID,
-        DATEADD(MINUTE, -1 * t1.MessageLocaleOffset, t1.MessageUTC) AS LocaleMessageTime,
-        x.Value AS Direction,
-        t1.ObjectName2
-    FROM
-        [ACVSUJournal_00010027].[dbo].[ACVSUJournalLog] AS t1
-    INNER JOIN [ACVSCore].[Access].[Personnel] AS t2
-        ON t1.ObjectIdentity1 = t2.GUID
-    INNER JOIN [ACVSCore].[Access].[PersonnelType] AS t3
-        ON t2.PersonnelTypeID = t3.ObjectID
-    INNER JOIN [ACVSUJournal_00010027].[dbo].[ACVSUJournalLogxmlShred] AS x
-        ON t1.XMLGuid = x.GUID
-    WHERE
-        t1.MessageType = 'CardAdmitted'
-        AND t1.PartitionName2 = 'APAC.Default'
-        AND t3.Name = 'Employee'
-        AND DATEADD(MINUTE, -1 * t1.MessageLocaleOffset, t1.MessageUTC) >= '2025-05-01'
-        -- Main Door filter placeholder
-        AND t1.ObjectName2 IN ('APAC_IN_PUN_2NDFLR_RECPTION TO WORKSTATION DOOR_10:05:4B',
-							'APAC_IN_PUN_PODIUM_MAIN PODIUM RIGHT ENTRY-DOOR NEW',
-							'APAC_IN_PUN_PODIUM_MAIN PODIUM LEFT ENTRY-DOOR NEW',
-							'APAC_IN_PUN_TOWER B_MAIN RECEPTION DOOR','APAC_IN_PUN_TOWER B_LIFT LOBBY DOOR',
-							'APAC_IN_PUN_PODIUM_YELLOW_MAIN LIFT LOBBY-DOOR NEW','APAC_IN_PUN_PODIUM_RED_MAIN LIFT LOBBY ENTRY 1-DOOR',
-							'APAC_IN_PUN_PODIUM_P-1 TURNSTILE 1-DOOR', 'APAC_IN_PUN_PODIUM_P-1 TURNSTILE 2-DOOR',
-							'APAC_IN_PUN_PODIUM_P-1 TURNSTILE 3-DOOR', 'APAC_IN_PUN_PODIUM_P-1 TURNSTILE 4-DOOR',
-							'APAC_IN_PUN_PODIUM_P-1 TURNSTILE 2 -OUT DOOR','
-							APAC_IN_PUN-PODIUM_P-1 TURNSTILE 3 -OUT DOOR','APAC_IN_PUN_PODIUM_P-1 TURNSTILE 1-OUT DOOR',
-							'APAC_IN_PUN_PODIUM_P-1 TURNSTILE 4 -OUT DOOR', 'APAC_IN_PUN_PODIUM_ST 1-DOOR 1 (RED)',
-							'APAC_IN_PUN_PODIUM_ST 1 DOOR 2 (YELLOW)'
-)  
-        AND x.Value IN ('InDirection', 'OutDirection')
-),
+import os
+
+import pyodbc
  
-RankedSwipes AS (
-    SELECT
-        *,
-        LEAD(LocaleMessageTime) OVER (PARTITION BY EmployeeID ORDER BY LocaleMessageTime) AS NextSwipeTime,
-        LEAD(Direction) OVER (PARTITION BY EmployeeID ORDER BY LocaleMessageTime) AS NextDirection
-    FROM
-        MainDoorSwipes
-),
+DB_CONFIG = {
+
+    'SQL_SERVER': 'SRVWUDEN0890V',
+
+    'SQL_DB': 'ACVSCore',
+
+    'SQL_USER': 'GSOC_Test',
+
+    'SQL_PASSWORD': 'Westerngsoc@2025',
+
+    'trusted_connection': False
+
+}
  
-FlaggedBreaks AS (
-    SELECT
-        EmployeeName,
-        EmployeeID,
-        LocaleMessageTime AS OutTime,
-        NextSwipeTime AS InTime,
-        DATEDIFF(MINUTE, LocaleMessageTime, NextSwipeTime) AS MinutesDiff
-    FROM
-        RankedSwipes
-    WHERE
-        Direction = 'OutDirection'
-        AND NextDirection = 'InDirection'
-        AND DATEDIFF(MINUTE, LocaleMessageTime, NextSwipeTime) >= 120
-)
+FILE_PATHS = {
+
+    'excel_file_1': r"C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\data\Active Contractors Sheet.xls",
+
+    'excel_file_2': r"C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\data\Active Employees sheet.xlsx",
+
+    'output_report': r"C:\Users\W0019058\OneDrive - Western Union\Desktop\CCURE-Comparison\data\comparison_report.xlsx"
+
+}
  
-SELECT
-    EmployeeName,
-    EmployeeID,
-    OutTime,
-    InTime,
-    MinutesDiff
-FROM
-    FlaggedBreaks
-ORDER BY
-    OutTime DESC;
+def get_sql_connection(SQL_SERVER, SQL_DB, SQL_USER, SQL_PASSWORD):
+
+    try:
+
+        return pyodbc.connect(
+
+            f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+
+            f"SERVER={SQL_SERVER};DATABASE={SQL_DB};UID={SQL_USER};PWD={SQL_PASSWORD}"
+
+        )
+
+    except Exception as e:
+
+        print(f"Connection error for server {SQL_SERVER}: {e}")
+
+        return None
+ 
+def build_sql_query():
+
+    return """
+
+      SELECT TOP 10 *
+      FROM ACVSCore.Access.Personnel
+
+    """
+ 
+def check_alerts_for_server(server_config):
+
+    print("ENTERED check_alert function")
+
+    conn = get_sql_connection(server_config['SQL_SERVER'], server_config['SQL_DB'], server_config['SQL_USER'], server_config['SQL_PASSWORD'])
+
+    if not conn:
+
+        return
+
+    try:
+
+        cursor = conn.cursor()
+
+        cursor.execute(build_sql_query())
+ 
+        rows = cursor.fetchall()
+
+        if not rows:
+
+            print("No new alerts")
+
+            return
+ 
+        columns = [desc[0] for desc in cursor.description]
+ 
+        for row in rows:
+
+            data = dict(zip(columns, row))
+
+            print(data)
+ 
+    except Exception as e:
+
+        print(f"Error executing sql query: {e}")
+ 
+    finally:
+
+        conn.close()
+ 
+# Call the function to test
+
+check_alerts_for_server(DB_CONFIG)
+ 
