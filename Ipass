@@ -17,3 +17,9 @@ WHERE
  AND AP.ObjectID = 142614221
 ORDER BY
     "EmployeeID" ASC;
+
+SELECT
+     [PersonnelID]
+      ,[ClearanceID]
+  FROM [ACVSCore].[Access].[PersonnelClearancePair]
+  WHERE PersonnelID = 142614221
