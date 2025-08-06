@@ -1,0 +1,5 @@
+i have written this code on sql and exported to excel and also connect in power bi and want show the rank like which employee has the most number of swipes in the month,
+and also top 10 managers who have the highest number of swipes .
+So basically two layers first would be top 10 managers with the total swipes for their team, and second layer having the top 10 employees under 
+those manager who have the highest number 
+of swipes it should be ranked also over the  top 10 employeess with their managers. 
