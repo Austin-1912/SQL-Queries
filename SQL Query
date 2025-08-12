@@ -1,66 +1,20 @@
-WITH AlarmEvents AS (
-    SELECT
-        t1.XMLGUid,
-        t1.ObjectName1,
-        t1.PartitionName1,
-        DATEADD(MINUTE, -1 * t1.MessageLocaleOffset, t1.MessageUTC) AS AlarmTime,
-        CASE
-            WHEN t1.PartitionName1 IN ('USA/Canada Default', 'US.NYC', 'US.FL.Miami', 'US.CO.OBS', 'US.CO.DTC') THEN 'NAMER'
-            WHEN t1.PartitionName1 IN ('EMEA.Default', 'LT.Vilnius', 'UK.London', 'AT.Vienna', 'IT.Rome', 'IE.Dublin', 'ES.Madrid', 'DU.Abu Dhab', 'MA.Casablanca', 'RU.Moscow', 'AUT.Vienna') THEN 'EMEA'
-            WHEN t1.PartitionName1 IN ('MX.Mexico City', 'AR.Cordoba', 'PE.Lima', 'PA.Panama City', 'BR.Sao Paulo', 'CR.Costa Rica Partition', 'Barbados') THEN 'LACA'
-            WHEN t1.PartitionName1 IN ('APAC.Default', 'CN.Beijing', 'PH.Manila', 'JP.Tokyo', 'MY.Kuala Lumpur', 'IN.Mumbai') THEN 'APAC'
-            ELSE 'Unknown'
-        END AS Region,
-        -- Safe extraction of AlarmName
-        CASE
-            WHEN LEN(t1.ObjectName1) - LEN(REPLACE(t1.ObjectName1, ' ', '')) >= 2 THEN
-                RIGHT(
-                    t1.ObjectName1,
-                    CHARINDEX(' ', REVERSE(t1.ObjectName1), CHARINDEX(' ', REVERSE(t1.ObjectName1)) + 1) - 1
-                )
-            ELSE
-                t1.ObjectName1
-        END AS AlarmName,
-        -- Safe extraction of DoorName
-        CASE
-            WHEN LEN(t1.ObjectName1) - LEN(REPLACE(t1.ObjectName1, ' ', '')) >= 2 THEN
-                LEFT(
-                    t1.ObjectName1,
-                    LEN(t1.ObjectName1) - CHARINDEX(' ', REVERSE(t1.ObjectName1), CHARINDEX(' ', REVERSE(t1.ObjectName1)) + 1)
-                )
-            ELSE
-                t1.ObjectName1
-        END AS DoorName
-    FROM [ACVSUJournal_00010028].dbo.ACVSUJournalLog t1
-    WHERE t1.MessageType = 'ObjectChangedState'
-),
-AcknowledgmentEvents AS (
-    SELECT
-        t1.XMLGUid,
-        t1.ObjectName1,
-        t1.PartitionName1,
-        DATEADD(MINUTE, -1 * t1.MessageLocaleOffset, t1.MessageUTC) AS AcknowledgedTime,
-        t2.value AS Action_Taken,
-        t1.ObjectName2 AS Operator_Name
-    FROM [ACVSUJournal_00010028].dbo.ACVSUJournalLog t1
-    FULL JOIN [ACVSUJournal_00010028].dbo.ACVSUJournalLogxmlShred t2
-        ON t1.XMLGUid = t2.GUID
-    WHERE t1.MessageType = 'LogMessage'
-)
-SELECT
-	ae.XMLGUid,
-    ae.AlarmName,
-    ae.DoorName,
-    ae.PartitionName1,
-    ae.Region,
-    ae.AlarmTime,
-    ack.AcknowledgedTime,
-    ack.Operator_Name,
-    ack.Action_Taken
-FROM AlarmEvents ae
-LEFT JOIN AcknowledgmentEvents ack
-    ON ae.ObjectName1 = ack.ObjectName1
-    AND ae.PartitionName1 = ack.PartitionName1
-    AND ABS(DATEDIFF(MINUTE, ae.AlarmTime, ack.AcknowledgedTime)) <= 10
-	WHERE ae.PartitionName1 = 'APAC.Default'
-	ORDER BY AlarmTime DESC
+Here is the final clean and labeled ER diagram showing all relationships between your core tables:
+
+📘 Tables & Keys
+Access.Personnel – GUID (PK)
+Access.Credential – GUID (PK)
+Access.Clearance – GUID (PK)
+Access.Door – GUID (PK)
+Access.PersonnelType – ObjectID (PK)
+Access.PersonnelClearancePair – PersonnelID, ClearanceID (FK)
+ACVSUJournalLog – GUID (PK)
+ACVSUJournalLogxmlShred – GUID (PK)
+🔗 Relationships
+ACVSUJournalLog.ObjectIdentity1 → Access.Personnel.GUID
+ACVSUJournalLog.XMLGuid → ACVSUJournalLogxmlShred.GUID
+Access.Personnel.PersonnelTypeID → Access.PersonnelType.ObjectID
+Access.Credential.PersonnelID → Access.Personnel.ObjectID
+Access.Clearance.PersonnelID → Access.Personnel.ObjectID
+Access.Clearance.DoorID → Access.Door.ObjectID
+Access.PersonnelClearancePair.PersonnelID → Access.Personnel.ObjectID
+Access.PersonnelClearancePair.ClearanceID → Access.Clearance.ObjectID
