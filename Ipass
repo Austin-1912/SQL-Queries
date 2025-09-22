@@ -88,37 +88,6 @@ WHERE
 -- STEP 3: Union RNT + Engagement into Final Segmentation Table
 -----------------------------------------------------------------------------------
 CREATE OR REPLACE TABLE LACA_MONTHLY_CUSTOMER_SEGMENTATION AS
-SELECT
-  --e.ref_date,
-  e.customer_key,
-  e.COUNTRY_CODE,
-  e.mth_yr,
-  e.r12_txns,
-  e.r12_active,
-  e.r6_txns,
-  e.active_churn_r7_r12,
-  e.pr12_txns,
-  e.ppr12_txns,
-  e.lapsed_r12_plus,
-  e.email_marketable,
-  e.sms_marketable,
-  e.app_marketable_flag,
-  e.retail_digital_flag,
-  e.r12_dominant_channel,
-  e.DOMINANT_CORRIDOR_NAME,
-  e.dominant_sndcountry_name,
-  e.dominant_rcvcountry_name,
-  e.dominant_pricing_channel,
-  COALESCE(r.rnt_flag,'N') AS rnt_customer
-FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS e
-LEFT JOIN LACA_RNT_CUSTOMERS r
-  ON e.customer_key = r.customer_key
-AND e.ref_date = r.ref_date
-;
-
-
-//===============================================
-
 
 SELECT
   --e.ref_date,
