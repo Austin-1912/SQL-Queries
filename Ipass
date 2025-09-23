@@ -1,164 +1,242 @@
------------------------------------------------------------------------------------
--- STEP 1: RNT Customers Table
------------------------------------------------------------------------------------
-CREATE OR REPLACE TABLE LACA_RNT_CUSTOMERS AS
+SELECT COUNT(*) AS txns_in_period
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+WHERE DATE(RCVPAYING_DATETIME) >= '2024-09-01'
+  AND DATE(RCVPAYING_DATETIME) <= '2025-08-31';
 
-WITH months AS (
-  SELECT DATE_TRUNC('MONTH', DATEADD(MONTH, seq4(), '2025-01-01')) AS ref_date
-  FROM TABLE(GENERATOR(ROWCOUNT => 8))
-),
 
-cust_reg AS (
   SELECT
-    c.customer_key,
-    DATE_TRUNC('MONTH', c.first_registration_date) AS reg_month,
-    c.country_code
-  FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
-  JOIN SUMMARY_GEN.COUNTRY_VW cnt
-    ON c.country_code = cnt.country_code
-  WHERE cnt.super_region = 'LACA'
-    AND c.first_registration_date IS NOT NULL
+    CONCAT(t.sndcountry_code, ' -> ', t.rcvcountry_code) AS corridor,
+    COUNT(DISTINCT t.RCVCUSTOMER_KEY) AS customer_count,
+    COUNT(*) AS transactions,
+    ROUND(COUNT(*) * 1.0 / COUNT(DISTINCT t.RCVCUSTOMER_KEY), 2) AS txns_per_customer
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
+WHERE DATE(t.RCVPAYING_DATETIME) BETWEEN '2023-01-01' AND '2023-12-31'
+GROUP BY t.sndcountry_code, t.rcvcountry_code
+HAVING COUNT(DISTINCT t.RCVCUSTOMER_KEY) > 0
+ORDER BY txns_per_customer DESC
+LIMIT 10;
+
+--Top 10 Corridors by transactions per customer
+WITH R12_TXNS AS (
+    SELECT
+        TXN_ID,
+        SNDCUSTOMER_KEY,
+        SNDCOUNTRY_CODE,
+        RCVCOUNTRY_CODE,
+        DATE(RCVPAYING_DATETIME) AS TXN_DATE
+    FROM SUMMARY_GEN.WUDNA_TXN_MASTER_VW
+    WHERE VALID_TXN_TYPE_CODE = 'Y'
+      AND REFUND_TRXN = 'N'
+      AND NVL(SNDPRINCIPAL_USD,0) > 0
+      AND NVL(PRODUCT_GROUP,'NLL') NOT IN ('QCOL','QCSH','SWTP')
+      AND SNDCOUNTRY_CODE NOT IN ('RU','BY')
+      AND RCVCOUNTRY_CODE NOT IN ('RU','BY')
+      AND DATE(RCVPAYING_DATETIME) BETWEEN '2023-01-01' AND '2023-12-31'
 ),
-txns_rnt AS (
-  SELECT
-    t.sndcustomer_key AS customer_key,
-    DATE_TRUNC('MONTH', t.rcvpaying_datetime) AS txn_month
-  FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
-  JOIN SUMMARY_GEN.COUNTRY_VW snd
-    ON t.sndcountry_code = snd.country_code
-  WHERE snd.super_region = 'LACA'
+ 
+-- Count transactions per sender per corridor
+Sender_Corridor AS (
+    SELECT
+        SNDCUSTOMER_KEY,
+        SNDCOUNTRY_CODE,
+        RCVCOUNTRY_CODE,
+        COUNT(*) AS txn_count,
+        MAX(TXN_DATE) AS last_txn_date
+    FROM R12_TXNS
+    GROUP BY SNDCUSTOMER_KEY, SNDCOUNTRY_CODE, RCVCOUNTRY_CODE
+),
+ 
+-- Pick the dominant corridor for each sender
+Dominant_Corridor AS (
+    SELECT *
+    FROM (
+        SELECT
+            SNDCUSTOMER_KEY,
+            SNDCOUNTRY_CODE,
+            RCVCOUNTRY_CODE,
+            txn_count,
+            ROW_NUMBER() OVER (
+                PARTITION BY SNDCUSTOMER_KEY
+                ORDER BY txn_count DESC, last_txn_date DESC
+            ) AS rnk
+        FROM Sender_Corridor
+    ) t
+    WHERE rnk = 1
+),
+ 
+-- Aggregate at corridor level
+Corridor_Summary AS (
+    SELECT
+        sndcv.COUNTRY_NAME || ' → ' || rcvcv.COUNTRY_NAME AS corridor,
+        COUNT(DISTINCT SNDCUSTOMER_KEY) AS customer_count,
+        SUM(txn_count) AS transactions,
+        ROUND(SUM(txn_count) * 1.0 / COUNT(DISTINCT SNDCUSTOMER_KEY), 2) AS txns_per_customer
+    FROM Dominant_Corridor d
+    LEFT JOIN SUMMARY_GEN.COUNTRY_VW sndcv ON d.SNDCOUNTRY_CODE = sndcv.COUNTRY_CODE
+    LEFT JOIN SUMMARY_GEN.COUNTRY_VW rcvcv ON d.RCVCOUNTRY_CODE = rcvcv.COUNTRY_CODE
+    WHERE sndcv.COUNTRY_NAME IS NOT NULL AND rcvcv.COUNTRY_NAME IS NOT NULL
+    GROUP BY sndcv.COUNTRY_NAME, rcvcv.COUNTRY_NAME
+    HAVING COUNT(DISTINCT SNDCUSTOMER_KEY) >= 25000
+)
+ 
+-- Final Top 10
+SELECT *
+FROM Corridor_Summary
+ORDER BY txns_per_customer DESC
+LIMIT 10;
+
+
+--Top 10 corridors by Principal Per Transaction(PPT)
+WITH R12_TXNS AS (
+    SELECT
+        TXN_ID,
+        SEND_COUNTRY_NAME,
+        RCV_COUNTRY_NAME,
+        SNDPRINCIPAL_USD AS principal
+    FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+    WHERE DATE(RCVPAYING_DATETIME) BETWEEN '2023-01-01' AND '2023-12-31'
+      AND NVL(SNDPRINCIPAL_USD,0) > 0
 )
 SELECT
-  m.ref_date,
-  r.customer_key,
-  'Y' AS rnt_flag,
-  r.country_code,
-  r.reg_month,
-FROM cust_reg r
-JOIN months m
-  ON r.reg_month <= m.ref_date
-LEFT JOIN txns_rnt t
-  ON r.customer_key = t.customer_key
-AND t.txn_month BETWEEN ADD_MONTHS(m.ref_date, -12) AND m.ref_date
-WHERE t.customer_key IS NULL
-;
- 
------------------------------------------------------------------------------------
--- STEP 2: Engagement + Corridor Customers Table
------------------------------------------------------------------------------------
-CREATE OR REPLACE TABLE LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS AS
-SELECT
-  --l.ref_date,
-  e.SNDcustomer_key,
-  e.country_code,
-  e.r12_txns,
-  e.mth_yr,
-  CASE WHEN e.r12_txns > 0 THEN 'Y' ELSE 'N' END AS r12_active,
-  e.r6_txns,
-  -- CASE WHEN e.r6_txns = 0 AND (e.r12_txns - e.r6_txns) > 0 THEN 'Y' ELSE 'N' END AS active_churn_r7_r12,
-  CASE WHEN e.r6_txns = 0 AND e.r12_txns > 0 THEN 'Y' ELSE 'N' END AS active_churn_r7_r12,
-  e.pr12_txns,
-  e.ppr12_txns,
-  CASE WHEN e.r12_txns = 0 AND (e.pr12_txns > 0 OR e.ppr12_txns > 0) THEN 'Y' ELSE 'N' END AS lapsed_r12_plus,
-  e.email_marketable,
-  e.sms_marketable,
-  CASE WHEN e.web_app_flag = 'Y' THEN 1 ELSE 0 END AS app_marketable_flag,
-  e.retail_digital_flag,
-  e.r12_dominant_channel,
-  d.DOMINANT_CORRIDOR_NAME,
-  d.dominant_sndcountry_name,
-  d.dominant_rcvcountry_name,
-  d.dominant_pricing_channel
-FROM WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL e
-LEFT JOIN SUMMARY_GEN.COUNTRY_VW c
-  ON e.country_code = c.country_code
---AND c.super_region = 'LACA'
-LEFT JOIN WUDNA.CEX_SANDBOX.SK_DOMINANCY_METRICS d
-  ON e.sndcustomer_key = d.sndcustomer_key AND E.mth_yr = D.MTH_YR
---AND DATE_TRUNC('MONTH', e.mth_yr) = DATE_TRUNC('MONTH', d.mth_yr)
---and e.MTH_YR = '2025-08-01'
--- LEFT JOIN LACA_RNT_CUSTOMERS l
--- ON DATE_TRUNC('MONTH',DATE(l.ref_date)) = d.mth_yr
-WHERE
-    e.MTH_YR = '2025-08-01'
-    AND c.super_region = 'LACA'
-;
- 
------------------------------------------------------------------------------------
--- STEP 3: Union RNT + Engagement into Final Segmentation Table
------------------------------------------------------------------------------------
-CREATE OR REPLACE TABLE LACA_MONTHLY_CUSTOMER_SEGMENTATION AS
+    SEND_COUNTRY_NAME || ' → ' || RCV_COUNTRY_NAME AS corridor,
+    COUNT(*) AS transactions,
+    SUM(principal) AS total_principal,
+    ROUND(SUM(principal) * 1.0 / COUNT(*), 2) AS principal_per_txn
+FROM R12_TXNS
+GROUP BY SEND_COUNTRY_NAME, RCV_COUNTRY_NAME
+HAVING COUNT(*) >= 100000
+ORDER BY principal_per_txn DESC
+LIMIT 10;
 
-SELECT
-  --e.ref_date,
-  e.sndcustomer_key,
-  e.COUNTRY_CODE,
-  e.mth_yr,
-  e.r12_txns,
-  e.r12_active,
-  e.r6_txns,
-  e.active_churn_r7_r12,
-  e.pr12_txns,
-  e.ppr12_txns,
-  e.lapsed_r12_plus,
-  e.email_marketable,
-  e.sms_marketable,
-  e.app_marketable_flag,
-  e.retail_digital_flag,
-  e.r12_dominant_channel,
-  e.DOMINANT_CORRIDOR_NAME,
-  e.dominant_sndcountry_name,
-  e.dominant_rcvcountry_name,
-  e.dominant_pricing_channel,
-  --COALESCE(e.rnt_flag,'N') AS rnt_customer
-FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS e
-union all
-select 
-  r.customer_key,
-  r.COUNTRY_CODE,
-  r.reg_month,
-  0 r12_txns,
-  0 r12_active,
-  0 r6_txns,
-  0 active_churn_r7_r12,
-  0 pr12_txns,
-  0 ppr12_txns,
-  0 lapsed_r12_plus,
-  0 email_marketable,
-  0 sms_marketable,
-  0 app_marketable_flag,
-  0 retail_digital_flag,
-  0 r12_dominant_channel,
-  0 DOMINANT_CORRIDOR_NAME,
-  0 dominant_sndcountry_name,
-  0 dominant_rcvcountry_name,
-  0 dominant_pricing_channel
 
-  
-from LACA_RNT_CUSTOMERS r
-;
- 
------------------------------------------------------------------------------------
--- STEP 4: Aggregate Table for Power BI
------------------------------------------------------------------------------------
-CREATE OR REPLACE TABLE LACA_MONTHLY_CUSTOMER_SEGMENTATION_AGG AS
+--Single Largest Transaction and the corridor
 SELECT
-  ref_date,
-  DOMINANT_CORRIDOR_NAME,
-  dominant_sndcountry_name, 
-  dominant_rcvcountry_name,
-  r12_dominant_channel,
-  email_marketable,
-  sms_marketable,
-  app_marketable_flag,
-  retail_digital_flag,
-  rnt_customer,
-  COUNT(DISTINCT customer_key) AS customer_count,
-  SUM(r12_txns) AS total_r12_txns,
-  SUM(r6_txns) AS total_r6_txns,
-  SUM(pr12_txns) AS total_pr12_txns,
-  SUM(ppr12_txns) AS total_ppr12_txns
-FROM LACA_MONTHLY_CUSTOMER_SEGMENTATION
-GROUP BY 1,2,3,4,5,6,7,8,9,10
-ORDER BY ref_date, DOMINANT_CORRIDOR_NAME
-;
+  TXN_ID,
+  SNDPRINCIPAL_USD                    AS principal_usd,
+  CASE
+    WHEN UPPER(SUB_CHANNEL) LIKE '%DWL%' THEN 'Digital'
+    WHEN UPPER(PRICING_CHANNEL) IN ('WEB','APP') THEN 'Digital'
+    WHEN UPPER(PRIMARY_CHANNEL) IN ('WU.COM','WUPLUS') THEN 'Digital'
+    WHEN UPPER(PRICING_CHANNEL) IN ('POS','TMT','AIR') THEN 'Retail'
+    WHEN UPPER(PRIMARY_CHANNEL) = 'RETAIL' THEN 'Retail'
+    ELSE 'Other'
+  END AS channel,
+  SEND_COUNTRY_NAME || ' → ' || RCV_COUNTRY_NAME AS corridor,
+  RCVPAYING_DATETIME
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW 
+WHERE DATE(RCVPAYING_DATETIME) BETWEEN '2023-01-01' AND '2023-12-31'
+  AND NVL(SNDPRINCIPAL_USD,0) > 0
+ORDER BY principal_usd DESC
+LIMIT 1;
+
+
+--Top 10 Countries by highest RNT Percentage
+SELECT
+    COALESCE(cv.COUNTRY_NAME, cm.COUNTRY_CODE) AS country_name,
+    COUNT(DISTINCT cm.CUSTOMER_KEY) AS registered_customers,
+    COUNT(DISTINCT t.SNDCUSTOMER_KEY) AS transacting_customers,
+    COUNT(DISTINCT cm.CUSTOMER_KEY) - COUNT(DISTINCT t.SNDCUSTOMER_KEY) AS rnt_customers,
+    ROUND(
+        (COUNT(DISTINCT cm.CUSTOMER_KEY) - COUNT(DISTINCT t.SNDCUSTOMER_KEY)) * 100.0
+        / NULLIF(COUNT(DISTINCT cm.CUSTOMER_KEY), 0), 2
+    ) AS rnt_percentage,
+    tx.total_txns
+FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
+LEFT JOIN SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
+       ON cm.CUSTOMER_KEY = t.SNDCUSTOMER_KEY
+      AND DATE(t.RCVPAYING_DATETIME) BETWEEN '2023-01-01' AND '2023-12-31'
+LEFT JOIN (
+    SELECT
+        SNDCOUNTRY_CODE,
+        COUNT(*) AS total_txns
+    FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+    WHERE DATE(RCVPAYING_DATETIME) BETWEEN '2023-01-01' AND '2023-12-31'
+    GROUP BY SNDCOUNTRY_CODE
+) tx
+       ON cm.COUNTRY_CODE = tx.SNDCOUNTRY_CODE
+LEFT JOIN SUMMARY_GEN.COUNTRY_VW cv
+       ON cm.COUNTRY_CODE = cv.COUNTRY_CODE
+WHERE cm.REGISTERED_CUSTOMER_FLAG = 'Y'
+  AND DATE(cm.FIRST_REGISTRATION_DATE) BETWEEN '2023-01-01' AND '2023-12-31'
+GROUP BY cm.COUNTRY_CODE, cv.COUNTRY_NAME, tx.total_txns
+HAVING COUNT(DISTINCT cm.CUSTOMER_KEY) >= 50000
+   AND COALESCE(tx.total_txns, 0) >= 400000
+ORDER BY rnt_percentage DESC
+LIMIT 10;
+
+
+--Active customers, aquisitions, churn, end customers 
+ WITH
+-- Customers active in PR12 (Jan–Dec 2022)
+PR12 AS (
+    SELECT DISTINCT SNDCUSTOMER_KEY
+    FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+    WHERE DATE(RCVPAYING_DATETIME) BETWEEN '2022-01-01' AND '2022-12-31'
+),
+ 
+-- Customers active in R12 (Jan–Dec 2023)
+R12 AS (
+    SELECT DISTINCT SNDCUSTOMER_KEY
+    FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+    WHERE DATE(RCVPAYING_DATETIME) BETWEEN '2023-01-01' AND '2023-12-31'
+)
+ 
+SELECT
+    COUNT(DISTINCT p.SNDCUSTOMER_KEY) AS active_start_2023,               -- Active at start (PR12)
+    COUNT(DISTINCT r.SNDCUSTOMER_KEY) AS active_end_2023,                 -- Active at end (R12)
+    COUNT(DISTINCT r.SNDCUSTOMER_KEY)
+        - COUNT(DISTINCT CASE WHEN p.SNDCUSTOMER_KEY IS NOT NULL THEN r.SNDCUSTOMER_KEY END)
+        AS acquisition_2023,                                             -- New in R12, not in PR12
+    COUNT(DISTINCT p.SNDCUSTOMER_KEY)
+        - COUNT(DISTINCT CASE WHEN r.SNDCUSTOMER_KEY IS NOT NULL THEN p.SNDCUSTOMER_KEY END)
+        AS churned_2023                                                  -- Lost in R12, active in PR12
+FROM PR12 p
+FULL OUTER JOIN R12 r
+    ON p.SNDCUSTOMER_KEY = r.SNDCUSTOMER_KEY;
+
+
+-- Top 10 corridors by Principal Per Transaction (PPT) + a GLOBAL totals row
+
+WITH R12_TXNS AS (
+    SELECT
+        TXN_ID,
+        SEND_COUNTRY_NAME,
+        RCV_COUNTRY_NAME,
+        SNDPRINCIPAL_USD AS principal
+    FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+    WHERE DATE(RCVPAYING_DATETIME) BETWEEN '2023-01-01' AND '2023-12-31'
+      AND NVL(SNDPRINCIPAL_USD, 0) > 0
+),
+CORRIDOR_AGG AS (
+    SELECT
+        SEND_COUNTRY_NAME || ' → ' || RCV_COUNTRY_NAME AS corridor,
+        COUNT(*)                           AS transactions,
+        SUM(principal)                     AS total_principal,
+        ROUND(SUM(principal) * 1.0 / COUNT(*), 2) AS principal_per_txn
+    FROM R12_TXNS
+    GROUP BY SEND_COUNTRY_NAME, RCV_COUNTRY_NAME
+    HAVING COUNT(*) >= 100000
+),
+TOP10 AS (
+    SELECT corridor, transactions, total_principal, principal_per_txn
+    FROM CORRIDOR_AGG
+    ORDER BY principal_per_txn DESC
+    LIMIT 10
+),
+GLOBAL_ROW AS (
+    -- Global over ALL base transactions in 2023 (principal > 0), not just top corridors
+    SELECT
+        'GLOBAL'                           AS corridor,
+        COUNT(*)                           AS transactions,
+        SUM(principal)                     AS total_principal,
+        ROUND(SUM(principal) * 1.0 / COUNT(*), 2) AS principal_per_txn
+    FROM R12_TXNS
+)
+SELECT corridor, transactions, total_principal, principal_per_txn
+FROM (
+    SELECT 0 AS sort_group, t.* FROM TOP10 t
+    UNION ALL
+    SELECT 1 AS sort_group, g.* FROM GLOBAL_ROW g
+)
+ORDER BY sort_group, principal_per_txn DESC;  -- ensures GLOBAL appears as the 11th row
+
