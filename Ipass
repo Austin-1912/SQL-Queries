@@ -1,14 +1,352 @@
-WITH base_txn AS (
-    SELECT DISTINCT
-        t.SNDCUSTOMER_KEY   -- 19-digit GID
-    FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
-    WHERE UPPER(t.SNDCOUNTRY_CODE) IN ('AU', 'NZ')
-      AND UPPER(t.RCVCOUNTRY_CODE) IN ('IN', 'FJ', 'NP', 'MY', 'SG')
-      AND DATE(RCVPAYING_DATETIME) BETWEEN '2024-09-01' AND '2025-08-31'
+-----------------------------------------------------------------------------------
+-- STEP 1: RNT Customers Table
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_RNT_CUSTOMERS AS
+WITH months AS (
+  SELECT DATE_TRUNC('MONTH', DATEADD(MONTH, seq4(), '2025-01-01')) AS ref_date
+  FROM TABLE(GENERATOR(ROWCOUNT => 8))
+),
+cust_reg AS (
+  SELECT
+    c.customer_key,
+    DATE_TRUNC('MONTH', c.first_registration_date) AS reg_month,
+    c.country_code
+  FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
+  JOIN SUMMARY_GEN.COUNTRY_VW cnt
+    ON c.country_code = cnt.country_code
+  WHERE cnt.super_region = 'LACA'
+    AND c.first_registration_date IS NOT NULL
+),
+txns_rnt AS (
+  SELECT
+    t.sndcustomer_key AS customer_key,
+    DATE_TRUNC('MONTH', t.rcvpaying_datetime) AS txn_month
+  FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
+  JOIN SUMMARY_GEN.COUNTRY_VW snd
+    ON t.sndcountry_code = snd.country_code
+  WHERE snd.super_region = 'LACA'
 )
-SELECT DISTINCT
-    b.SNDCUSTOMER_KEY AS gid_customer_key,
-    cm.customer_umn    AS umn_customer_key
-FROM base_txn b
-JOIN SUMMARY_GEN.CUSTOMER_MASTER_VW cm
-  ON b.SNDCUSTOMER_KEY = cm.customer_key;
+SELECT
+  m.ref_date,
+  r.customer_key,
+  r.country_code,
+  r.reg_month,
+  'Y' AS rnt_flag
+FROM cust_reg r
+JOIN months m
+  ON r.reg_month <= m.ref_date
+LEFT JOIN txns_rnt t
+  ON r.customer_key = t.customer_key
+ AND t.txn_month BETWEEN ADD_MONTHS(m.ref_date, -12) AND m.ref_date
+WHERE t.customer_key IS NULL
+;
+ 
+-----------------------------------------------------------------------------------
+-- STEP 2: Engagement + Corridor Customers Table
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS AS
+SELECT
+  e.sndcustomer_key                                AS customer_key,
+  e.country_code,
+  DATE_TRUNC('MONTH', e.mth_yr)                    AS ref_date,
+  e.r12_txns,
+  CASE WHEN e.r12_txns > 0 THEN 'Y' ELSE 'N' END   AS r12_active,
+  e.r6_txns,
+  CASE WHEN e.r6_txns = 0 AND e.r12_txns > 0 THEN 'Y' ELSE 'N' END AS active_churn_r7_r12,
+  e.pr12_txns,
+  e.ppr12_txns,
+  CASE WHEN e.r12_txns = 0 AND (e.pr12_txns > 0 OR e.ppr12_txns > 0) THEN 'Y' ELSE 'N' END AS lapsed_r12_plus,
+  e.email_marketable,
+  e.sms_marketable,
+  CASE WHEN e.web_app_flag = 'Y' THEN 1 ELSE 0 END AS app_marketable_flag,
+  e.retail_digital_flag,
+  e.r12_dominant_channel,
+  d.dominant_corridor_name,
+  d.dominant_sndcountry_name,
+  d.dominant_rcvcountry_name,
+  d.dominant_pricing_channel,
+  'N' AS rnt_flag
+FROM WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL e
+JOIN SUMMARY_GEN.COUNTRY_VW c
+  ON e.country_code = c.country_code
+ AND c.super_region = 'LACA'
+LEFT JOIN WUDNA.CEX_SANDBOX.SK_DOMINANCY_METRICS d
+  ON e.sndcustomer_key = d.sndcustomer_key
+ AND DATE_TRUNC('MONTH', e.mth_yr) = DATE_TRUNC('MONTH', d.mth_yr)
+;
+ 
+-----------------------------------------------------------------------------------
+-- STEP 3: Union RNT + Engagement into Final Segmentation Table
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_MONTHLY_CUSTOMER_SEGMENTATION AS
+SELECT
+  e.customer_key,
+  e.country_code,
+  e.ref_date,
+  e.r12_txns,
+  e.r12_active,
+  e.r6_txns,
+  e.active_churn_r7_r12,
+  e.pr12_txns,
+  e.ppr12_txns,
+  e.lapsed_r12_plus,
+  e.email_marketable,
+  e.sms_marketable,
+  e.app_marketable_flag,
+  e.retail_digital_flag,
+  e.r12_dominant_channel,
+  e.dominant_corridor_name,
+  e.dominant_sndcountry_name,
+  e.dominant_rcvcountry_name,
+  e.dominant_pricing_channel,
+  e.rnt_flag
+FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS e
+ 
+UNION ALL
+ 
+SELECT
+  r.customer_key,
+  r.country_code,
+  r.ref_date,
+  0 AS r12_txns,
+  'N' AS r12_active,
+  0 AS r6_txns,
+  'N' AS active_churn_r7_r12,
+  0 AS pr12_txns,
+  0 AS ppr12_txns,
+  'N' AS lapsed_r12_plus,
+  'N' AS email_marketable,
+  'N' AS sms_marketable,
+  0 AS app_marketable_flag,
+  'N' AS retail_digital_flag,
+  NULL AS r12_dominant_channel,
+  NULL AS dominant_corridor_name,
+  NULL AS dominant_sndcountry_name,
+  NULL AS dominant_rcvcountry_name,
+  NULL AS dominant_pricing_channel,
+  r.rnt_flag
+FROM LACA_RNT_CUSTOMERS r
+;
+ 
+-----------------------------------------------------------------------------------
+-- STEP 4: Aggregate Table for Power BI
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_MONTHLY_CUSTOMER_SEGMENTATION_AGG AS
+SELECT
+  ref_date,
+  dominant_corridor_name,
+  dominant_sndcountry_name,
+  dominant_rcvcountry_name,
+  r12_dominant_channel,
+  email_marketable,
+  sms_marketable,
+  app_marketable_flag,
+  retail_digital_flag,
+  rnt_flag,
+  COUNT(DISTINCT customer_key) AS customer_count,
+  SUM(r12_txns) AS total_r12_txns,
+  SUM(r6_txns) AS total_r6_txns,
+  SUM(pr12_txns) AS total_pr12_txns,
+  SUM(ppr12_txns) AS total_ppr12_txns
+FROM LACA_MONTHLY_CUSTOMER_SEGMENTATION
+GROUP BY
+  ref_date,
+  dominant_corridor_name,
+  dominant_sndcountry_name,
+  dominant_rcvcountry_name,
+  r12_dominant_channel,
+  email_marketable,
+  sms_marketable,
+  app_marketable_flag,
+  retail_digital_flag,
+  rnt_flag
+ORDER BY ref_date, dominant_corridor_name
+;
+
+
+ SELECT * FROM LACA_MONTHLY_CUSTOMER_SEGMENTATION LIMIT 100;
+ SELECT * FROM LACA_MONTHLY_CUSTOMER_SEGMENTATION_AGG;
+ 
+ 
+ 
+ 
+ 
+ //-----------------------------------------------------------------------------------------------
+ -----------------------------------------------------------------------------------
+-- STEP 1: RNT Customers Table
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_RNT_CUSTOMERS AS
+WITH months AS (
+  SELECT DATE_TRUNC('MONTH', DATEADD(MONTH, seq4(), '2025-01-01')) AS ref_date
+  FROM TABLE(GENERATOR(ROWCOUNT => 8))
+),
+cust_reg AS (
+  SELECT
+    c.customer_key,
+    DATE_TRUNC('MONTH', c.first_registration_date) AS reg_month,
+    c.country_code
+  FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
+  JOIN SUMMARY_GEN.COUNTRY_VW cnt
+    ON c.country_code = cnt.country_code
+  WHERE cnt.super_region = 'LACA'
+    AND c.first_registration_date IS NOT NULL
+),
+txns_rnt AS (
+  SELECT DISTINCT
+    t.sndcustomer_key AS customer_key,
+    DATE_TRUNC('MONTH', t.rcvpaying_datetime) AS txn_month
+  FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
+  JOIN SUMMARY_GEN.COUNTRY_VW snd
+    ON t.sndcountry_code = snd.country_code
+  WHERE snd.super_region = 'LACA'
+)
+SELECT
+  m.ref_date,
+  r.customer_key,
+  r.country_code,
+  r.reg_month,
+  'Y' AS rnt_flag
+FROM cust_reg r
+JOIN months m
+  ON r.reg_month <= m.ref_date
+  AND r.reg_month BETWEEN ADD_MONTHS(m.ref_date, 12) AND m.ref_date
+LEFT JOIN txns_rnt t
+  ON r.customer_key = t.customer_key
+ AND t.txn_month BETWEEN ADD_MONTHS(m.ref_date, -12) AND m.ref_date
+WHERE t.customer_key IS NULL 
+;
+ 
+-----------------------------------------------------------------------------------
+-- STEP 2: Engagement + Corridor Customers Table
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS AS
+SELECT
+  e.sndcustomer_key                                AS customer_key,
+  e.country_code,
+  DATE_TRUNC('MONTH', e.mth_yr)                    AS ref_date,
+  e.r12_txns,
+  CASE WHEN e.r12_txns > 0 THEN 'Y' ELSE 'N' END   AS r12_active,
+  e.r6_txns,
+  CASE WHEN e.r6_txns = 0 AND e.r12_txns > 0 THEN 'Y' ELSE 'N' END AS active_churn_r7_r12,
+  e.pr12_txns,
+  e.ppr12_txns,
+  CASE WHEN e.r12_txns = 0 AND (e.pr12_txns > 0 OR e.ppr12_txns > 0) THEN 'Y' ELSE 'N' END AS lapsed_r12_plus,
+  e.email_marketable,
+  e.sms_marketable,
+  CASE WHEN e.R12_App_txns >0 THEN 'Y' ELSE 'N' END AS app_marketable_flag,
+  e.retail_digital_flag,
+  e.r12_dominant_channel,
+  d.dominant_corridor_name,
+  d.dominant_sndcountry_name,
+  d.dominant_rcvcountry_name,
+  d.dominant_pricing_channel,
+  'N' AS rnt_flag
+FROM WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL e
+JOIN SUMMARY_GEN.COUNTRY_VW c
+  ON e.country_code = c.country_code
+ AND c.super_region = 'LACA'
+LEFT JOIN WUDNA.CEX_SANDBOX.SK_DOMINANCY_METRICS d
+  ON e.sndcustomer_key = d.sndcustomer_key
+ AND e.mth_yr = d.mth_yr
+;
+ 
+-----------------------------------------------------------------------------------
+-- STEP 3: Union RNT + Engagement into Final Segmentation Table
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_MONTHLY_CUSTOMER_SEGMENTATION AS
+SELECT
+  e.customer_key,
+  e.country_code,
+  e.ref_date,
+  e.r12_txns,
+  e.r12_active,
+  e.r6_txns,
+  e.active_churn_r7_r12,
+  e.pr12_txns,
+  e.ppr12_txns,
+  e.lapsed_r12_plus,
+  e.email_marketable,
+  e.sms_marketable,
+  e.app_marketable_flag,
+  e.retail_digital_flag,
+  e.r12_dominant_channel,
+  e.dominant_corridor_name,
+  e.dominant_sndcountry_name,
+  e.dominant_rcvcountry_name,
+  e.dominant_pricing_channel,
+  e.rnt_flag
+FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS e
+ 
+UNION ALL
+ 
+SELECT
+  r.customer_key,
+  r.country_code,
+  r.ref_date,
+  0 AS r12_txns,
+  'N' AS r12_active,
+  0 AS r6_txns,
+  'N' AS active_churn_r7_r12,
+  0 AS pr12_txns,
+  0 AS ppr12_txns,
+  'N' AS lapsed_r12_plus,
+  'N' AS email_marketable,
+  'N' AS sms_marketable,
+  0 AS app_marketable_flag,
+  'N' AS retail_digital_flag,
+  NULL AS r12_dominant_channel,
+  NULL AS dominant_corridor_name,
+  NULL AS dominant_sndcountry_name,
+  NULL AS dominant_rcvcountry_name,
+  NULL AS dominant_pricing_channel,
+  r.rnt_flag
+FROM LACA_RNT_CUSTOMERS r
+;
+ 
+-----------------------------------------------------------------------------------
+-- STEP 4: Aggregate Table for Power BI
+-----------------------------------------------------------------------------------
+
+CREATE OR REPLACE TABLE LACA_MONTHLY_CUSTOMER_SEGMENTATION_AGG AS
+WITH corridor_ranked_raw AS (
+  SELECT
+    ref_date,
+    dominant_corridor_name,
+    RANK() OVER (
+      PARTITION BY ref_date
+      ORDER BY COUNT(DISTINCT customer_key) DESC
+    ) AS corridor_rank
+  FROM LACA_MONTHLY_CUSTOMER_SEGMENTATION
+  GROUP BY ref_date, dominant_corridor_name
+),
+segmented_raw AS (
+  SELECT
+    s.*,
+    CASE 
+      WHEN cr.corridor_rank <= 10 THEN s.dominant_corridor_name
+      ELSE 'Others'
+    END AS corridor_bucket
+  FROM LACA_MONTHLY_CUSTOMER_SEGMENTATION s
+  LEFT JOIN corridor_ranked_raw cr
+    ON s.ref_date = cr.ref_date
+   AND s.dominant_corridor_name = cr.dominant_corridor_name
+)
+SELECT
+  ref_date,
+  corridor_bucket,
+  dominant_sndcountry_name,
+  dominant_rcvcountry_name,
+  r12_dominant_channel,
+  email_marketable,
+  sms_marketable,
+  app_marketable_flag,
+  retail_digital_flag,
+  rnt_flag,
+  COUNT(DISTINCT customer_key) AS customer_count,
+  SUM(r12_txns) AS total_r12_txns,
+  SUM(r6_txns) AS total_r6_txns,
+  SUM(pr12_txns) AS total_pr12_txns,
+  SUM(ppr12_txns) AS total_ppr12_txns
+FROM segmented_raw
+GROUP BY
+ ALL;
