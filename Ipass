@@ -1,6 +1,3 @@
- -----------------------------------------------------------------------------------
--- STEP 1: RNT Customers Table
------------------------------------------------------------------------------------
 CREATE OR REPLACE TABLE LACA_RNT_CUSTOMERS AS
 WITH params AS (
   SELECT 12 AS rnt_window_mths
@@ -63,20 +60,3 @@ SELECT DISTINCT
   rnt.reg_month,
   'Y' AS rnt_flag
 FROM rnt_no_txn rnt;
-
-
-
-SELECT
-  customer_key,
-  TO_CHAR(reg_month, 'Mon-YY') AS registered_month,
-  TO_CHAR(ref_date, 'Mon-YY') AS reference_month,
-  rnt_flag
-FROM LACA_RNT_CUSTOMERS
-WHERE customer_key IN (
-  '4000000000274383526',
-  '4000000000289770169',
-  '4000000000305351235',
-  '3000000000256160939',
-  '4000000000317653625'
-)
-ORDER BY customer_key, ref_date;
