@@ -1,75 +1,39 @@
-SELECT
-    -- Registered customers in LACA for the last 12 months up to May 2025
-    (SELECT COUNT(DISTINCT c.customer_key)
-     FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
-     JOIN SUMMARY_GEN.COUNTRY_VW cnt
-       ON c.country_code = cnt.country_code
-     WHERE cnt.super_region = 'LACA'
-       AND DATE_TRUNC('MONTH', c.first_registration_date)
-             BETWEEN DATEADD(MONTH, -11, TO_DATE('2025-08-01'))
-                 AND TO_DATE('2025-08-31')) AS registered_customers,
+-- Step 1: Dynamically calculate RNT customers for May 2025
+WITH dynamic_rnt_may AS (
+  SELECT DISTINCT c.customer_key
+  FROM (
+      SELECT c.customer_key, c.first_registration_date
+      FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
+      JOIN SUMMARY_GEN.COUNTRY_VW cnt
+        ON c.country_code = cnt.country_code
+      WHERE cnt.super_region = 'LACA'
+        AND DATE_TRUNC('MONTH', c.first_registration_date)
+              BETWEEN DATEADD(MONTH, -11, TO_DATE('2025-08-01'))
+                  AND TO_DATE('2025-08-31')
+  ) c
+  LEFT JOIN (
+      SELECT DISTINCT t.sndcustomer_key, t.rcvpaying_datetime
+      FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
+      JOIN SUMMARY_GEN.COUNTRY_VW snd
+        ON t.sndcountry_code = snd.country_code
+      WHERE snd.super_region = 'LACA'
+        AND DATE_TRUNC('MONTH', t.rcvpaying_datetime)
+              BETWEEN DATEADD(MONTH, -11, TO_DATE('2025-08-01'))
+                  AND TO_DATE('2025-08-31')
+  ) t
+  ON c.customer_key = t.sndcustomer_key
+     AND date(t.rcvpaying_datetime) >= DATE(c.first_registration_date)
+     AND date(t.rcvpaying_datetime) <= TO_DATE('2025-08-31')
+  WHERE t.sndcustomer_key IS NULL
+)
 
-    -- RNT_Test: Registered but did NOT transact after registration within the same 12-month window
-    (SELECT COUNT(DISTINCT c.customer_key)
-     FROM (
-         SELECT c.customer_key, c.first_registration_date
-         FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
-         JOIN SUMMARY_GEN.COUNTRY_VW cnt
-           ON c.country_code = cnt.country_code
-         WHERE cnt.super_region = 'LACA'
-           AND DATE_TRUNC('MONTH', c.first_registration_date)
-                 BETWEEN DATEADD(MONTH, -11, TO_DATE('2025-08-01'))
-                     AND TO_DATE('2025-08-31')
-     ) c
-     LEFT JOIN (
-         SELECT t.sndcustomer_key, t.rcvpaying_datetime
-         FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
-         JOIN SUMMARY_GEN.COUNTRY_VW snd
-           ON t.sndcountry_code = snd.country_code
-         WHERE snd.super_region = 'LACA'
-           AND t.rcvpaying_datetime BETWEEN DATEADD(MONTH, -11, TO_DATE('2025-08-01'))
-                                        AND TO_DATE('2025-08-31')
-     ) t
-     ON c.customer_key = t.sndcustomer_key
-        AND DATE(t.rcvpaying_datetime) >= DATE(c.first_registration_date)
-        AND DATE(t.rcvpaying_datetime) <= TO_DATE('2025-08-31')
-     WHERE t.sndcustomer_key IS NULL) AS RNT_Test,
-
-    -- RNT_Main: from the existing RNT table for May 2025
-    (SELECT COUNT(DISTINCT customer_key)
-     FROM LACA_RNT_CUSTOMERS
-     WHERE ref_date = TO_DATE('2025-08-01')) AS RNT_Main,
-     
--- Missing RNTs: In RNT_Test but not in RNT_Main
-    (SELECT COUNT(*)
-     FROM (
-         SELECT c.customer_key
-         FROM (
-             SELECT c.customer_key, c.first_registration_date
-             FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
-             JOIN SUMMARY_GEN.COUNTRY_VW cnt
-               ON c.country_code = cnt.country_code
-             WHERE cnt.super_region = 'LACA'
-               AND DATE_TRUNC('MONTH', c.first_registration_date)
-                     BETWEEN DATEADD(MONTH, -11, TO_DATE('2025-08-01'))
-                         AND TO_DATE('2025-08-31')
-         ) c
-         LEFT JOIN (
-             SELECT t.sndcustomer_key, t.rcvpaying_datetime
-             FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
-             JOIN SUMMARY_GEN.COUNTRY_VW snd
-               ON t.sndcountry_code = snd.country_code
-             WHERE snd.super_region = 'LACA'
-               AND t.rcvpaying_datetime BETWEEN DATEADD(MONTH, -11, TO_DATE('2025-08-01'))
-                                            AND TO_DATE('2025-08-31')
-         ) t
-         ON c.customer_key = t.sndcustomer_key
-            AND DATE(t.rcvpaying_datetime) >= DATE(c.first_registration_date)
-            AND DATE(t.rcvpaying_datetime) <= TO_DATE('2025-08-31')
-         WHERE t.sndcustomer_key IS NULL
-           AND c.customer_key NOT IN (
-               SELECT customer_key
-               FROM LACA_RNT_CUSTOMERS
-               WHERE ref_date = TO_DATE('2025-08-01')
-           )
-     ) missing_rnt) AS missing_rnt_customers;
+-- Step 2: Subtract customers already in RNT_Main
+SELECT d.customer_key
+FROM dynamic_rnt_may d
+LEFT JOIN (
+  SELECT DISTINCT customer_key
+  FROM LACA_RNT_CUSTOMERS
+  WHERE ref_date = TO_DATE('2025-08-01')
+) r
+ON d.customer_key = r.customer_key
+WHERE r.customer_key IS NULL;
