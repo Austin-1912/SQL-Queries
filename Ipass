@@ -1,205 +1,164 @@
- -----------------------------------------------------------------------------------
--- STEP 1: RNT Customers Table
------------------------------------------------------------------------------------
-CREATE OR REPLACE TABLE LACA_RNT_CUSTOMERS AS
-WITH params AS (
-  SELECT 12 AS rnt_window_mths
-),
--- Generate months from Jan 2025 up to the last completed month
-
-months AS (
-  SELECT DISTINCT DATE_TRUNC('MONTH', MTH_YR) AS ref_date
-  FROM WUDNA.CEX_SANDBOX.VA_KPI_2020_2
-  WHERE MTH_YR >= TO_DATE('2025-01-01')
-    AND MTH_YR < DATE_TRUNC('MONTH', CURRENT_DATE)
-),
-
--- Registered customers
-cust_reg AS (
-  SELECT
-    c.customer_key,
-    DATE_TRUNC('MONTH', c.first_registration_date) AS reg_month,
-    first_registration_date,
-    c.country_code
-  FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
-  JOIN SUMMARY_GEN.COUNTRY_VW cnt
-    ON c.country_code = cnt.country_code
-  WHERE cnt.super_region = 'LACA'
-    AND c.first_registration_date IS NOT NULL
-),
--- Transactions
-txns_rnt AS (
-  SELECT DISTINCT
-    t.sndcustomer_key AS customer_key,
-    DATE_TRUNC('MONTH', t.rcvpaying_datetime) AS txn_month,
-    date(min(rcvpaying_datetime)) as first_txn_date
-  FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
-  JOIN SUMMARY_GEN.COUNTRY_VW snd
-    ON t.sndcountry_code = snd.country_code
-  WHERE snd.super_region = 'LACA'
-    AND t.rcvpaying_datetime >= '2023-01-01'
-    Group by t.sndcustomer_key , txn_month
-),
--- RNT logic: registered in R12 window and no transactions in same R12 window
-
-rnt_no_txn AS (
-  SELECT
-    m.ref_date,
-    r.customer_key,
-    r.country_code,
-    r.reg_month
-  FROM months m
-  JOIN cust_reg r
-    ON r.reg_month BETWEEN DATEADD(MONTH, - (SELECT rnt_window_mths FROM params) + 1, m.ref_date)
-                      AND m.ref_date
-  LEFT JOIN txns_rnt t
-    ON r.customer_key = t.customer_key
-   AND t.first_txn_date BETWEEN r.reg_month AND LAST_DAY(m.ref_date)
-   and date(r.first_registration_date) <= date(t.first_txn_date)
-  WHERE t.customer_key IS NULL
-
-)
--- Final RNT customer table
-SELECT DISTINCT
-  rnt.ref_date,
-  rnt.customer_key,
-  rnt.country_code,
-  rnt.reg_month,
-  'Y' AS rnt_flag
-FROM rnt_no_txn rnt;
-
- 
------------------------------------------------------------------------------------
--- STEP 2: Engagement + Corridor Customers Table
------------------------------------------------------------------------------------
-CREATE OR REPLACE TABLE LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS AS
-SELECT
-  e.sndcustomer_key                                AS customer_key,
-  e.country_code,
-  DATE_TRUNC('MONTH', e.mth_yr)                    AS ref_date,
-  e.r12_txns,
-  CASE WHEN e.r12_txns > 0 THEN 'Y' ELSE 'N' END   AS r12_active,
-  e.r6_txns,
-  CASE WHEN e.r6_txns = 0 AND e.r12_txns > 0 THEN 'Y' ELSE 'N' END AS active_churn_r7_r12,
-  e.pr12_txns,
-  e.ppr12_txns,
-  CASE WHEN e.r12_txns = 0 AND (e.pr12_txns > 0 OR e.ppr12_txns > 0) THEN 'Y' ELSE 'N' END AS lapsed_r12_plus,
-  e.email_marketable,
-  e.sms_marketable,
-  CASE WHEN e.R12_App_txns >0 THEN 'Y' ELSE 'N' END AS app_marketable_flag,
-  e.retail_digital_flag,
-  e.r12_dominant_channel,
-  d.dominant_corridor_name,
-  d.dominant_sndcountry_name,
-  d.dominant_rcvcountry_name,
-  d.dominant_pricing_channel,
-  'N' AS rnt_flag
-FROM WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL e
-JOIN SUMMARY_GEN.COUNTRY_VW c
-  ON e.country_code = c.country_code
- AND c.super_region = 'LACA'
-LEFT JOIN WUDNA.CEX_SANDBOX.SK_DOMINANCY_METRICS d
-  ON e.sndcustomer_key = d.sndcustomer_key
- AND e.mth_yr = d.mth_yr
-;
- 
------------------------------------------------------------------------------------
--- STEP 3: Union RNT + Engagement into Final Segmentation Table
------------------------------------------------------------------------------------
-CREATE OR REPLACE TABLE LACA_MONTHLY_CUSTOMER_SEGMENTATION AS
-SELECT
-  e.customer_key,
-  e.country_code,
-  e.ref_date,
-  e.r12_txns,
-  e.r12_active,
-  e.r6_txns,
-  e.active_churn_r7_r12,
-  e.pr12_txns,
-  e.ppr12_txns,
-  e.lapsed_r12_plus,
-  e.email_marketable,
-  e.sms_marketable,
-  e.app_marketable_flag,
-  e.retail_digital_flag,
-  e.r12_dominant_channel,
-  e.dominant_corridor_name,
-  e.dominant_sndcountry_name,
-  e.dominant_rcvcountry_name,
-  e.dominant_pricing_channel,
-  e.rnt_flag
-FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS e
- 
-UNION ALL
- 
-SELECT
-  r.customer_key,
-  r.country_code,
-  r.ref_date,
-  0 AS r12_txns,
-  'N' AS r12_active,
-  0 AS r6_txns,
-  'N' AS active_churn_r7_r12,
-  0 AS pr12_txns,
-  0 AS ppr12_txns,
-  'N' AS lapsed_r12_plus,
-  'N' AS email_marketable,
-  'N' AS sms_marketable,
-  0 AS app_marketable_flag,
-  'N' AS retail_digital_flag,
-  NULL AS r12_dominant_channel,
-  NULL AS dominant_corridor_name,
-  NULL AS dominant_sndcountry_name,
-  NULL AS dominant_rcvcountry_name,
-  NULL AS dominant_pricing_channel,
-  r.rnt_flag
-FROM LACA_RNT_CUSTOMERS r
-;
- 
------------------------------------------------------------------------------------
--- STEP 4: Aggregate Table for Power BI
------------------------------------------------------------------------------------
-
-CREATE OR REPLACE TABLE LACA_MONTHLY_CUSTOMER_SEGMENTATION_AGG AS
-WITH corridor_ranked_raw AS (
-  SELECT
-    ref_date,
-    dominant_corridor_name,
-    RANK() OVER (
-      PARTITION BY ref_date
-      ORDER BY COUNT(DISTINCT customer_key) DESC
-    ) AS corridor_rank
-  FROM LACA_MONTHLY_CUSTOMER_SEGMENTATION
-  GROUP BY ref_date, dominant_corridor_name
-),
-segmented_raw AS (
-  SELECT
-    s.*,
-    CASE 
-      WHEN cr.corridor_rank <= 10 THEN s.dominant_corridor_name
-      ELSE 'Others'
-    END AS corridor_bucket
-  FROM LACA_MONTHLY_CUSTOMER_SEGMENTATION s
-  LEFT JOIN corridor_ranked_raw cr
-    ON s.ref_date = cr.ref_date
-   AND s.dominant_corridor_name = cr.dominant_corridor_name
-)
-SELECT
-  ref_date,
-  corridor_bucket,
-  dominant_sndcountry_name,
-  dominant_rcvcountry_name,
-  r12_dominant_channel,
-  email_marketable,
-  sms_marketable,
-  app_marketable_flag,
-  retail_digital_flag,
-  rnt_flag,
-  COUNT(DISTINCT customer_key) AS customer_count,
-  SUM(r12_txns) AS total_r12_txns,
-  SUM(r6_txns) AS total_r6_txns,
-  SUM(pr12_txns) AS total_pr12_txns,
-  SUM(ppr12_txns) AS total_ppr12_txns
-FROM segmented_raw
-GROUP BY
- ALL;
+name	type
+NEW_EXISTING_FLAG	VARCHAR(16777216)
+HVC_FLAG	VARCHAR(1)
+FLAG_CONTACTABLE	VARCHAR(1)
+EMAIL_ADDRESABLE	VARCHAR(1)
+SMS_ADDRESABLE	VARCHAR(1)
+FLAG_MARKETABLE	VARCHAR(1)
+EMAIL_MARKETABLE	VARCHAR(1)
+SMS_MARKETABLE	VARCHAR(1)
+COUNTRY_CODE	VARCHAR(16777216)
+RETAIL_DIGITAL_FLAG	VARCHAR(16777216)
+WEB_APP_FLAG	VARCHAR(16777216)
+FIRST_TXN_DATE	TIMESTAMP_NTZ(9)
+R48_RETAIL_DIGITAL_FLAG	VARCHAR(16777216)
+LAST_TXN_DATE	TIMESTAMP_NTZ(9)
+APN_TXN_ATLEAST_ONCE_IN_R12	VARCHAR(1)
+AIR_TXN_ATLEAST_ONCE_IN_R12	VARCHAR(1)
+MTH_YR	TIMESTAMP_NTZ(9)
+MEMBERSHIP_BY_END_OF_MONTH	VARCHAR(1)
+MYWU_STATUS	VARCHAR(19)
+CEM_SEGMENT	VARCHAR(16777216)
+R12_ACTIVE_BREAKUP	VARCHAR(16777216)
+R12_TXN_FREQ_BUCKET	VARCHAR(16777216)
+R12_DOMINANT_CHANNEL	VARCHAR(12)
+SNDCUSTOMER_KEY	VARCHAR(16777216)
+R12_TXNS	NUMBER(18,0)
+R1_TXNS	NUMBER(18,0)
+R48_TXNS	NUMBER(18,0)
+R2_TXNS	NUMBER(18,0)
+R3_TXNS	NUMBER(18,0)
+R6_TXNS	NUMBER(18,0)
+CUSTOMER_TENURE_IN_MONTHS	NUMBER(9,0)
+CHANNEL_V1	VARCHAR(7)
+R12_WEBSITE_TXNS	NUMBER(18,0)
+R12_APP_TXNS	NUMBER(18,0)
+R12_WUPLUS_TXNS	NUMBER(18,0)
+AIR_DOMINANT_CHANNEL	VARCHAR(16777216)
+R12_AIR_TXNS	NUMBER(18,0)
+ACCOUNT_PAY_IN	NUMBER(18,0)
+ACCOUNT_PAY_OUT	NUMBER(18,0)
+MEMBERSHIP_DATE	TIMESTAMP_NTZ(9)
+REDEEMER_START_DATE	DATE
+PR12_REDEEMER	VARCHAR(16777216)
+Y_REDEMPTION_CNT_TM	NUMBER(18,0)
+R_REDEMPTION_CNT_TM	NUMBER(18,0)
+H_DUE_TO_DCO	VARCHAR(1)
+R2_TO_R13_TXNS	NUMBER(18,0)
+IPF	NUMBER(15,6)
+DAYS_SINCE_LAST_TXN	NUMBER(9,0)
+IPF_OVERDUE	NUMBER(16,6)
+IPF_CHANGE	VARCHAR(12)
+BEATS	VARCHAR(16777216)
+D_CUSTOMER_KEY	VARCHAR(16777216)
+F_SNDCUSTOMER_KEY	VARCHAR(200)
+G_SNDCUSTOMER_KEY	VARCHAR(200)
+R12_POS_TXNS	NUMBER(18,0)
+F_DUE_TO_DCO	VARCHAR(1)
+G_DUE_TO_DCO	VARCHAR(1)
+R2_TO_R13_RETAIL_TXNS	NUMBER(18,0)
+R2_TO_R13_WEBSITE_TXNS	NUMBER(18,0)
+R2_TO_R13_APP_TXNS	NUMBER(18,0)
+R2_TO_R13_WUPLUS_TXNS	NUMBER(18,0)
+R1_APP_TXNS	NUMBER(18,0)
+SNDCUSTOMER_KEY_DUE_TO_DCO	VARCHAR(200)
+R24_AIR_TXNS	NUMBER(18,0)
+PR12_TXNS	NUMBER(19,0)
+PR12_RETAIL_TXNS	NUMBER(18,0)
+PR12_WEBSITE_TXNS	NUMBER(18,0)
+PR12_APP_TXNS	NUMBER(18,0)
+PR12_WUPLUS_TXNS	NUMBER(18,0)
+R12_DOMESTIC_TXNS	NUMBER(18,0)
+R12_INTERNATIONAL_TXNS	NUMBER(18,0)
+PR12_DOMESTIC_TXNS	NUMBER(18,0)
+PR12_INTERNATIONAL_TXNS	NUMBER(18,0)
+R12_PAYOUT_CASH_TXNS	NUMBER(18,0)
+R12_PAYOUT_ACCOUNT_TXNS	NUMBER(18,0)
+PR12_PAYOUT_CASH_TXNS	NUMBER(18,0)
+PR12_PAYOUT_ACCOUNT_TXNS	NUMBER(18,0)
+R12_PAYIN_CASH_TXNS	NUMBER(18,0)
+R12_PAYIN_ACCOUNT_TXNS	NUMBER(18,0)
+PR12_PAYIN_CASH_TXNS	NUMBER(18,0)
+PR12_PAYIN_ACCOUNT_TXNS	NUMBER(18,0)
+NEW_2_RETAIL	VARCHAR(1)
+NEW_2_WEBSITE	VARCHAR(1)
+NEW_2_APP	VARCHAR(1)
+NEW_2_DIGITAL	VARCHAR(1)
+NEW_2_DOMESTIC	VARCHAR(1)
+NEW_2_INTERNATIONAL	VARCHAR(1)
+NEW_2_PAYOUT_CASH	VARCHAR(1)
+NEW_2_PAYOUT_ACCOUNT	VARCHAR(1)
+NEW_2_PAYIN_CASH	VARCHAR(1)
+NEW_2_PAYIN_ACCOUNT	VARCHAR(1)
+R36_AIR_TXNS	NUMBER(18,0)
+R48_AIR_TXNS	NUMBER(18,0)
+I_SNDCUSTOMER_KEY	VARCHAR(200)
+J_SNDCUSTOMER_KEY	VARCHAR(200)
+K_SNDCUSTOMER_KEY	VARCHAR(200)
+L_SNDCUSTOMER_KEY	VARCHAR(200)
+I_DUE_TO_DCO	VARCHAR(1)
+J_DUE_TO_DCO	VARCHAR(1)
+K_DUE_TO_DCO	VARCHAR(1)
+L_DUE_TO_DCO	VARCHAR(1)
+R36_TXNS	NUMBER(18,0)
+R24_TXNS	NUMBER(18,0)
+PPR12_TXNS	NUMBER(19,0)
+PPPR12_TXNS	NUMBER(19,0)
+R14_TO_R25_TXNS	NUMBER(18,0)
+R26_TO_R37_TXNS	NUMBER(18,0)
+R38_TO_R49_TXNS	NUMBER(18,0)
+R1_PRINCIPAL	NUMBER(32,2)
+R12_PRINCIPAL	NUMBER(32,2)
+PR12_PRINCIPAL	NUMBER(33,2)
+PPR12_PRINCIPAL	NUMBER(33,2)
+R48_PRINCIPAL	NUMBER(32,2)
+R2_PRINCIPAL	NUMBER(32,2)
+R3_PRINCIPAL	NUMBER(32,2)
+R6_PRINCIPAL	NUMBER(32,2)
+R1_FEE	NUMBER(30,4)
+R12_FEE	NUMBER(30,4)
+PR12_FEE	NUMBER(31,4)
+PPR12_FEE	NUMBER(31,4)
+R48_FEE	NUMBER(30,4)
+R2_FEE	NUMBER(30,4)
+R3_FEE	NUMBER(30,4)
+R6_FEE	NUMBER(30,4)
+R1_NET_FX	NUMBER(30,4)
+R12_NET_FX	NUMBER(30,4)
+PR12_NET_FX	NUMBER(31,4)
+PPR12_NET_FX	NUMBER(31,4)
+R48_NET_FX	NUMBER(30,4)
+R2_NET_FX	NUMBER(30,4)
+R3_NET_FX	NUMBER(30,4)
+R6_NET_FX	NUMBER(30,4)
+R1_REVENUE	NUMBER(31,4)
+R12_REVENUE	NUMBER(31,4)
+PR12_REVENUE	NUMBER(32,4)
+PPR12_REVENUE	NUMBER(32,4)
+R48_REVENUE	NUMBER(31,4)
+R2_REVENUE	NUMBER(31,4)
+R3_REVENUE	NUMBER(31,4)
+R6_REVENUE	NUMBER(31,4)
+T_CUSTOMER_KEY	VARCHAR(16777216)
+U_CUSTOMER_KEY	VARCHAR(16777216)
+V_CUSTOMER_KEY	VARCHAR(16777216)
+W_CUSTOMER_KEY	VARCHAR(16777216)
+E_CUSTOMER_KEY	VARCHAR(16777216)
+F_CUSTOMER_KEY	VARCHAR(16777216)
+G_CUSTOMER_KEY	VARCHAR(16777216)
+H_CUSTOMER_KEY	VARCHAR(16777216)
+R12_APN_TXNS	NUMBER(18,0)
+LOYALTY_MEMBER_FLAG	VARCHAR(3)
+R12_RETAIL_TXNS	NUMBER(18,0)
+R1_AIR_TXNS	NUMBER(18,0)
+R1_RETAIL_TXNS	NUMBER(18,0)
+R1_WEBSITE_TXNS	NUMBER(18,0)
+R1_WUPLUS_TXNS	NUMBER(18,0)
+R2_TO_R13_AIR_TXNS	NUMBER(18,0)
+R24_APN_TXNS	NUMBER(18,0)
+R36_APN_TXNS	NUMBER(18,0)
+MONTH_BEGINING_CUSTOMER	VARCHAR(1)
+NEW_CUSTOMER	VARCHAR(1)
+WINBACK_CUSTOMER	VARCHAR(1)
+CHURN_CUSTOMER	VARCHAR(1)
+MONTH_ENDING_CUSTOMER	VARCHAR(1)
