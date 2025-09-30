@@ -1,3 +1,140 @@
+LACA Customer Segmentation — End‑to‑End Logic (Updated)
+0) Goals
+
+Maintain a monthly customer segmentation for LACA with:
+
+RNT (Registered‑Not‑Transacted) logic on a rolling 12‑month window.
+Engagement segments: Active, Churn (R7–R12), Lapsed (≥R12).
+Corridor & channel dominance, marketability (email/SMS/App).
+
+
+Produce aggregations optimized for Power BI (Top‑10 corridors + Others).
+Provide a customer‑month base for ad‑hoc analysis and QA.
+
+
+1) Data Sources (keys / scope)
+
+SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW → customer_key, first_registration_date, country_code.
+SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW → transactions (sender side).
+SUMMARY_GEN.COUNTRY_VW → super_region='LACA' filter and country labels.
+WUDNA.CEX_SANDBOX.VA_KPI_2020_2 → monthly calendar (MTH_YR) to generate ref_date.
+WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL → customer‑month KPIs (R12, R6, PR12, PPR12, marketability, channel).
+WUDNA.CEX_SANDBOX.SK_DOMINANCY_METRICS → corridor dominance (snd/rcv countries, corridor name, pricing channel).
+
+
+Join key: sndcustomer_key ↔ customer_key
+
+
+2) Business Rules
+2.1 Reference Month
+
+ref_date is every month from 2025‑01 to last completed month
+(MTH_YR < DATE_TRUNC('MONTH', CURRENT_DATE)).
+
+2.2 RNT (Registered‑Not‑Transacted)
+A customer is RNT at a ref_date if:
+
+reg_month is within the previous 12 months including ref_date, and
+No transactions between reg_month and EOM(ref_date), and
+(Guard) If comparing to a txn date, ensure first_registration_date <= first_txn_date.
+
+2.3 Engagement Segments (from KPI)
+
+Active (R12): r12_txns > 0.
+Churn (R7–R12): r6_txns = 0 AND r12_txns > 0.
+Lapsed (≥ R12+): r12_txns = 0 AND (pr12_txns > 0 OR ppr12_txns > 0).
+Marketability: Email/SMS from KPI; App‑marketable: R12_App_txns > 0 → 'Y'.
+Channel dominance: r12_dominant_channel.
+Corridor dominance: From SK_DOMINANCY_METRICS.
+
+2.4 Corridor Top‑N
+
+Rank corridors per ref_date by distinct customers → keep Top 10, bucket others as “Others”.
+
+
+3) Processing Steps & Outputs
+Step 1 — LACA_RNT_CUSTOMERS
+
+Build monthly ref_date set.
+Determine cust_reg (LACA, non‑null registrations) and compute reg_month.
+Build txns_rnt (per‑customer minimal transaction footprint; your current version uses first txn per month).
+Anti‑join: registrations within R12 window without any txn between reg_month and EOM(ref_date).
+Output (Customer‑Month):
+ref_date, customer_key, country_code, reg_month, rnt_flag='Y'
+
+
+
+
+(Optional improvement: Store txn_date instead of per‑month MINs to simplify the anti‑join.)
+
+
+Step 2 — LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS
+
+Bring customer‑month KPIs and left join corridor dominance and left join customer master to add reg_month.
+Output (Customer‑Month):
+customer_key, country_code, ref_date, reg_month,
+r12_txns, r6_txns, pr12_txns, ppr12_txns,
+r12_active, active_churn_r7_r12, lapsed_r12_plus,
+email_marketable, sms_marketable, app_marketable_flag,
+retail_digital_flag, r12_dominant_channel,
+dominant_corridor_name, dominant_sndcountry_name, dominant_rcvcountry_name,
+dominant_pricing_channel, rnt_flag='N'
+
+
+
+
+Step 3 — LACA_ENGAGEMENT_CUSTOMERS_AGG
+
+Rank corridors by distinct customers per month; Top 10 vs Others.
+Aggregate to reporting grain:
+ref_date, corridor_bucket,
+dominant_sndcountry_name, dominant_rcvcountry_name,
+r12_dominant_channel,
+email_marketable, sms_marketable, app_marketable_flag, retail_digital_flag,
+rnt_flag='N',
+customer_count,
+total_r12_txns, total_r6_txns, total_pr12_txns, total_ppr12_txns,
+active_customers, churn_customers, lapsed_customers
+
+
+
+
+Step 4 — LACA_RNT_CUSTOMERS_AGG
+
+Aggregate RNT‑only customers to the same reporting grain.
+By definition, txn totals = 0, and segment flags = ‘N’.
+Where available from KPI, carry email/sms for counts by marketability.
+
+
+Step 5 — LACA_CUSTOMER_DIMENSIONS
+
+Union Engagement customer dimensions and RNT customer dimensions at Customer‑Month level.
+Design choice (important):
+
+One row per (customer_key, ref_date) → anti‑join RNT vs Engagement rows.
+If you keep UNION ALL for both, double counting can occur in PBI unless filtered by rnt_flag.
+
+
+
+Output (Customer‑Month dimensional view):
+customer_key, ref_date, country_code, reg_month, rnt_flag,
+email_marketable, sms_marketable, app_marketable_flag, retail_digital_flag,
+r12_dominant_channel,
+dominant_corridor_name, dominant_sndcountry_name, dominant_rcvcountry_name,
+dominant_pricing_channel
+
+
+Final Base — LACA_CUSTOMER_BASE (Updated as per your latest change)
+
+Build the customer‑month base from LACA_CUSTOMER_DIMENSIONS, enriching metrics directly from LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS.
+RNT join is kept for potential future fills; currently not selected.
+
+SQLCREATE OR REPLACE TABLE LACA_CUSTOMER_BASE ASSELECT  d.customer_key,  d.ref_date,  d.country_code,  
+
+
+
+
+
  -----------------------------------------------------------------------------------
 -- STEP 1: RNT Customers Table
 -----------------------------------------------------------------------------------
@@ -222,20 +359,35 @@ SELECT distinct
 FROM LACA_RNT_CUSTOMERS;
 
 
-CREATE OR REPLACE TABLE LACA_CUSTOMER_BASE AS
-SELECT
-  d.*,
-  m.r12_txns,
-  m.r6_txns,
-  m.pr12_txns,
-  m.ppr12_txns,
-  m.r12_active,
-  m.active_churn_r7_r12,
-  m.lapsed_r12_plus
-FROM LACA_CUSTOMER_DIMENSIONS d
-LEFT JOIN LACA_CUSTOMER_METRICS m
-  ON NVL(d.customer_key, 'NA') = NVL(m.customer_key, 'NA')
- AND d.ref_date = m.ref_date
- LEFT JOIN LACA_RNT_CUSTOMERS r 
-	ON NVL(d.customer_key, 'NA') = NVL(r.customer_key, 'NA')
-	AND d.ref_date = r.ref_date;
+    CREATE OR REPLACE TABLE LACA_CUSTOMER_BASE AS
+    SELECT
+      d.customer_key,
+      d.ref_date,
+      d.country_code,
+      d.reg_month,
+      d.rnt_flag,
+      d.email_marketable,
+      d.sms_marketable,
+      d.app_marketable_flag,
+      d.retail_digital_flag,
+      d.r12_dominant_channel,
+      d.dominant_corridor_name,
+      d.dominant_sndcountry_name,
+      d.dominant_rcvcountry_name,
+      d.dominant_pricing_channel,
+      -- metrics (from engagement side)
+      COALESCE(e.r12_txns,0) AS r12_txns,
+      COALESCE(e.r6_txns,0) AS r6_txns,
+      COALESCE(e.pr12_txns,0) AS pr12_txns,
+      COALESCE(e.ppr12_txns,0) AS ppr12_txns,
+      e.r12_active,
+    e.active_churn_r7_r12,
+  e.lapsed_r12_plus,
+    FROM LACA_CUSTOMER_DIMENSIONS d
+    LEFT JOIN LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS e
+      ON d.customer_key = e.customer_key
+    AND d.ref_date = e.ref_date
+    -- bring in RNT too (adds email/sms if available from Engagement dataset)
+    LEFT JOIN LACA_RNT_CUSTOMERS r
+      ON d.customer_key = r.customer_key
+    AND d.ref_date = r.ref_date;
