@@ -124,7 +124,10 @@ WITH corridor_ranked AS (
 engaged AS (
   SELECT
     e.*,
-    CASE WHEN cr.corridor_rank <= 10 THEN e.dominant_corridor_name ELSE 'Others' END AS corridor_bucket
+    CASE
+      WHEN cr.corridor_rank <= 10 THEN e.dominant_corridor_name
+      ELSE 'Others'
+    END AS corridor_bucket
   FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS e
   LEFT JOIN corridor_ranked cr
     ON e.ref_date = cr.ref_date
@@ -145,12 +148,13 @@ SELECT
   active_churn_r7_r12,
   lapsed_r12_plus,
   COUNT(DISTINCT customer_key) AS customer_count,
-  COALESCE(SUM(r12_txns),0) AS total_r12_txns,
-  COALESCE(SUM(r6_txns),0) AS total_r6_txns,
-  COALESCE(SUM(pr12_txns),0) AS total_pr12_txns,
-  COALESCE(SUM(ppr12_txns),0) AS total_ppr12_txns  
+  COALESCE(SUM(r12_txns), 0) AS total_r12_txns,
+  COALESCE(SUM(r6_txns), 0) AS total_r6_txns,
+  COALESCE(SUM(pr12_txns), 0) AS total_pr12_txns,
+  COALESCE(SUM(ppr12_txns), 0) AS total_ppr12_txns
 FROM engaged
 GROUP BY ALL;
+ 
  
 -----------------------------------------------------------------------------------
 -- STEP 4: Aggregate RNT Customers
@@ -158,103 +162,58 @@ GROUP BY ALL;
 CREATE OR REPLACE TABLE LACA_RNT_CUSTOMERS_AGG AS
 SELECT
   r.ref_date,
-  'RNT_Only'  AS corridor_bucket,
-  CAST(NULL AS VARCHAR)   AS dominant_sndcountry_name,
-  CAST(NULL AS VARCHAR)   AS dominant_rcvcountry_name,
+  'RNT_Only' AS corridor_bucket,
+  CAST(NULL AS VARCHAR) AS dominant_sndcountry_name,
+  CAST(NULL AS VARCHAR) AS dominant_rcvcountry_name,
   CAST(NULL AS VARCHAR) AS r12_dominant_channel,
-  e.email_marketable,     
-  e.sms_marketable,       
-  'N'   AS app_marketable_flag,  
-  'N'   AS retail_digital_flag,  
-  'Y'   AS rnt_flag,     
+  CAST(NULL AS VARCHAR) AS email_marketable,
+  CAST(NULL AS VARCHAR) AS sms_marketable,
+  'N' AS app_marketable_flag,
+  'N' AS retail_digital_flag,
+  'Y' AS rnt_flag,
   'N' AS r12_active,
   'N' AS active_churn_r7_r12,
-  'N' AS lapsed_r12_plus, 
+  'N' AS lapsed_r12_plus,
   COUNT(DISTINCT r.customer_key) AS customer_count,
-  0   AS total_r12_txns,
-  0   AS total_r6_txns,
-  0   AS total_pr12_txns,
-  0   AS total_ppr12_txns
+  0 AS total_r12_txns,
+  0 AS total_r6_txns,
+  0 AS total_pr12_txns,
+  0 AS total_ppr12_txns
 FROM LACA_RNT_CUSTOMERS r
-LEFT JOIN WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL e
-  ON r.customer_key = e.sndcustomer_key
- AND r.ref_date = DATE_TRUNC('MONTH', e.mth_yr)
 GROUP BY ALL;
-
+ 
  
 -----------------------------------------------------------------------------------
--- STEP 5A: Create Dimension Base (Union of Unique Dimension Combinations)
+-- STEP 5A: Dimension Base
 -----------------------------------------------------------------------------------
 CREATE OR REPLACE TABLE LACA_CUSTOMER_DIMENSIONS AS
 SELECT DISTINCT
-  ref_date,
-  corridor_bucket,
-  dominant_sndcountry_name,
-  dominant_rcvcountry_name,
-  r12_dominant_channel,
-  email_marketable,
-  sms_marketable,
-  app_marketable_flag,
-  retail_digital_flag,
-  rnt_flag,
-  r12_active,
-  active_churn_r7_r12,
-  lapsed_r12_plus
+  ref_date, corridor_bucket, dominant_sndcountry_name, dominant_rcvcountry_name,
+  r12_dominant_channel, email_marketable, sms_marketable, app_marketable_flag,
+  retail_digital_flag, rnt_flag, r12_active, active_churn_r7_r12, lapsed_r12_plus
 FROM LACA_ENGAGEMENT_CUSTOMERS_AGG
- 
 UNION
- 
 SELECT DISTINCT
-  ref_date,
-  corridor_bucket,  -- This is 'RNT_Only' from Step 4
-  dominant_sndcountry_name,  -- This is NULL from Step 4
-  dominant_rcvcountry_name,  -- This is NULL from Step 4
-  r12_dominant_channel,  -- This is NULL from Step 4
-  email_marketable,
-  sms_marketable,
-  app_marketable_flag,  -- This is 'N' from Step 4
-  retail_digital_flag,  -- This is 'N' from Step 4
-  rnt_flag,  -- This is 'Y' from Step 4
-  r12_active,  -- This is 'N' from Step 4
-  active_churn_r7_r12,  -- This is 'N' from Step 4
-  lapsed_r12_plus  -- This is 'N' from Step 4
+  ref_date, corridor_bucket, dominant_sndcountry_name, dominant_rcvcountry_name,
+  r12_dominant_channel, email_marketable, sms_marketable, app_marketable_flag,
+  retail_digital_flag, rnt_flag, r12_active, active_churn_r7_r12, lapsed_r12_plus
 FROM LACA_RNT_CUSTOMERS_AGG;
  
  
 -----------------------------------------------------------------------------------
--- STEP 5B: Create Final Unified Reporting Table
+-- STEP 5B: Final Reporting Table
 -----------------------------------------------------------------------------------
 CREATE OR REPLACE TABLE LACA_CUSTOMER_SEGMENTATION_FINAL AS
 SELECT
-  a.ref_date,
-  a.corridor_bucket,
-  a.dominant_sndcountry_name,
-  a.dominant_rcvcountry_name,
-  a.r12_dominant_channel,
-  a.email_marketable,
-  a.sms_marketable,
-  a.app_marketable_flag,
-  a.retail_digital_flag,
-  a.rnt_flag,
-  a.r12_active,
-  a.active_churn_r7_r12,
-  a.lapsed_r12_plus,
-  
-  -- Metrics from Engagement aggregates
+  a.*,
   COALESCE(b.customer_count, 0) AS engagement_customer_count,
   COALESCE(b.total_r12_txns, 0) AS total_r12_txns,
   COALESCE(b.total_r6_txns, 0) AS total_r6_txns,
   COALESCE(b.total_pr12_txns, 0) AS total_pr12_txns,
   COALESCE(b.total_ppr12_txns, 0) AS total_ppr12_txns,
-  
-  -- Metrics from RNT aggregates
   COALESCE(c.customer_count, 0) AS rnt_customer_count,
-  
-  -- Total customer count
   COALESCE(b.customer_count, 0) + COALESCE(c.customer_count, 0) AS total_customer_count
- 
 FROM LACA_CUSTOMER_DIMENSIONS a
- 
 LEFT JOIN LACA_ENGAGEMENT_CUSTOMERS_AGG b
   ON a.ref_date = b.ref_date
   AND NVL(a.corridor_bucket, 'NA') = NVL(b.corridor_bucket, 'NA')
@@ -269,7 +228,6 @@ LEFT JOIN LACA_ENGAGEMENT_CUSTOMERS_AGG b
   AND NVL(a.r12_active, 'NA') = NVL(b.r12_active, 'NA')
   AND NVL(a.active_churn_r7_r12, 'NA') = NVL(b.active_churn_r7_r12, 'NA')
   AND NVL(a.lapsed_r12_plus, 'NA') = NVL(b.lapsed_r12_plus, 'NA')
- 
 LEFT JOIN LACA_RNT_CUSTOMERS_AGG c
   ON a.ref_date = c.ref_date
   AND NVL(a.corridor_bucket, 'NA') = NVL(c.corridor_bucket, 'NA')
