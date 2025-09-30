@@ -1,171 +1,241 @@
-reate or replace table Country_Packet_DATA_AGGREGATED_Dimension_Base as
+ -----------------------------------------------------------------------------------
+-- STEP 1: RNT Customers Table
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_RNT_CUSTOMERS AS
+WITH params AS (
+  SELECT 12 AS rnt_window_mths
+),
+-- Generate months from Jan 2025 up to the last completed month
+
+months AS (
+  SELECT DISTINCT DATE_TRUNC('MONTH', MTH_YR) AS ref_date
+  FROM WUDNA.CEX_SANDBOX.VA_KPI_2020_2
+  WHERE MTH_YR >= TO_DATE('2025-01-01')
+    AND MTH_YR < DATE_TRUNC('MONTH', CURRENT_DATE)
+),
+
+-- Registered customers
+cust_reg AS (
+  SELECT
+    c.customer_key,
+    DATE_TRUNC('MONTH', c.first_registration_date) AS reg_month,
+    first_registration_date,
+    c.country_code
+  FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
+  JOIN SUMMARY_GEN.COUNTRY_VW cnt
+    ON c.country_code = cnt.country_code
+  WHERE cnt.super_region = 'LACA'
+    AND c.first_registration_date IS NOT NULL
+),
+-- Transactions
+txns_rnt AS (
+  SELECT DISTINCT
+    t.sndcustomer_key AS customer_key,
+    DATE_TRUNC('MONTH', t.rcvpaying_datetime) AS txn_month,
+    date(min(rcvpaying_datetime)) as first_txn_date
+  FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
+  JOIN SUMMARY_GEN.COUNTRY_VW snd
+    ON t.sndcountry_code = snd.country_code
+  WHERE snd.super_region = 'LACA'
+    AND t.rcvpaying_datetime >= '2023-01-01'
+    Group by t.sndcustomer_key , txn_month
+),
+-- RNT logic: registered in R12 window and no transactions in same R12 window
+
+rnt_no_txn AS (
+  SELECT
+    m.ref_date,
+    r.customer_key,
+    r.country_code,
+    r.reg_month
+  FROM months m
+  JOIN cust_reg r
+    ON r.reg_month BETWEEN DATEADD(MONTH, - (SELECT rnt_window_mths FROM params) + 1, m.ref_date)
+                      AND m.ref_date
+  LEFT JOIN txns_rnt t
+    ON r.customer_key = t.customer_key
+   AND t.first_txn_date BETWEEN r.reg_month AND LAST_DAY(m.ref_date)
+   and date(r.first_registration_date) <= date(t.first_txn_date)
+  WHERE t.customer_key IS NULL
+
+)
+-- Final RNT customer table
+SELECT DISTINCT
+  rnt.ref_date,
+  rnt.customer_key,
+  rnt.country_code,
+  rnt.reg_month,
+  'Y' AS rnt_flag
+FROM rnt_no_txn rnt;
+
+ 
+-----------------------------------------------------------------------------------
+-- STEP 2: Engagement + Corridor Customers Table
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS AS
+SELECT
+  e.sndcustomer_key                                AS customer_key,
+  e.country_code,
+  DATE_TRUNC('MONTH', e.mth_yr)                    AS ref_date,
+  DATE_TRUNC('MONTH', cm.first_registration_date)  AS reg_month,
+  e.r12_txns,
+  CASE WHEN e.r12_txns > 0 THEN 'Y' ELSE 'N' END   AS r12_active,
+  e.r6_txns,
+  CASE WHEN e.r6_txns = 0 AND e.r12_txns > 0 THEN 'Y' ELSE 'N' END AS active_churn_r7_r12,
+  e.pr12_txns,
+  e.ppr12_txns,
+  CASE WHEN e.r12_txns = 0 AND (e.pr12_txns > 0 OR e.ppr12_txns > 0) THEN 'Y' ELSE 'N' END AS lapsed_r12_plus,
+  e.email_marketable,
+  e.sms_marketable,
+  CASE WHEN e.R12_App_txns >0 THEN 'Y' ELSE 'N' END AS app_marketable_flag,
+  e.retail_digital_flag,
+  e.r12_dominant_channel,
+  d.dominant_corridor_name,
+  d.dominant_sndcountry_name,
+  d.dominant_rcvcountry_name,
+  d.dominant_pricing_channel,
+  'N' AS rnt_flag
+FROM WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL e
+JOIN SUMMARY_GEN.COUNTRY_VW c
+  ON e.country_code = c.country_code
+ AND c.super_region = 'LACA'
+LEFT JOIN WUDNA.CEX_SANDBOX.SK_DOMINANCY_METRICS d
+  ON e.sndcustomer_key = d.sndcustomer_key
+ AND e.mth_yr = d.mth_yr 
+LEFT JOIN SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm               
+  ON e.sndcustomer_key = cm.customer_key; 
+ 
+ 
+-----------------------------------------------------------------------------------
+-- STEP 3: Aggregate Engagement Customers
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_ENGAGEMENT_CUSTOMERS_AGG AS
+WITH corridor_ranked AS (
+  SELECT
+    ref_date,
+    dominant_corridor_name,
+    RANK() OVER (
+      PARTITION BY ref_date
+      ORDER BY COUNT(DISTINCT customer_key) DESC
+    ) AS corridor_rank
+  FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS
+  GROUP BY ref_date, dominant_corridor_name
+),
+engaged AS (
+  SELECT
+    e.*,
+    CASE WHEN cr.corridor_rank <= 10 THEN e.dominant_corridor_name ELSE 'Others' END AS corridor_bucket
+  FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS e
+  LEFT JOIN corridor_ranked cr
+    ON e.ref_date = cr.ref_date
+   AND e.dominant_corridor_name = cr.dominant_corridor_name
+)
+SELECT
+  ref_date,
+  corridor_bucket,
+  dominant_sndcountry_name,
+  dominant_rcvcountry_name,
+  r12_dominant_channel,
+  email_marketable,
+  sms_marketable,
+  app_marketable_flag,
+  retail_digital_flag,
+  rnt_flag,
+  r12_active,
+  active_churn_r7_r12,
+  lapsed_r12_plus,
+  COUNT(DISTINCT customer_key) AS customer_count,
+  COALESCE(SUM(r12_txns),0) AS total_r12_txns,
+  COALESCE(SUM(r6_txns),0) AS total_r6_txns,
+  COALESCE(SUM(pr12_txns),0) AS total_pr12_txns,
+  COALESCE(SUM(ppr12_txns),0) AS total_ppr12_txns  
+FROM engaged
+GROUP BY ALL;
+ 
+-----------------------------------------------------------------------------------
+-- STEP 4: Aggregate RNT Customers
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_RNT_CUSTOMERS_AGG AS
+SELECT
+  r.ref_date,
+  'RNT_Only'  AS corridor_bucket,
+  CAST(NULL AS VARCHAR)   AS dominant_sndcountry_name,
+  CAST(NULL AS VARCHAR)   AS dominant_rcvcountry_name,
+  CAST(NULL AS VARCHAR) AS r12_dominant_channel,
+  e.email_marketable,     
+  e.sms_marketable,       
+  'N'   AS app_marketable_flag,  
+  'N'   AS retail_digital_flag,  
+  'Y'   AS rnt_flag,     
+  'N' AS r12_active,
+  'N' AS active_churn_r7_r12,
+  'N' AS lapsed_r12_plus, 
+  COUNT(DISTINCT r.customer_key) AS customer_count,
+  0   AS total_r12_txns,
+  0   AS total_r6_txns,
+  0   AS total_pr12_txns,
+  0   AS total_ppr12_txns
+FROM LACA_RNT_CUSTOMERS r
+LEFT JOIN WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL e
+  ON r.customer_key = e.sndcustomer_key
+ AND r.ref_date = DATE_TRUNC('MONTH', e.mth_yr)
+GROUP BY ALL;
+
+ 
+-----------------------------------------------------------------------------------
+-- STEP 5: Union Aggregates into Final Segmentation
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_CUSTOMER_DIMENSIONS AS
 SELECT distinct
-REGION,
-COUNTRY_NAME,
-MTH_YR,
+  customer_key,
+  ref_date,
+  country_code,
+  reg_month,
+  rnt_flag,
+  email_marketable,
+  sms_marketable,
+  app_marketable_flag,
+  retail_digital_flag,
+  r12_dominant_channel,
+  dominant_corridor_name,
+  dominant_sndcountry_name,
+  dominant_rcvcountry_name,
+  dominant_pricing_channel
+FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS
 
-RFM_PERSONA,
-DOMINANT_CORRIDOR,
-DOMINANT_SNDCOUNTRY_NAME,
-DOMINANT_RCVCOUNTRY_NAME,
-DOMINANT_AGENT,
-DOMINANT_AGENT_DMA,
-DOMINANT_RCV_AGENT,
-DOMINANT_CHANNEL,
-FLAG_CONTACTABLE,
-EMAIL_SMS_MARKETABLE,
-RETAIL_DIGITAL_FLAG,
-DOMINANT_ATTRBUTE_FUNDS_IN,
-DOMINANT_ATTRBUTE_FUNDS_OUT,
-R12_active_breakup,
-MYWU_status_1,
-DOMINANT_CORRIDOR_TYPE_1
-from Country_Packet_CUST_LEVEL_DATA_AGGREGATED_R12
-UNION
-select distinct 
-REGION,
-COUNTRY_NAME,
-MTH_YR,
-RFM_PERSONA,
-DOMINANT_CORRIDOR,
-DOMINANT_SNDCOUNTRY_NAME,
-DOMINANT_RCVCOUNTRY_NAME,
-DOMINANT_AGENT,
-DOMINANT_AGENT_DMA,
-DOMINANT_RCV_AGENT,
-DOMINANT_CHANNEL,
-FLAG_CONTACTABLE,
-EMAIL_SMS_MARKETABLE,
-RETAIL_DIGITAL_FLAG,
-DOMINANT_ATTRBUTE_FUNDS_IN,
-DOMINANT_ATTRBUTE_FUNDS_OUT,
-R12_active_breakup,
-MYWU_STATUS_1,
-DOMINANT_CORRIDOR_TYPE_1
-from Country_Packet_CUST_LEVEL_DATA_AGGREGATED_PR12;
+UNION ALL
+SELECT distinct 
+  customer_key,
+  ref_date,
+  country_code,
+  reg_month,
+  rnt_flag,
+  NULL AS email_marketable, --- 
+  NULL AS sms_marketable, -- 
+  NULL AS app_marketable_flag,
+  NULL AS retail_digital_flag,
+  NULL AS r12_dominant_channel,
+  NULL AS dominant_corridor_name,
+  NULL AS dominant_sndcountry_name,
+  NULL AS dominant_rcvcountry_name,
+  NULL AS dominant_pricing_channel
+FROM LACA_RNT_CUSTOMERS;
 
 
-
-
-
-
-
-create or replace table Country_Packet_DATA_AGGREGATED_backup clone Country_Packet_DATA_AGGREGATED;
-
-
-create or replace table Country_Packet_DATA_AGGREGATED as
-select 
-a.REGION,
-a.COUNTRY_NAME,
-a.MTH_YR,
-a.RFM_PERSONA,
-a.DOMINANT_CORRIDOR,
-a.DOMINANT_SNDCOUNTRY_NAME,
-a.DOMINANT_RCVCOUNTRY_NAME,
-a.DOMINANT_AGENT,
-a.DOMINANT_AGENT_DMA,
-a.DOMINANT_RCV_AGENT,
-a.DOMINANT_CHANNEL,
-a.FLAG_CONTACTABLE,
-a.EMAIL_SMS_MARKETABLE,
-a.RETAIL_DIGITAL_FLAG,
-a.DOMINANT_ATTRBUTE_FUNDS_IN,
-a.DOMINANT_ATTRBUTE_FUNDS_OUT,
-a.R12_active_breakup,
-a.MYWU_status_1 as MYWU_status,
-
-case 
-    when a.RFM_PERSONA IN ('1.LOYALS','2.ENGAGED','3.PROMISING') then 'MOST ENGAGED'
-    when a.RFM_PERSONA = '4.WHALES' then 'WHALES'
-    when a.RFM_PERSONA = '5.SPORADICS' then 'BUILD HABIT'
-    when a.RFM_PERSONA IN ('6.SLIPPING','7.LOST') then 'LOSING TOUCH'
-    when a.RFM_PERSONA = '8.ONE AND DONES' then 'ONE TIMERS'
-    else 'N/A' end as CONSOLIDATED_PERSONA,
-
-case
-    when a.DOMINANT_CORRIDOR_TYPE_1 = 'INTERNATIONAL' then 'IMT'
-    when a.DOMINANT_CORRIDOR_TYPE_1 = 'DOMESTIC' then 'DMT' 
-      else 'R12_INACTIVE'  end as DOMINANT_CORRIDOR_TYPE,
-
---R12 Metrices
-AQUISITION,
-WINBACK,
-CHURNS,
-R12_ACTIVE,
-R1_Cust,
-RETAINED_IN_TWO_MONTHS,
-RETAINED_CUST,
-R1_TXNS,
-R12_TXNS,
-R1_PRINCIPAL,
-R12_PRINCIPAL,
-R1_REVENUE,
-R12_REVENUE,
-R1_FEE,
-R12_FEE ,
-R1_NET_FX,
-R12_NET_FX,
-
---PR12 Metrices
-PR12_ACTIVE,
-PR1_Cust,
-Retained_Cust_New,
-
-PR1_TXNS,
-PR12_TXNS,
-PR1_PRINCIPAL,
-PR12_PRINCIPAL,
-PR1_REVENUE,
-PR12_REVENUE,
-PR1_FEE,
-PR12_FEE ,
-PR1_NET_FX,
-PR12_NET_FX,
-PR1_AQUISITION,
-PR1_WINBACK,
-PR1_CHURN
-
-
-from Country_Packet_DATA_AGGREGATED_Dimension_Base a
-
-left join Country_Packet_CUST_LEVEL_DATA_AGGREGATED_R12 b
-	on nvl(a.REGION ,'NA') =  nvl(b.REGION,'NA') and
-	nvl(a.COUNTRY_NAME ,'NA') =  nvl(b.COUNTRY_NAME,'NA') and
-	nvl(a.RFM_PERSONA ,'NA') =  nvl(b.RFM_PERSONA,'NA') and
-	nvl(a.DOMINANT_CORRIDOR ,'NA') =  nvl(b.DOMINANT_CORRIDOR,'NA') and
-	nvl(a.DOMINANT_AGENT ,'DIGITAL') =  nvl(b.DOMINANT_AGENT,'DIGITAL') and
-	nvl(a.DOMINANT_AGENT_DMA ,'DIGITAL') =  nvl(b.DOMINANT_AGENT_DMA,'DIGITAL') and
-	nvl(a.DOMINANT_RCV_AGENT ,'DIGITAL') =  nvl(b.DOMINANT_RCV_AGENT,'DIGITAL') and
-	nvl(a.DOMINANT_CHANNEL ,'NA') =  nvl(b.DOMINANT_CHANNEL,'NA') and
-	nvl(a.FLAG_CONTACTABLE ,'NA') =  nvl(b.FLAG_CONTACTABLE,'NA') and
-	nvl(a.EMAIL_SMS_MARKETABLE ,'NA') =  nvl(b.EMAIL_SMS_MARKETABLE,'NA') and
-	nvl(a.RETAIL_DIGITAL_FLAG ,'NA') =  nvl(b.RETAIL_DIGITAL_FLAG,'NA') and
-	nvl(a.DOMINANT_ATTRBUTE_FUNDS_IN ,'NA') =  nvl(b.DOMINANT_ATTRBUTE_FUNDS_IN,'NA') and
-	nvl(a.DOMINANT_ATTRBUTE_FUNDS_OUT ,'NA') =  nvl(b.DOMINANT_ATTRBUTE_FUNDS_OUT,'NA') and
-	nvl(a.R12_active_breakup ,'NA') =  nvl(b.R12_active_breakup,'NA') and
-	nvl(a.DOMINANT_SNDCOUNTRY_NAME ,'NA') =  nvl(b.DOMINANT_SNDCOUNTRY_NAME,'NA') and
-	nvl(a.DOMINANT_RCVCOUNTRY_NAME ,'NA') =  nvl(b.DOMINANT_RCVCOUNTRY_NAME,'NA') and
-    nvl(a.MYWU_STATUS_1,'NA') =  nvl(b.MYWU_STATUS_1,'NA') and
-    nvl(a.DOMINANT_CORRIDOR_TYPE_1,'NA') =  nvl(b.DOMINANT_CORRIDOR_TYPE_1,'NA') and
-	a.MTH_YR = b.MTH_YR
-
-left join Country_Packet_CUST_LEVEL_DATA_AGGREGATED_PR12 c
-	on nvl(a.REGION ,'NA') =  nvl(c.REGION,'NA') and
-	nvl(a.COUNTRY_NAME ,'NA') =  nvl(c.COUNTRY_NAME,'NA') and
-	nvl(a.RFM_PERSONA ,'NA') =  nvl(c.RFM_PERSONA,'NA') and
-	nvl(a.DOMINANT_CORRIDOR ,'NA') =  nvl(c.DOMINANT_CORRIDOR,'NA') and
-	nvl(a.DOMINANT_AGENT ,'DIGITAL') =  nvl(c.DOMINANT_AGENT,'DIGITAL') and
-	nvl(a.DOMINANT_AGENT_DMA ,'DIGITAL') =  nvl(c.DOMINANT_AGENT_DMA,'DIGITAL') and
-	nvl(a.DOMINANT_RCV_AGENT ,'DIGITAL') =  nvl(c.DOMINANT_RCV_AGENT,'DIGITAL') and
-	nvl(a.DOMINANT_CHANNEL ,'NA') =  nvl(c.DOMINANT_CHANNEL,'NA') and
-	nvl(a.FLAG_CONTACTABLE ,'NA') =  nvl(c.FLAG_CONTACTABLE,'NA') and
-	nvl(a.EMAIL_SMS_MARKETABLE ,'NA') =  nvl(c.EMAIL_SMS_MARKETABLE,'NA') and
-	nvl(a.RETAIL_DIGITAL_FLAG ,'NA') =  nvl(c.RETAIL_DIGITAL_FLAG,'NA') and
-	nvl(a.DOMINANT_ATTRBUTE_FUNDS_IN ,'NA') =  nvl(c.DOMINANT_ATTRBUTE_FUNDS_IN,'NA') and
-	nvl(a.DOMINANT_ATTRBUTE_FUNDS_OUT ,'NA') =  nvl(c.DOMINANT_ATTRBUTE_FUNDS_OUT,'NA') and
-	nvl(a.R12_active_breakup ,'NA') =  nvl(c.R12_active_breakup,'NA') and
-	nvl(a.DOMINANT_SNDCOUNTRY_NAME ,'NA') =  nvl(c.DOMINANT_SNDCOUNTRY_NAME,'NA') and
-	nvl(a.DOMINANT_RCVCOUNTRY_NAME ,'NA') =  nvl(c.DOMINANT_RCVCOUNTRY_NAME,'NA') and
-    nvl(a.MYWU_STATUS_1,'NA') =  nvl(c.MYWU_STATUS_1,'NA') and
-    nvl(a.DOMINANT_CORRIDOR_TYPE_1,'NA') =  nvl(c.DOMINANT_CORRIDOR_TYPE_1,'NA') and
-	a.MTH_YR = c.MTH_YR;
+CREATE OR REPLACE TABLE LACA_CUSTOMER_BASE AS
+SELECT
+  d.*,
+  m.r12_txns,
+  m.r6_txns,
+  m.pr12_txns,
+  m.ppr12_txns,
+  m.r12_active,
+  m.active_churn_r7_r12,
+  m.lapsed_r12_plus
+FROM LACA_CUSTOMER_DIMENSIONS d
+LEFT JOIN LACA_CUSTOMER_METRICS m
+  ON NVL(d.customer_key, 'NA') = NVL(m.customer_key, 'NA')
+ AND d.ref_date = m.ref_date
+ LEFT JOIN LACA_RNT_CUSTOMERS r 
+	ON NVL(d.customer_key, 'NA') = NVL(r.customer_key, 'NA')
+	AND d.ref_date = r.ref_date;
