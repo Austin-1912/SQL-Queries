@@ -1,4 +1,4 @@
------------------------------------------------------------------------------------
+ -----------------------------------------------------------------------------------
 -- STEP 1: RNT Customers Table
 -----------------------------------------------------------------------------------
 CREATE OR REPLACE TABLE LACA_RNT_CUSTOMERS AS
@@ -115,16 +115,12 @@ SELECT
   e.retail_digital_flag,
   e.Web_App_Flag, 
   e.r12_dominant_channel AS channel_dominance,
--- Channel Native: Merge of retail_digital_flag and Web_App_Flag
-  CASE 
-    WHEN e.retail_digital_flag = 'R12_INACTIVE' OR e.Web_App_Flag = 'R12_Inactive' THEN 'R12_Inactive'
-    WHEN e.retail_digital_flag = 'Retail only' OR e.Web_App_Flag = 'Retail_only' THEN 'Retail Only'
-    WHEN e.retail_digital_flag = 'Digital only' AND e.Web_App_Flag = 'App Only' THEN 'App Only'
-    WHEN e.retail_digital_flag = 'Digital only' AND e.Web_App_Flag = 'Website Only' THEN 'Website Only'
-    WHEN e.retail_digital_flag = 'Digital only' AND e.Web_App_Flag = 'Website+App' THEN 'Website + App'
-    WHEN e.retail_digital_flag = 'Retail+Digital' AND e.Web_App_Flag = 'App Only' THEN 'Retail + App'
-    WHEN e.retail_digital_flag = 'Retail+Digital' AND e.Web_App_Flag = 'Website Only' THEN 'Retail + Website'
-    WHEN e.retail_digital_flag = 'Retail+Digital' AND e.Web_App_Flag = 'Website+App' THEN 'Retail + Website + App'
+-- Channel Native: 
+  CASE
+    WHEN e.retail_digital_flag = 'R12_INACTIVE' THEN 'R12 Inactive'
+    WHEN e.retail_digital_flag = 'Digital_only' THEN 'Digital Only'
+    WHEN e.retail_digital_flag = 'Retail_only' THEN 'Retail Only'
+    WHEN e.retail_digital_flag = 'Retail+Digital' THEN 'Retail + Digital'
     ELSE 'Other'
   END AS channel_native,
   
@@ -173,6 +169,7 @@ engaged AS (
 )
 SELECT
   ref_date,
+  country_code,
   corridor_bucket,
   dominant_sndcountry_name,
   dominant_rcvcountry_name,
@@ -201,6 +198,7 @@ GROUP BY ALL;
 CREATE OR REPLACE TABLE LACA_RNT_CUSTOMERS_AGG AS
 SELECT
   r.ref_date,
+  r.country_code,
   'RNT_Only' AS corridor_bucket,
   CAST(NULL AS VARCHAR) AS dominant_sndcountry_name,
   CAST(NULL AS VARCHAR) AS dominant_rcvcountry_name,
@@ -228,14 +226,14 @@ GROUP BY ALL;
 -----------------------------------------------------------------------------------
 CREATE OR REPLACE TABLE LACA_CUSTOMER_DIMENSIONS AS
 SELECT DISTINCT
-  ref_date, corridor_bucket, dominant_sndcountry_name, dominant_rcvcountry_name,
-  channel_dominance, email_marketable, sms_marketable, 
+  ref_date, country_code, corridor_bucket, dominant_sndcountry_name, dominant_rcvcountry_name,
+  channel_dominance, email_marketable, sms_marketable,
   retail_digital_flag, Web_App_Flag, channel_native,
   rnt_flag, r12_active, active_churn_r7_r12, lapsed_r12_plus
 FROM LACA_ENGAGEMENT_CUSTOMERS_AGG
 UNION
 SELECT DISTINCT
-  ref_date, corridor_bucket, dominant_sndcountry_name, dominant_rcvcountry_name,
+  ref_date, country_code, corridor_bucket, dominant_sndcountry_name, dominant_rcvcountry_name,
   channel_dominance, email_marketable, sms_marketable,
   retail_digital_flag, Web_App_Flag, channel_native,
   rnt_flag, r12_active, active_churn_r7_r12, lapsed_r12_plus
@@ -248,24 +246,39 @@ FROM LACA_RNT_CUSTOMERS_AGG;
 -----------------------------------------------------------------------------------
 CREATE OR REPLACE TABLE LACA_CUSTOMER_SEGMENTATION_FINAL AS
 SELECT
-  a.*,
+  a.ref_date,
+  a.country_code,
+  cv.COUNTRY_NAME AS laca_country,
+  a.corridor_bucket,
+  a.dominant_sndcountry_name,
+  a.dominant_rcvcountry_name,
+  a.channel_dominance,
+  a.email_marketable,
+  a.sms_marketable,
+  a.retail_digital_flag,
+  a.Web_App_Flag,
+  a.channel_native,
+  a.rnt_flag,
+  a.r12_active,
+  a.active_churn_r7_r12,
+  a.lapsed_r12_plus,
   COALESCE(b.customer_count, 0) AS engagement_customer_count,
   COALESCE(b.total_r12_txns, 0) AS total_r12_txns,
   COALESCE(b.total_r6_txns, 0) AS total_r6_txns,
   COALESCE(b.total_pr12_txns, 0) AS total_pr12_txns,
   COALESCE(b.total_ppr12_txns, 0) AS total_ppr12_txns,
   COALESCE(c.customer_count, 0) AS rnt_customer_count,
-  COALESCE(b.customer_count, 0) + COALESCE(c.customer_count, 0) AS total_customer_count,
+      COALESCE(b.customer_count, 0) + COALESCE(c.customer_count, 0) AS total_customer_count,
   
    -- Helper columns for Power BI
   YEAR(a.ref_date) AS year,
   MONTH(a.ref_date) AS month_number,
   TO_CHAR(a.ref_date, 'YYYY-MM') AS year_month,
   TO_CHAR(a.ref_date, 'Mon-YY') AS month_label,
-  DATE_TRUNC('YEAR', a.ref_date) AS year_start,
   
   -- Audience Segmentation
-  CASE 
+
+  CASE
     WHEN a.rnt_flag = 'Y' THEN 'Registered Not Transacted'
     WHEN a.r12_active = 'Y' THEN 'Active R1-R12'
     WHEN a.active_churn_r7_r12 = 'Y' THEN 'Active Churn R7-R12'
@@ -281,11 +294,8 @@ SELECT
     ELSE 'Non Marketable'
   END AS marketability_segment,
   
-  -- Region (always LACA for this dataset)
+  -- Region
   'LACA' AS region,
-  
-  -- Country 
-  COALESCE(a.dominant_sndcountry_name, 'Unknown') AS laca_country,
   
   -- Corridor Grouping
   CASE 
@@ -295,6 +305,9 @@ SELECT
   END AS corridor_group
 
 FROM LACA_CUSTOMER_DIMENSIONS a
+LEFT JOIN SUMMARY_GEN.COUNTRY_VW cv
+  ON a.country_code = cv.country_code
+  AND cv.super_region = 'LACA'
 LEFT JOIN LACA_ENGAGEMENT_CUSTOMERS_AGG b
   ON a.ref_date = b.ref_date
   AND NVL(a.corridor_bucket, 'NA') = NVL(b.corridor_bucket, 'NA')
