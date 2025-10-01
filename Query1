@@ -299,20 +299,24 @@ SELECT
   a.active_churn_r7_r12,
   a.lapsed_r12_plus,
   
-
-  COALESCE(b.customer_count, 0) AS customer_count,  
+  -- Keep engagement and RNT separate
+  COALESCE(b.customer_count, 0) AS engagement_customer_count,
   COALESCE(b.total_r12_txns, 0) AS total_r12_txns,
   COALESCE(b.total_r6_txns, 0) AS total_r6_txns,
   COALESCE(b.total_pr12_txns, 0) AS total_pr12_txns,
   COALESCE(b.total_ppr12_txns, 0) AS total_ppr12_txns,
   
-  -- RNT counts kept separate for clarity
   COALESCE(c.customer_count, 0) AS rnt_customer_count,
   
-  -- Total calculation
+  -- Total uses the appropriate count based on rnt_flag
+  CASE
+    WHEN a.rnt_flag = 'Y' THEN COALESCE(c.customer_count, 0)
+    ELSE COALESCE(b.customer_count, 0)
+  END AS customer_count,  -- This is what Power BI should use
+  
   COALESCE(b.customer_count, 0) + COALESCE(c.customer_count, 0) AS total_customer_count,
   
-   -- Helper columns for Power BI
+  -- Helper columns for Power BI
   YEAR(a.ref_date) AS year,
   MONTH(a.ref_date) AS month_number,
   TO_CHAR(a.ref_date, 'YYYY-MM') AS year_month,
@@ -335,7 +339,6 @@ SELECT
     ELSE 'Non Marketable'
   END AS marketability_segment,
   
-  -- Region
   'LACA' AS region,
   
   -- Corridor Grouping
@@ -344,7 +347,6 @@ SELECT
     WHEN a.corridor_bucket = 'Others' THEN 'Other Corridors'
     ELSE a.corridor_bucket
   END AS corridor_group
- 
 FROM LACA_CUSTOMER_DIMENSIONS a
 LEFT JOIN SUMMARY_GEN.COUNTRY_VW cv
   ON a.country_code = cv.country_code
