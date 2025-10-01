@@ -208,21 +208,7 @@ SELECT
   COALESCE(SUM(ppr12_txns), 0) AS total_ppr12_txns
 FROM engaged
 GROUP BY
-  ref_date,
-  country_code,
-  corridor_bucket,
-  dominant_sndcountry_name,
-  dominant_rcvcountry_name,
-  channel_dominance,
-  email_marketable,
-  sms_marketable,
-  retail_digital_flag,
-  Web_App_Flag,
-  channel_native,
-  rnt_flag,
-  r12_active,
-  active_churn_r7_r12,
-  lapsed_r12_plus;
+  ALL;
  
  
 -----------------------------------------------------------------------------------
@@ -325,8 +311,9 @@ SELECT
   -- Audience Segmentation
   CASE
     WHEN a.rnt_flag = 'Y' THEN 'Registered Not Transacted'
-    WHEN a.r12_active = 'Y' THEN 'Active R1-R12'
     WHEN a.active_churn_r7_r12 = 'Y' THEN 'Active Churn R7-R12'
+    WHEN a.r12_active = 'Y' THEN 'Active R1-R12'
+    
     WHEN a.lapsed_r12_plus = 'Y' THEN 'Lapsed R12+'
     ELSE 'Other'
   END AS audience_segment,
