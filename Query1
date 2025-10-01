@@ -157,7 +157,25 @@ WITH corridor_ranked AS (
 ),
 engaged AS (
   SELECT
-    e.*,
+     e.customer_key,
+    e.ref_date,
+    e.country_code,
+    e.r12_txns,
+    e.r6_txns,
+    e.pr12_txns,
+    e.ppr12_txns,
+    e.dominant_sndcountry_name,
+    e.dominant_rcvcountry_name,
+    e.channel_dominance,
+    e.email_marketable,
+    e.sms_marketable,
+    e.retail_digital_flag,
+    e.Web_App_Flag,
+    e.channel_native,
+    e.rnt_flag,
+    e.r12_active,
+    e.active_churn_r7_r12,
+    e.lapsed_r12_plus,
     CASE
       WHEN cr.corridor_rank <= 10 THEN e.dominant_corridor_name
       ELSE 'Others'
@@ -183,13 +201,28 @@ SELECT
   r12_active,
   active_churn_r7_r12,
   lapsed_r12_plus,
-  COUNT(DISTINCT customer_key) AS customer_count,
+  COUNT(DISTINCT customer_key) AS customer_count,  
   COALESCE(SUM(r12_txns), 0) AS total_r12_txns,
   COALESCE(SUM(r6_txns), 0) AS total_r6_txns,
   COALESCE(SUM(pr12_txns), 0) AS total_pr12_txns,
   COALESCE(SUM(ppr12_txns), 0) AS total_ppr12_txns
 FROM engaged
-GROUP BY ALL;
+GROUP BY
+  ref_date,
+  country_code,
+  corridor_bucket,
+  dominant_sndcountry_name,
+  dominant_rcvcountry_name,
+  channel_dominance,
+  email_marketable,
+  sms_marketable,
+  retail_digital_flag,
+  Web_App_Flag,
+  channel_native,
+  rnt_flag,
+  r12_active,
+  active_churn_r7_r12,
+  lapsed_r12_plus;
  
  
 -----------------------------------------------------------------------------------
@@ -218,7 +251,10 @@ SELECT
   0 AS total_pr12_txns,
   0 AS total_ppr12_txns
 FROM LACA_RNT_CUSTOMERS r
-GROUP BY ALL;
+GROUP BY r.ref_date,
+  r.country_code,
+  r.email_marketable,
+  r.sms_marketable;
  
  
 -----------------------------------------------------------------------------------
@@ -262,13 +298,19 @@ SELECT
   a.r12_active,
   a.active_churn_r7_r12,
   a.lapsed_r12_plus,
-  COALESCE(b.customer_count, 0) AS engagement_customer_count,
+  
+
+  COALESCE(b.customer_count, 0) AS customer_count,  
   COALESCE(b.total_r12_txns, 0) AS total_r12_txns,
   COALESCE(b.total_r6_txns, 0) AS total_r6_txns,
   COALESCE(b.total_pr12_txns, 0) AS total_pr12_txns,
   COALESCE(b.total_ppr12_txns, 0) AS total_ppr12_txns,
+  
+  -- RNT counts kept separate for clarity
   COALESCE(c.customer_count, 0) AS rnt_customer_count,
-      COALESCE(b.customer_count, 0) + COALESCE(c.customer_count, 0) AS total_customer_count,
+  
+  -- Total calculation
+  COALESCE(b.customer_count, 0) + COALESCE(c.customer_count, 0) AS total_customer_count,
   
    -- Helper columns for Power BI
   YEAR(a.ref_date) AS year,
@@ -277,7 +319,6 @@ SELECT
   TO_CHAR(a.ref_date, 'Mon-YY') AS month_label,
   
   -- Audience Segmentation
-
   CASE
     WHEN a.rnt_flag = 'Y' THEN 'Registered Not Transacted'
     WHEN a.r12_active = 'Y' THEN 'Active R1-R12'
@@ -287,7 +328,7 @@ SELECT
   END AS audience_segment,
   
   -- Marketability Status
-  CASE 
+  CASE
     WHEN a.email_marketable = 'Y' AND a.sms_marketable = 'Y' THEN 'Email + SMS Marketable'
     WHEN a.email_marketable = 'Y' THEN 'Email Marketable'
     WHEN a.sms_marketable = 'Y' THEN 'SMS Marketable'
@@ -298,19 +339,19 @@ SELECT
   'LACA' AS region,
   
   -- Corridor Grouping
-  CASE 
+  CASE
     WHEN a.corridor_bucket = 'RNT_Only' THEN 'RNT Only'
     WHEN a.corridor_bucket = 'Others' THEN 'Other Corridors'
     ELSE a.corridor_bucket
   END AS corridor_group
-
+ 
 FROM LACA_CUSTOMER_DIMENSIONS a
 LEFT JOIN SUMMARY_GEN.COUNTRY_VW cv
   ON a.country_code = cv.country_code
   AND cv.super_region = 'LACA'
 LEFT JOIN LACA_ENGAGEMENT_CUSTOMERS_AGG b
   ON a.ref_date = b.ref_date
-  AND a.country_code = b.country_code 
+  AND a.country_code = b.country_code
   AND NVL(a.corridor_bucket, 'NA') = NVL(b.corridor_bucket, 'NA')
   AND NVL(a.dominant_sndcountry_name, 'NA') = NVL(b.dominant_sndcountry_name, 'NA')
   AND NVL(a.dominant_rcvcountry_name, 'NA') = NVL(b.dominant_rcvcountry_name, 'NA')
