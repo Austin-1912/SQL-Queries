@@ -148,7 +148,7 @@ WITH corridor_ranked AS (
   SELECT
     ref_date,
     dominant_corridor_name,
-    RANK() OVER (
+    DENSE_RANK() OVER (
       PARTITION BY ref_date
       ORDER BY COUNT(DISTINCT customer_key) DESC
     ) AS corridor_rank
@@ -177,7 +177,7 @@ engaged AS (
     e.active_churn_r7_r12,
     e.lapsed_r12_plus,
     CASE
-      WHEN cr.corridor_rank <= 10 THEN e.dominant_corridor_name
+      WHEN cr.corridor_rank <= 11 THEN e.dominant_corridor_name
       ELSE 'Others'
     END AS corridor_bucket
   FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS e
