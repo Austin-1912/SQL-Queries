@@ -1,64 +1,6 @@
------------------------------------------------------------------------------------
--- COMPREHENSIVE VALIDATION
------------------------------------------------------------------------------------
-WITH source_detail AS (
   SELECT
-    ref_date,
-    country_code,
-    r12_active,
-    active_churn_r7_r12,
-    lapsed_r12_plus,
-    COUNT(DISTINCT customer_key) as customer_count
-  FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS
-  GROUP BY ref_date, country_code, r12_active, active_churn_r7_r12, lapsed_r12_plus
-),
-agg_detail AS (
-  SELECT
-    ref_date,
-    country_code,
-    r12_active,
-    active_churn_r7_r12,
-    lapsed_r12_plus,
-    SUM(customer_count) as customer_count
-  FROM LACA_ENGAGEMENT_CUSTOMERS_AGG
-  GROUP BY ref_date, country_code, r12_active, active_churn_r7_r12, lapsed_r12_plus
-),
-final_detail AS (
-  SELECT
-    ref_date,
-    country_code,
-    r12_active,
-    active_churn_r7_r12,
-    lapsed_r12_plus,
-    SUM(customer_count) as customer_count  -- Changed from engagement_customer_count
-  FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-  WHERE rnt_flag = 'N'  -- Only engagement customers, not RNT
-  GROUP BY ref_date, country_code, r12_active, active_churn_r7_r12, lapsed_r12_plus
-)
-SELECT
-  COALESCE(s.ref_date, a.ref_date, f.ref_date) as ref_date,
-  COALESCE(s.country_code, a.country_code, f.country_code) as country_code,
-  COALESCE(s.r12_active, a.r12_active, f.r12_active) as r12_active,
-  s.customer_count as source_count,
-  a.customer_count as agg_count,
-  f.customer_count as final_count,
-  CASE
-    WHEN s.customer_count = a.customer_count AND a.customer_count = f.customer_count THEN '✓ MATCH'
-    ELSE '✗ MISMATCH'
-  END as status
-FROM source_detail s
-FULL OUTER JOIN agg_detail a
-  ON s.ref_date = a.ref_date
-  AND s.country_code = a.country_code
-  AND s.r12_active = a.r12_active
-  AND s.active_churn_r7_r12 = a.active_churn_r7_r12
-  AND s.lapsed_r12_plus = a.lapsed_r12_plus
-FULL OUTER JOIN final_detail f
-  ON COALESCE(s.ref_date, a.ref_date) = f.ref_date
-  AND COALESCE(s.country_code, a.country_code) = f.country_code
-  AND COALESCE(s.r12_active, a.r12_active) = f.r12_active
-  AND COALESCE(s.active_churn_r7_r12, a.active_churn_r7_r12) = f.active_churn_r7_r12
-  AND COALESCE(s.lapsed_r12_plus, a.lapsed_r12_plus) = f.lapsed_r12_plus
-WHERE COALESCE(s.customer_count, 0) != COALESCE(a.customer_count, 0)
-   OR COALESCE(a.customer_count, 0) != COALESCE(f.customer_count, 0)
-ORDER BY ref_date, country_code, r12_active;
+  ref_date,
+  SUM(CASE WHEN r12_active = 'Y' THEN engagement_customer_count ELSE 0 END) AS r12_active_customers
+FROM LACA_CUSTOMER_SEGMENTATION_FINAL
+GROUP BY ref_date
+ORDER BY ref_date;
