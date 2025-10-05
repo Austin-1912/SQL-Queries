@@ -226,7 +226,7 @@ SELECT
   r.sms_marketable,
   'R12_INACTIVE' AS retail_digital_flag,
   'R12_Inactive' AS Web_App_Flag,
-  'R12_Inactive' AS channel_native,
+  'RNT' AS channel_native,
   'Y' AS rnt_flag,
   'N' AS r12_active,
   'N' AS active_churn_r7_r12,
@@ -310,13 +310,12 @@ SELECT
   
   -- Audience Segmentation
   CASE
+  WHEN a.r12_active = 'Y' THEN 'Active R1-R12'
     WHEN a.rnt_flag = 'Y' THEN 'Registered Not Transacted'
-    WHEN a.active_churn_r7_r12 = 'Y' THEN 'Active Churn R7-R12'
-    WHEN a.r12_active = 'Y' THEN 'Active R1-R12'
-    
+    WHEN a.active_churn_r7_r12 = 'Y' THEN 'Active Churn R7-R12'    
     WHEN a.lapsed_r12_plus = 'Y' THEN 'Lapsed R12+'
     ELSE 'Other'
-  END AS audience_segment,
+  END AS audience_segment, -- intersect and check duplicate counts in other and Active R1 - R12
   
   -- Marketability Status
   CASE
