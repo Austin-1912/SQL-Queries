@@ -10,7 +10,7 @@ WITH params AS (
 months AS (
   SELECT DISTINCT DATE_TRUNC('MONTH', MTH_YR) AS ref_date
   FROM WUDNA.CEX_SANDBOX.VA_KPI_2020_2
-  WHERE MTH_YR >= TO_DATE('2025-01-01')
+  WHERE MTH_YR >= TO_DATE('2024-01-01')
     AND MTH_YR < DATE_TRUNC('MONTH', CURRENT_DATE)
 ),
 
@@ -108,7 +108,8 @@ SELECT
   CASE WHEN e.r6_txns = 0 AND e.r12_txns > 0 THEN 'Y' ELSE 'N' END AS active_churn_r7_r12,
   e.pr12_txns,
   e.ppr12_txns,
-  CASE WHEN e.r12_txns = 0 AND (e.pr12_txns > 0 OR e.ppr12_txns > 0) THEN 'Y' ELSE 'N' END AS lapsed_r12_plus,
+  e.pppr12_txns,
+  CASE WHEN e.r12_txns = 0 AND (e.pr12_txns > 0 OR e.ppr12_txns > 0 OR e.pppr12_txns > 0) THEN 'Y' ELSE 'N' END AS lapsed_r12_plus,
   e.email_marketable,
   e.sms_marketable,
   CASE WHEN e.R12_App_txns >0 THEN 'Y' ELSE 'N' END AS app_marketable_flag,
@@ -164,6 +165,7 @@ engaged AS (
     e.r6_txns,
     e.pr12_txns,
     e.ppr12_txns,
+    e.pppr12_txns,
     e.dominant_sndcountry_name,
     e.dominant_rcvcountry_name,
     e.channel_dominance,
@@ -205,7 +207,8 @@ SELECT
   COALESCE(SUM(r12_txns), 0) AS total_r12_txns,
   COALESCE(SUM(r6_txns), 0) AS total_r6_txns,
   COALESCE(SUM(pr12_txns), 0) AS total_pr12_txns,
-  COALESCE(SUM(ppr12_txns), 0) AS total_ppr12_txns
+  COALESCE(SUM(ppr12_txns), 0) AS total_ppr12_txns,
+  COALESCE(SUM(pppr12_txns), 0) AS total_pppr12_txns 
 FROM engaged
 GROUP BY
   ALL;
@@ -291,6 +294,7 @@ SELECT
   COALESCE(b.total_r6_txns, 0) AS total_r6_txns,
   COALESCE(b.total_pr12_txns, 0) AS total_pr12_txns,
   COALESCE(b.total_ppr12_txns, 0) AS total_ppr12_txns,
+  COALESCE(b.total_pppr12_txns, 0) AS total_pppr12_txns, 
   
   COALESCE(c.customer_count, 0) AS rnt_customer_count,
   
@@ -324,6 +328,36 @@ SELECT
     WHEN a.sms_marketable = 'Y' THEN 'SMS Marketable'
     ELSE 'Non Marketable'
   END AS marketability_segment,
+
+  -- Lapsed Breakdown (for decomposition)
+CASE
+  WHEN a.lapsed_r12_plus = 'Y' AND total_pr12_txns > 0 THEN 'PR12 Active (R13-R24)'
+  WHEN a.lapsed_r12_plus = 'Y' AND total_ppr12_txns > 0 THEN 'PPR12 Active (R25-R36)'
+  WHEN a.lapsed_r12_plus = 'Y' AND total_pppr12_txns > 0 THEN 'PPPR12 Active (R37-R48)'
+  ELSE NULL
+END AS lapsed_breakdown,
+
+-- Top-level breakdown
+CASE
+  WHEN a.rnt_flag = 'Y' THEN 'RNT Customers'
+  WHEN a.r12_active = 'Y' OR a.lapsed_r12_plus = 'Y' THEN 'Transacted Customers'
+  ELSE 'Other'
+END AS customer_type,
+
+-- Second-level breakdown for Transacted
+CASE
+  WHEN a.r12_active = 'Y' THEN 'Active R1-R12'
+  WHEN a.lapsed_r12_plus = 'Y' THEN 'Lapsed R12+'
+  WHEN a.r12_active = 'N' AND a.lapsed_r12_plus = 'N' AND a.rnt_flag = 'N' THEN 'Dormant/Never Transacted'
+  ELSE NULL
+END AS transacted_status,
+
+-- Third-level breakdown for Active R1-R12
+CASE
+  WHEN a.r12_active = 'Y' AND a.active_churn_r7_r12 = 'Y' THEN 'Churn R7-R12'
+  WHEN a.r12_active = 'Y' AND a.active_churn_r7_r12 = 'N' THEN 'Active R1-R6'
+  ELSE NULL
+END AS active_breakdown_field,
   
   'LACA' AS region,
   
