@@ -1,68 +1,140 @@
-select * from WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW where FEE_SEGMENT_USED='N7' limit 100;
+--1st CUT
+CREATE OR REPLACE TABLE AU_IN_Corridor AS
+WITH base_txn AS (
+    SELECT DISTINCT
+        t.SNDCUSTOMER_KEY,         -- 19-digit GID
+        UPPER(t.SNDCOUNTRY_CODE) AS sndcountry_code,
+        UPPER(t.RCVCOUNTRY_CODE) AS rcvcountry_code,
+        t.PRICING_CHANNEL,
+        CASE 
+            WHEN PRICING_CHANNEL IN ('TMT', 'POS', 'AIR') THEN 'Retail'
+            WHEN PRICING_CHANNEL IN ('WEB', 'APP') THEN 'Digital'
+            ELSE 'OTHER'
+        END AS Channel
+    FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t  
+    WHERE UPPER(t.SNDCOUNTRY_CODE) = 'AU'
+      AND UPPER(t.RCVCOUNTRY_CODE) = 'IN'
+      AND DATE(t.RCVPAYING_DATETIME) >= '2024-09-01' 
+      AND DATE(t.RCVPAYING_DATETIME) <= '2025-08-31'
+),
 
-select * from WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW limit 100;
+app_flag AS (
+    SELECT
+       DISTINCT SNDCUSTOMER_KEY
+    FROM base_txn
+    WHERE PRICING_CHANNEL = 'APP'
+    GROUP BY SNDCUSTOMER_KEY
+)
 
-create or replace table CAR_645_AU_N7_PRICING_TXN_DETAILS as 
-select 
-    SNDCUSTOMER_KEY,
-    TXN_ID,
-    RCVPAYING_DATETIME,
-    SNDCOUNTRY_CODE,
-    SEND_COUNTRY_NAME,
-    RCVCOUNTRY_CODE,
-    RCV_COUNTRY_NAME,
-    FEE_SEGMENT_USED,
-    FX_SEGMENT_USED,
-    SNDPRINCIPAL_USD,
-    case when PRICING_CHANNEL in ('WEB','APP') then 'DIGITAL'
-    when PRICING_CHANNEL in ('POS','AIR','TMT') then 'RETAIL'
-    ELSE 'OTHERS' END AS RETAIL_DIGITAL_FLAG
-FROM
-    WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
-where
-    FEE_SEGMENT_USED='N7'
-AND
-    FX_SEGMENT_USED='N7'
-AND
-    SNDCOUNTRY_CODE in ('AU')
-AND
-    RCVCOUNTRY_CODE in ('BG','BD','PK','NP','CO','FJ');
-
-select count(*), count(distinct sndcustomer_key) from CAR_645_AU_N7_PRICING_TXN_DETAILS;--386,948 35,044
-
-
-select
-    RCV_COUNTRY_NAME, count(*), count(distinct sndcustomer_key) from CAR_645_AU_N7_PRICING_TXN_DETAILS group by 1;
-
-select
-    RETAIL_DIGITAL_FLAG, count(*), count(distinct sndcustomer_key) from CAR_645_AU_N7_PRICING_TXN_DETAILS group by 1;
-
-select min(rcvpaying_datetime), max(rcvpaying_datetime) from CAR_645_AU_N7_PRICING_TXN_DETAILS;-- 21st March 2023 to till date
-
-
-
-select
-    SEND_COUNTRY_NAME,
-    RCV_COUNTRY_NAME,
-    RETAIL_DIGITAL_FLAG,
-    FEE_SEGMENT_USED as PRICING_SEGMENT,
+SELECT DISTINCT
+    b.SNDCUSTOMER_KEY AS gid_customer_key,
+    cm.customer_umn    AS umn_customer_key,
+    b.sndcountry_code,
+    b.rcvcountry_code,
+     cm.global_holdout,
     
-    date_trunc(MONTH,RCVPAYING_DATETIME) as MTH_YR,
-    count(distinct sndcustomer_key) as customer_count,
-    count(txn_id) as total_txns,
-    sum(SNDPRINCIPAL_USD) as total_principal
-from
-   CAR_645_AU_N7_PRICING_TXN_DETAILS
-group by ALL; 
+
+    -- Marketability Flags
+    CASE 
+        WHEN cm.marketing_flag = 'Y' AND cm.email_address_on_file_flag = 'Y' AND cm.opt_email = 'I' THEN 'Y'
+        ELSE 'N'
+    END AS email_marketability_flag,
+
+    CASE 
+        WHEN cm.marketing_flag = 'Y' AND cm.mobile_number_on_file_flag = 'Y' AND cm.opt_sms = 'I' THEN 'Y'
+        ELSE 'N'
+    END AS sms_marketability_flag,
+
+    CASE WHEN af.SNDCUSTOMER_KEY IS NOT NULL THEN 'Y' ELSE 'N' END AS App_Marketability_Flag,
+    CASE 
+        WHEN email_marketability_flag = 'Y' OR sms_marketability_flag = 'Y' OR af.SNDCUSTOMER_KEY IS NOT NULL THEN 'Y' ELSE 'N' END AS MARKETABILITY_FLAG
+
+FROM base_txn b
+JOIN SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
+  ON b.SNDCUSTOMER_KEY = cm.customer_key
+LEFT JOIN app_flag af
+  ON b.SNDCUSTOMER_KEY = af.SNDCUSTOMER_KEY;
 
 
-select
-    SNDCUSTOMER_KEY,
-    SEND_COUNTRY_NAME,
-    RCV_COUNTRY_NAME,
-    count(txn_id)
-from
-    CAR_645_AU_N7_PRICING_TXN_DETAILS
-where
-    RCVCOUNTRY_CODE in ('PK','NP','CO')
-group by ALL;
+  //-----------------------------------------------------------------------------------
+
+  CREATE OR REPLACE TABLE NZ_IN_Corridor AS
+  WITH base_txn AS (
+    SELECT DISTINCT
+        t.SNDCUSTOMER_KEY,         -- 19-digit GID
+        UPPER(t.SNDCOUNTRY_CODE) AS sndcountry_code,
+        UPPER(t.RCVCOUNTRY_CODE) AS rcvcountry_code,
+        t.PRICING_CHANNEL,
+        CASE 
+            WHEN PRICING_CHANNEL IN ('TMT', 'POS', 'AIR') THEN 'Retail'
+            WHEN PRICING_CHANNEL IN ('WEB', 'APP') THEN 'Digital'
+            ELSE 'OTHER'
+        END AS Channel
+    FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t  
+    WHERE UPPER(t.SNDCOUNTRY_CODE) = 'NZ'
+      AND UPPER(t.RCVCOUNTRY_CODE) = 'IN'
+      AND DATE(t.RCVPAYING_DATETIME) >= '2024-09-01' 
+      AND DATE(t.RCVPAYING_DATETIME) <= '2025-08-31'
+),
+
+    app_flag AS (
+    SELECT
+       DISTINCT SNDCUSTOMER_KEY
+    FROM base_txn
+    WHERE PRICING_CHANNEL = 'APP'
+    GROUP BY SNDCUSTOMER_KEY
+)
+
+
+SELECT DISTINCT
+    b.SNDCUSTOMER_KEY AS gid_customer_key,
+    cm.customer_umn    AS umn_customer_key,
+    b.sndcountry_code,
+    b.rcvcountry_code,
+    
+    cm.global_holdout,
+
+
+    -- Marketability Flags
+    CASE 
+        WHEN cm.marketing_flag = 'Y' AND cm.email_address_on_file_flag = 'Y' AND cm.opt_email = 'I' THEN 'Y'
+        ELSE 'N'
+    END AS email_marketability_flag,
+
+    CASE 
+        WHEN cm.marketing_flag = 'Y' AND cm.mobile_number_on_file_flag = 'Y' AND cm.opt_sms = 'I' THEN 'Y'
+        ELSE 'N'
+    END AS sms_marketability_flag,
+
+    CASE WHEN af.SNDCUSTOMER_KEY IS NOT NULL THEN 'Y' ELSE 'N' END AS App_Marketability_Flag,
+
+    CASE 
+        WHEN email_marketability_flag = 'Y' OR sms_marketability_flag = 'Y' OR app_marketability_flag = 'Y' THEN 'Y' ELSE 'N' END AS MARKETABILITY_FLAG
+FROM base_txn b
+JOIN SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
+  ON b.SNDCUSTOMER_KEY = cm.customer_key
+LEFT JOIN app_flag af
+  ON b.SNDCUSTOMER_KEY = af.SNDCUSTOMER_KEY;
+---------------------------------------------------------------------------------------------------------------------
+  SELECT COUNT(gid_customer_key), COUNT(DISTINCT gid_customer_key) FROM AU_IN_Corridor;--159975	159975
+  SELECT COUNT(gid_customer_key), COUNT(DISTINCT gid_customer_key) FROM NZ_IN_Corridor;--32531	32531
+  select COUNT(marketability_flag) from NZ_IN_CORRIDOR Group by marketability_flag having marketability_flag = 'Y';
+  
+  SELECT '@' || GID_CUSTOMER_KEY AS GID,
+         '@' || UMN_CUSTOMER_KEY AS UMN,
+         email_marketability_flag,
+         sms_marketability_flag,
+         App_Marketability_Flag,
+         MARKETABILITY_FLAG,
+         global_holdout
+         FROM AU_IN_Corridor;
+        
+
+    SELECT '@' || GID_CUSTOMER_KEY AS GID,
+         '@' || UMN_CUSTOMER_KEY AS UMN,
+         email_marketability_flag,
+         sms_marketability_flag,
+         App_Marketability_Flag,
+         MARKETABILITY_FLAG,
+         global_holdout
+         FROM NZ_IN_Corridor;
