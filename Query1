@@ -302,7 +302,7 @@ SELECT
   CASE
     WHEN a.rnt_flag = 'Y' THEN COALESCE(c.customer_count, 0)
     ELSE COALESCE(b.customer_count, 0)
-  END AS customer_count,  -- This is what Power BI should use
+  END AS customer_count,  
   
   COALESCE(b.customer_count, 0) + COALESCE(c.customer_count, 0) AS total_customer_count,
   
@@ -319,7 +319,7 @@ SELECT
     WHEN a.active_churn_r7_r12 = 'Y' THEN 'Active Churn R7-R12'    
     WHEN a.lapsed_r12_plus = 'Y' THEN 'Lapsed R12+'
     ELSE 'Other'
-  END AS audience_segment, -- intersect and check duplicate counts in other and Active R1 - R12
+  END AS audience_segment, 
   
   -- Marketability Status
   CASE
@@ -331,9 +331,9 @@ SELECT
 
   -- Lapsed Breakdown (for decomposition)
 CASE
-  WHEN a.lapsed_r12_plus = 'Y' AND total_pr12_txns > 0 THEN 'PR12 Active (R13-R24)'
-  WHEN a.lapsed_r12_plus = 'Y' AND total_ppr12_txns > 0 THEN 'PPR12 Active (R25-R36)'
-  WHEN a.lapsed_r12_plus = 'Y' AND total_pppr12_txns > 0 THEN 'PPPR12 Active (R37-R48)'
+  WHEN a.lapsed_r12_plus = 'Y' AND COALESCE(b.total_pr12_txns, 0) > 0 THEN 'PR12 Active (R13-R24)'
+  WHEN a.lapsed_r12_plus = 'Y' AND COALESCE(b.total_ppr12_txns, 0) > 0 THEN 'PPR12 Active (R25-R36)'
+  WHEN a.lapsed_r12_plus = 'Y' AND COALESCE(b.total_pppr12_txns, 0) > 0 THEN 'PPPR12 Active (R37-R48)'
   ELSE NULL
 END AS lapsed_breakdown,
 
@@ -350,14 +350,39 @@ CASE
   WHEN a.lapsed_r12_plus = 'Y' THEN 'Lapsed R12+'
   WHEN a.r12_active = 'N' AND a.lapsed_r12_plus = 'N' AND a.rnt_flag = 'N' THEN 'Dormant/Never Transacted'
   ELSE NULL
-END AS transacted_status,
+END AS level2_engagement_status,
 
--- Third-level breakdown for Active R1-R12
-CASE
-  WHEN a.r12_active = 'Y' AND a.active_churn_r7_r12 = 'Y' THEN 'Churn R7-R12'
-  WHEN a.r12_active = 'Y' AND a.active_churn_r7_r12 = 'N' THEN 'Active R1-R6'
+-- Level 3a: Active Breakdown (only for Active R1-R12)
+-- CASE
+--   WHEN a.r12_active = 'Y' AND a.active_churn_r7_r12 = 'Y' THEN 'Churn R7-R12'
+--   WHEN a.r12_active = 'Y' AND a.active_churn_r7_r12 = 'N' THEN 'Active R1-R6'
+--   ELSE NULL
+-- END AS level3_active_breakdown,
+
+-- Level 3b: Lapsed Breakdown (only for Lapsed R12+)
+-- CASE
+--   WHEN a.lapsed_r12_plus = 'Y' AND COALESCE(b.total_pr12_txns, 0) > 0 AND COALESCE(b.total_ppr12_txns, 0) = 0 AND COALESCE(b.total_pppr12_txns, 0) = 0
+--     THEN 'PR12 Active (13-24 months)'
+--   WHEN a.lapsed_r12_plus = 'Y' AND COALESCE(b.total_ppr12_txns, 0) > 0 AND COALESCE(b.total_pppr12_txns, 0) = 0
+--     THEN 'PPR12 Active (25-36 months)'
+--   WHEN a.lapsed_r12_plus = 'Y' AND COALESCE(b.total_pppr12_txns, 0) > 0
+--     THEN 'PPPR12 Active (37-48 months)'
+--   ELSE NULL
+-- END AS level3_lapsed_breakdown,
+
+    CASE
+  WHEN a.r12_active = 'Y' THEN
+    CASE WHEN a.active_churn_r7_r12 = 'Y' THEN 'Churn R7-12' ELSE 'Active R1-6' END
+  WHEN a.lapsed_r12_plus = 'Y' THEN
+    CASE
+      WHEN COALESCE(b.total_pppr12_txns, 0) > 0 THEN 'PPPR12 Active (37-48 months)'
+      WHEN COALESCE(b.total_ppr12_txns, 0) > 0 AND COALESCE(b.total_pppr12_txns, 0) = 0 THEN 'PPR12 Active (25-36 months)'
+      WHEN COALESCE(b.total_pr12_txns, 0) > 0 AND COALESCE(b.total_ppr12_txns, 0) = 0 AND COALESCE(b.total_pppr12_txns, 0) = 0 THEN 'PR12 Active (13-24 months)'
+      ELSE 'Lapsed (No activity ≥12m)'
+    END
   ELSE NULL
-END AS active_breakdown_field,
+END AS level3_breakdown,
+
   
   'LACA' AS region,
   
