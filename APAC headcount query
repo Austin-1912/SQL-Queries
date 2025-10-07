@@ -1,13 +1,47 @@
-select
-   '@' || t.SNDCUSTOMER_KEY AS GID,
-    '@' || c.customer_umn AS UMN,
-    t.SEND_COUNTRY_NAME,
-    t.RCV_COUNTRY_NAME,
-    count(t.txn_id)
-from
-    CAR_645_AU_N7_PRICING_TXN_DETAILS t
-LEFT JOIN WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
-    ON t.SNDCUSTOMER_KEY = c.CUSTOMER_KEY
-where
-    RCVCOUNTRY_CODE in ('PK','NP','CO')
-group by ALL;
+CREATE OR REPLACE TABLE CAR_676_AU_N7_MARKETABLE AS
+WITH base_txn AS (
+    SELECT DISTINCT
+        t.SNDCUSTOMER_KEY,         -- 19-digit GID
+        UPPER(t.SNDCOUNTRY_CODE) AS sndcountry_code,
+        UPPER(t.RCVCOUNTRY_CODE) AS rcvcountry_code,
+
+    FROM CAR_645_AU_N7_PRICING_TXN_DETAILS t  
+    WHERE UPPER(t.SNDCOUNTRY_CODE) = 'NZ'
+      AND UPPER(t.RCVCOUNTRY_CODE) in ('PK','NP','CO')
+),
+
+    app_flag AS (
+    SELECT
+       DISTINCT SNDCUSTOMER_KEY
+    FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+    WHERE PRICING_CHANNEL = 'APP'
+    GROUP BY SNDCUSTOMER_KEY
+)
+
+
+SELECT DISTINCT
+    b.SNDCUSTOMER_KEY AS gid_customer_key,
+    cm.customer_umn    AS umn_customer_key,
+    b.sndcountry_code,
+    b.rcvcountry_code,
+
+    -- Marketability Flags
+    CASE 
+        WHEN cm.marketing_flag = 'Y' AND cm.email_address_on_file_flag = 'Y' AND cm.opt_email = 'I' THEN 'Y'
+        ELSE 'N'
+    END AS email_marketability_flag,
+
+    CASE 
+        WHEN cm.marketing_flag = 'Y' AND cm.mobile_number_on_file_flag = 'Y' AND cm.opt_sms = 'I' THEN 'Y'
+        ELSE 'N'
+    END AS sms_marketability_flag,
+
+    CASE WHEN af.SNDCUSTOMER_KEY IS NOT NULL THEN 'Y' ELSE 'N' END AS App_Marketability_Flag,
+
+    CASE 
+        WHEN email_marketability_flag = 'Y' OR sms_marketability_flag = 'Y' OR app_marketability_flag = 'Y' THEN 'Y' ELSE 'N' END AS MARKETABILITY_FLAG
+FROM base_txn b
+JOIN SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
+  ON b.SNDCUSTOMER_KEY = cm.customer_key
+LEFT JOIN app_flag af
+  ON b.SNDCUSTOMER_KEY = af.SNDCUSTOMER_KEY;
