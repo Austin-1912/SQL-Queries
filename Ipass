@@ -1,21 +1,164 @@
--- 7. Active, acquisitions, churn
-WITH PR12 AS (
-    SELECT DISTINCT SNDCUSTOMER_KEY
-    FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
-    WHERE DATE(RCVPAYING_DATETIME) BETWEEN '2023-10-01' AND '2024-09-30'
+ 
+WITH weekly_periods AS (
+    -- Define all weekly periods (Monday to Sunday)
+    SELECT 'Pre-Week 1' AS period_name, DATE('2025-09-16') AS week_start, DATE('2025-09-22') AS week_end, 'PRE' AS period_type
+    UNION ALL SELECT 'Pre-Week 2', DATE('2025-09-23'), DATE('2025-09-29'), 'PRE'
+    UNION ALL SELECT 'Campaign Week 1', DATE('2025-09-30'), DATE('2025-10-06'), 'CAMPAIGN'
+    -- UNION ALL SELECT 'Campaign Week 2', DATE('2025-10-07'), DATE('2025-10-13'), 'CAMPAIGN'
+    -- UNION ALL SELECT 'Campaign Week 3', DATE('2025-10-14'), DATE('2025-10-20'), 'CAMPAIGN'
+    -- UNION ALL SELECT 'Campaign Week 4', DATE('2025-10-21'), DATE('2025-10-27'), 'CAMPAIGN'
+    -- UNION ALL SELECT 'Campaign Week 5', DATE('2025-10-28'), DATE('2025-11-03'), 'CAMPAIGN'
+    -- UNION ALL SELECT 'Campaign Week 6', DATE('2025-11-04'), DATE('2025-11-10'), 'CAMPAIGN'
+    -- UNION ALL SELECT 'Campaign Week 7', DATE('2025-11-11'), DATE('2025-11-17'), 'CAMPAIGN'
+    -- UNION ALL SELECT 'Campaign Week 8', DATE('2025-11-18'), DATE('2025-11-24'), 'CAMPAIGN'
+    -- UNION ALL SELECT 'Campaign Week 9', DATE('2025-11-25'), DATE('2025-12-01'), 'CAMPAIGN'
 ),
-R12 AS (
-    SELECT DISTINCT SNDCUSTOMER_KEY
-    FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
-    WHERE DATE(RCVPAYING_DATETIME) BETWEEN '2024-10-01' AND '2025-09-30'
+ 
+customer_geography AS (
+    -- Get customer location mapping
+    SELECT DISTINCT
+        CM.CUSTOMER_KEY,
+        CASE
+            WHEN CV.DMA_DESC LIKE '%TORONTO%' OR
+                 CM.CITY LIKE '%TORONTO%' OR
+                 (CM.STATE = 'ON' AND CM.CITY IN ('Toronto', 'Mississauga', 'Brampton', 'Markham', 'Vaughan', 'Richmond Hill', 'Oakville', 'Burlington'))
+            THEN 'Toronto GTA'
+            ELSE CM.CITY
+        END AS market_segment
+    FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW CM
+    LEFT JOIN SUMMARY_GEN.DMA_ZIPCODE_VW ZIP ON CM.ZIP_POSTAL_CODE = ZIP.ZIP_CODE
+    LEFT JOIN SUMMARY_GEN.DMA_VW CV ON ZIP.DMA_CODE = CV.DMA_CODE
+    WHERE CM.COUNTRY_CODE = 'CA'
+),
+ 
+weekly_transactions AS (
+    -- Get all digital transactions in the analysis period
+    SELECT
+        WP.period_name,
+        WP.week_start,
+        WP.week_end,
+        WP.period_type,
+        TXN.SNDCUSTOMER_KEY,
+        CG.market_segment,
+        DATE_TRUNC('WEEK', DATEADD(DAY, 1, TXN.RCVPAYING_DATETIME)) AS txn_week,
+        TXN.RCVPAYING_DATETIME,
+        TXN.SNDPRINCIPAL_USD,
+        TXN.TOTAL_CHARGES_USD,
+        TXN.NET_FOREIGN_EXCHANGE
+    FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW TXN
+    INNER JOIN customer_geography CG
+        ON TXN.SNDCUSTOMER_KEY = CG.CUSTOMER_KEY
+    CROSS JOIN weekly_periods WP
+    WHERE TXN.RCVPAYING_DATETIME >= '2025-09-16'
+      AND TXN.RCVPAYING_DATETIME < '2025-12-02'
+      AND TXN.PRICING_CHANNEL IN ('WEB','APP')
+      -- AND TXN.VALID_TXN_TYPE_CODE = 'Y'
+      -- AND TXN.REFUND_TRXN = 'N'
+      AND TXN.RCVPAYING_DATETIME >= WP.week_start
+      AND TXN.RCVPAYING_DATETIME <= DATEADD(SECOND, 86399, WP.week_end)
+),
+ 
+r12_lookback AS (
+    -- Check for transactions in the 12 months prior to each week
+    SELECT DISTINCT
+        WT.period_name,
+        WT.SNDCUSTOMER_KEY,
+        WT.market_segment,
+        CASE
+            WHEN R12.SNDCUSTOMER_KEY IS NOT NULL THEN 'EXISTING'
+            ELSE 'NEW'
+        END AS customer_type
+    FROM weekly_transactions WT
+    LEFT JOIN (
+        SELECT DISTINCT
+            TXN.SNDCUSTOMER_KEY,
+            DATE_TRUNC('WEEK', DATEADD(DAY, 1, TXN.RCVPAYING_DATETIME)) AS ref_week
+        FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW TXN
+        WHERE TXN.RCVPAYING_DATETIME >= '2024-09-16'
+          AND TXN.RCVPAYING_DATETIME < '2025-09-16'
+          AND TXN.VALID_TXN_TYPE_CODE = 'Y'
+          AND TXN.REFUND_TRXN = 'N'
+    ) R12
+        ON WT.SNDCUSTOMER_KEY = R12.SNDCUSTOMER_KEY
+        AND R12.ref_week > DATEADD(MONTH, -12, WT.txn_week)
+        AND R12.ref_week <= WT.txn_week
+),
+ 
+r13_plus_lookback AS (
+    -- Check for lapsed customers (R13+ transactions but not R12)
+    SELECT DISTINCT
+        WT.period_name,
+        WT.SNDCUSTOMER_KEY,
+        WT.market_segment,
+        CASE
+            WHEN R13.SNDCUSTOMER_KEY IS NOT NULL THEN 'LAPSED_REACTIVATION'
+            ELSE NULL
+        END AS lapsed_type
+    FROM weekly_transactions WT
+    LEFT JOIN (
+        SELECT DISTINCT
+            TXN.SNDCUSTOMER_KEY,
+            DATE_TRUNC('WEEK', DATEADD(DAY, 1, TXN.RCVPAYING_DATETIME)) AS ref_week
+        FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW TXN
+        WHERE TXN.RCVPAYING_DATETIME >= '2023-09-16'
+          AND TXN.RCVPAYING_DATETIME < '2024-09-16'
+          -- AND TXN.VALID_TXN_TYPE_CODE = 'Y'
+          -- AND TXN.REFUND_TRXN = 'N'
+    ) R13
+        ON WT.SNDCUSTOMER_KEY = R13.SNDCUSTOMER_KEY
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM r12_lookback R12L
+        WHERE R12L.SNDCUSTOMER_KEY = WT.SNDCUSTOMER_KEY
+          AND R12L.period_name = WT.period_name
+          AND R12L.customer_type = 'EXISTING'
+    )
 )
+ 
+-- Final aggregated results
 SELECT
-    COUNT(DISTINCT p.SNDCUSTOMER_KEY) AS active_start_2023,
-    COUNT(DISTINCT r.SNDCUSTOMER_KEY) AS active_end_2023,
-    COUNT(DISTINCT r.SNDCUSTOMER_KEY)
-        - COUNT(DISTINCT CASE WHEN p.SNDCUSTOMER_KEY IS NOT NULL THEN r.SNDCUSTOMER_KEY END) AS acquisition_2023,
-    COUNT(DISTINCT p.SNDCUSTOMER_KEY)
-        - COUNT(DISTINCT CASE WHEN r.SNDCUSTOMER_KEY IS NOT NULL THEN p.SNDCUSTOMER_KEY END) AS churned_2023
-FROM PR12 p
-FULL OUTER JOIN R12 r
-    ON p.SNDCUSTOMER_KEY = r.SNDCUSTOMER_KEY;
+    WP.period_name,
+    WP.week_start,
+    WP.week_end,
+    WP.period_type,
+    COALESCE(CG.market_segment, 'Unknown') AS market_segment,
+    
+    -- New Digital Customer Counts
+    COUNT(DISTINCT CASE
+        WHEN (R12.customer_type = 'NEW' OR R13.lapsed_type = 'LAPSED_REACTIVATION')
+        THEN WT.SNDCUSTOMER_KEY
+    END) AS new_digital_customers,
+    
+    -- Breakdown by new vs reactivated
+    COUNT(DISTINCT CASE WHEN R12.customer_type = 'NEW' THEN WT.SNDCUSTOMER_KEY END) AS truly_new_customers,
+    COUNT(DISTINCT CASE WHEN R13.lapsed_type = 'LAPSED_REACTIVATION' THEN WT.SNDCUSTOMER_KEY END) AS lapsed_reactivations,
+    
+    -- Supporting metrics
+    COUNT(DISTINCT WT.SNDCUSTOMER_KEY) AS total_digital_customers,
+    COUNT(DISTINCT CASE WHEN R12.customer_type = 'EXISTING' THEN WT.SNDCUSTOMER_KEY END) AS existing_customers,
+    COUNT(DISTINCT WT.RCVPAYING_DATETIME) AS total_transactions,
+    SUM(WT.SNDPRINCIPAL_USD) AS total_principal_usd,
+    SUM(WT.TOTAL_CHARGES_USD + WT.NET_FOREIGN_EXCHANGE) AS total_revenue_usd
+ 
+FROM weekly_periods WP
+CROSS JOIN (SELECT DISTINCT market_segment FROM customer_geography) CG
+LEFT JOIN weekly_transactions WT
+    ON WP.period_name = WT.period_name
+    AND CG.market_segment = WT.market_segment
+LEFT JOIN r12_lookback R12
+    ON WT.SNDCUSTOMER_KEY = R12.SNDCUSTOMER_KEY
+    AND WT.period_name = R12.period_name
+LEFT JOIN r13_plus_lookback R13
+    ON WT.SNDCUSTOMER_KEY = R13.SNDCUSTOMER_KEY
+    AND WT.period_name = R13.period_name
+ 
+GROUP BY
+    WP.period_name,
+    WP.week_start,
+    WP.week_end,
+    WP.period_type,
+    CG.market_segment
+ 
+ORDER BY
+    WP.week_start,
+    CG.market_segment;
