@@ -1,164 +1,304 @@
+-- ========================================================================
+-- Table 1: Define Weekly Periods
+-- ========================================================================
+CREATE OR REPLACE TABLE CAR_680_WEEKLY_PERIODS AS
+SELECT 'Pre-Week 1' AS period_name, DATE('2025-09-16') AS week_start, DATE('2025-09-22') AS week_end, 'PRE' AS period_type, 1 AS week_order
+UNION ALL SELECT 'Pre-Week 2', DATE('2025-09-23'), DATE('2025-09-29'), 'PRE', 2
+UNION ALL SELECT 'Campaign Week 1', DATE('2025-09-30'), DATE('2025-10-06'), 'CAMPAIGN', 3;
+-- UNION ALL SELECT 'Campaign Week 2', DATE('2025-10-07'), DATE('2025-10-13'), 'CAMPAIGN', 4
+-- UNION ALL SELECT 'Campaign Week 3', DATE('2025-10-14'), DATE('2025-10-20'), 'CAMPAIGN', 5
+-- UNION ALL SELECT 'Campaign Week 4', DATE('2025-10-21'), DATE('2025-10-27'), 'CAMPAIGN', 6
+-- UNION ALL SELECT 'Campaign Week 5', DATE('2025-10-28'), DATE('2025-11-03'), 'CAMPAIGN', 7
+-- UNION ALL SELECT 'Campaign Week 6', DATE('2025-11-04'), DATE('2025-11-10'), 'CAMPAIGN', 8
+-- UNION ALL SELECT 'Campaign Week 7', DATE('2025-11-11'), DATE('2025-11-17'), 'CAMPAIGN', 9
+-- UNION ALL SELECT 'Campaign Week 8', DATE('2025-11-18'), DATE('2025-11-24'), 'CAMPAIGN', 10
+-- UNION ALL SELECT 'Campaign Week 9', DATE('2025-11-25'), DATE('2025-12-01'), 'CAMPAIGN', 11;
  
-WITH weekly_periods AS (
-    -- Define all weekly periods (Monday to Sunday)
-    SELECT 'Pre-Week 1' AS period_name, DATE('2025-09-16') AS week_start, DATE('2025-09-22') AS week_end, 'PRE' AS period_type
-    UNION ALL SELECT 'Pre-Week 2', DATE('2025-09-23'), DATE('2025-09-29'), 'PRE'
-    UNION ALL SELECT 'Campaign Week 1', DATE('2025-09-30'), DATE('2025-10-06'), 'CAMPAIGN'
-    -- UNION ALL SELECT 'Campaign Week 2', DATE('2025-10-07'), DATE('2025-10-13'), 'CAMPAIGN'
-    -- UNION ALL SELECT 'Campaign Week 3', DATE('2025-10-14'), DATE('2025-10-20'), 'CAMPAIGN'
-    -- UNION ALL SELECT 'Campaign Week 4', DATE('2025-10-21'), DATE('2025-10-27'), 'CAMPAIGN'
-    -- UNION ALL SELECT 'Campaign Week 5', DATE('2025-10-28'), DATE('2025-11-03'), 'CAMPAIGN'
-    -- UNION ALL SELECT 'Campaign Week 6', DATE('2025-11-04'), DATE('2025-11-10'), 'CAMPAIGN'
-    -- UNION ALL SELECT 'Campaign Week 7', DATE('2025-11-11'), DATE('2025-11-17'), 'CAMPAIGN'
-    -- UNION ALL SELECT 'Campaign Week 8', DATE('2025-11-18'), DATE('2025-11-24'), 'CAMPAIGN'
-    -- UNION ALL SELECT 'Campaign Week 9', DATE('2025-11-25'), DATE('2025-12-01'), 'CAMPAIGN'
-),
+-- ========================================================================
+-- Table 2: Customer Geography Mapping (Toronto GTA vs Rest of Canada)
+-- ========================================================================
+CREATE OR REPLACE TABLE CAR_680_CUSTOMER_GEOGRAPHY AS
+SELECT DISTINCT
+    CM.CUSTOMER_KEY,
+    CM.COUNTRY_CODE,
+    CM.STATE,
+    CM.CITY,
+    CV.DMA_DESC,
+    CASE
+        WHEN CV.DMA_DESC LIKE '%TORONTO%' OR
+             CM.CITY LIKE '%TORONTO%' OR
+             UPPER(CM.CITY) LIKE '%TORONTO%' OR
+             (CM.STATE = 'ON' AND UPPER(CM.CITY) IN ('TORONTO', 'MISSISSAUGA', 'BRAMPTON', 'MARKHAM', 
+                                                       'VAUGHAN', 'RICHMOND HILL', 'OAKVILLE', 'BURLINGTON',
+                                                       'ETOBICOKE', 'SCARBOROUGH', 'NORTH YORK', 'PICKERING',
+                                                       'AJAX', 'MILTON', 'WHITBY', 'OSHAWA'))
+        THEN 'Toronto GTA'
+        ELSE 'Rest of Canada'
+    END AS market_segment
+FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW CM
+LEFT JOIN SUMMARY_GEN.DMA_ZIPCODE_VW ZIP ON CM.ZIP_POSTAL_CODE = ZIP.ZIP_CODE
+LEFT JOIN SUMMARY_GEN.DMA_VW CV ON ZIP.DMA_CODE = CV.DMA_CODE
+WHERE CM.COUNTRY_CODE = 'CA';
  
-customer_geography AS (
-    -- Get customer location mapping
-    SELECT DISTINCT
-        CM.CUSTOMER_KEY,
-        CASE
-            WHEN CV.DMA_DESC LIKE '%TORONTO%' OR
-                 CM.CITY LIKE '%TORONTO%' OR
-                 (CM.STATE = 'ON' AND CM.CITY IN ('Toronto', 'Mississauga', 'Brampton', 'Markham', 'Vaughan', 'Richmond Hill', 'Oakville', 'Burlington'))
-            THEN 'Toronto GTA'
-            ELSE CM.CITY
-        END AS market_segment
-    FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW CM
-    LEFT JOIN SUMMARY_GEN.DMA_ZIPCODE_VW ZIP ON CM.ZIP_POSTAL_CODE = ZIP.ZIP_CODE
-    LEFT JOIN SUMMARY_GEN.DMA_VW CV ON ZIP.DMA_CODE = CV.DMA_CODE
-    WHERE CM.COUNTRY_CODE = 'CA'
-),
- 
-weekly_transactions AS (
-    -- Get all digital transactions in the analysis period
-    SELECT
-        WP.period_name,
-        WP.week_start,
-        WP.week_end,
-        WP.period_type,
-        TXN.SNDCUSTOMER_KEY,
-        CG.market_segment,
-        DATE_TRUNC('WEEK', DATEADD(DAY, 1, TXN.RCVPAYING_DATETIME)) AS txn_week,
-        TXN.RCVPAYING_DATETIME,
-        TXN.SNDPRINCIPAL_USD,
-        TXN.TOTAL_CHARGES_USD,
-        TXN.NET_FOREIGN_EXCHANGE
-    FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW TXN
-    INNER JOIN customer_geography CG
-        ON TXN.SNDCUSTOMER_KEY = CG.CUSTOMER_KEY
-    CROSS JOIN weekly_periods WP
-    WHERE TXN.RCVPAYING_DATETIME >= '2025-09-16'
-      AND TXN.RCVPAYING_DATETIME < '2025-12-02'
-      AND TXN.PRICING_CHANNEL IN ('WEB','APP')
-      -- AND TXN.VALID_TXN_TYPE_CODE = 'Y'
-      -- AND TXN.REFUND_TRXN = 'N'
-      AND TXN.RCVPAYING_DATETIME >= WP.week_start
-      AND TXN.RCVPAYING_DATETIME <= DATEADD(SECOND, 86399, WP.week_end)
-),
- 
-r12_lookback AS (
-    -- Check for transactions in the 12 months prior to each week
-    SELECT DISTINCT
-        WT.period_name,
-        WT.SNDCUSTOMER_KEY,
-        WT.market_segment,
-        CASE
-            WHEN R12.SNDCUSTOMER_KEY IS NOT NULL THEN 'EXISTING'
-            ELSE 'NEW'
-        END AS customer_type
-    FROM weekly_transactions WT
-    LEFT JOIN (
-        SELECT DISTINCT
-            TXN.SNDCUSTOMER_KEY,
-            DATE_TRUNC('WEEK', DATEADD(DAY, 1, TXN.RCVPAYING_DATETIME)) AS ref_week
-        FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW TXN
-        WHERE TXN.RCVPAYING_DATETIME >= '2024-09-16'
-          AND TXN.RCVPAYING_DATETIME < '2025-09-16'
-          AND TXN.VALID_TXN_TYPE_CODE = 'Y'
-          AND TXN.REFUND_TRXN = 'N'
-    ) R12
-        ON WT.SNDCUSTOMER_KEY = R12.SNDCUSTOMER_KEY
-        AND R12.ref_week > DATEADD(MONTH, -12, WT.txn_week)
-        AND R12.ref_week <= WT.txn_week
-),
- 
-r13_plus_lookback AS (
-    -- Check for lapsed customers (R13+ transactions but not R12)
-    SELECT DISTINCT
-        WT.period_name,
-        WT.SNDCUSTOMER_KEY,
-        WT.market_segment,
-        CASE
-            WHEN R13.SNDCUSTOMER_KEY IS NOT NULL THEN 'LAPSED_REACTIVATION'
-            ELSE NULL
-        END AS lapsed_type
-    FROM weekly_transactions WT
-    LEFT JOIN (
-        SELECT DISTINCT
-            TXN.SNDCUSTOMER_KEY,
-            DATE_TRUNC('WEEK', DATEADD(DAY, 1, TXN.RCVPAYING_DATETIME)) AS ref_week
-        FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW TXN
-        WHERE TXN.RCVPAYING_DATETIME >= '2023-09-16'
-          AND TXN.RCVPAYING_DATETIME < '2024-09-16'
-          -- AND TXN.VALID_TXN_TYPE_CODE = 'Y'
-          -- AND TXN.REFUND_TRXN = 'N'
-    ) R13
-        ON WT.SNDCUSTOMER_KEY = R13.SNDCUSTOMER_KEY
-    WHERE NOT EXISTS (
-        SELECT 1
-        FROM r12_lookback R12L
-        WHERE R12L.SNDCUSTOMER_KEY = WT.SNDCUSTOMER_KEY
-          AND R12L.period_name = WT.period_name
-          AND R12L.customer_type = 'EXISTING'
-    )
-)
- 
--- Final aggregated results
+-- ========================================================================
+-- Table 3: All Digital Transactions in Analysis Period (Weekly)
+-- ========================================================================
+CREATE OR REPLACE TABLE CAR_680_WEEKLY_DIGITAL_TXNS AS
 SELECT
     WP.period_name,
     WP.week_start,
     WP.week_end,
     WP.period_type,
-    COALESCE(CG.market_segment, 'Unknown') AS market_segment,
+    WP.week_order,
+    TXN.SNDCUSTOMER_KEY,
+    CG.market_segment,
+    CG.CITY,
+    CG.STATE,
+    DATE_TRUNC('WEEK', DATEADD(DAY, 1, TXN.RCVPAYING_DATETIME)) AS txn_week,
+    TXN.RCVPAYING_DATETIME,
+    TXN.PRICING_CHANNEL,
+    TXN.PRIMARY_CHANNEL,
+    TXN.SUB_CHANNEL,
+    TXN.SNDPRINCIPAL_USD,
+    TXN.TOTAL_CHARGES_USD,
+    TXN.NET_FOREIGN_EXCHANGE,
+    (TXN.TOTAL_CHARGES_USD + TXN.NET_FOREIGN_EXCHANGE) AS revenue_usd,
+    TXN.SNDCOUNTRY_CODE,
+    TXN.RCVCOUNTRY_CODE
+FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW TXN
+INNER JOIN CAR_680_CUSTOMER_GEOGRAPHY CG
+    ON TXN.SNDCUSTOMER_KEY = CG.CUSTOMER_KEY
+INNER JOIN CAR_680_WEEKLY_PERIODS WP
+    ON TXN.RCVPAYING_DATETIME >= WP.week_start
+    AND TXN.RCVPAYING_DATETIME <= DATEADD(SECOND, 86399, WP.week_end)
+WHERE TXN.RCVPAYING_DATETIME >= '2025-09-16'
+  AND TXN.RCVPAYING_DATETIME < '2025-12-02'
+  AND TXN.PRICING_CHANNEL IN ('WEB', 'APP')
+  AND TXN.SNDCOUNTRY_CODE = 'CA';
+ 
+-- ========================================================================
+-- Table 4: R12 Transaction History (12 months lookback for each customer)
+-- ========================================================================
+CREATE OR REPLACE TABLE CAR_680_R12_HISTORY AS
+SELECT DISTINCT
+    TXN.SNDCUSTOMER_KEY,
+    DATE_TRUNC('WEEK', DATEADD(DAY, 1, TXN.RCVPAYING_DATETIME)) AS ref_week,
+    TXN.RCVPAYING_DATETIME,
+    TXN.PRICING_CHANNEL
+FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW TXN
+WHERE TXN.RCVPAYING_DATETIME >= '2024-09-16'
+  AND TXN.RCVPAYING_DATETIME < '2025-09-16'
+  -- AND TXN.VALID_TXN_TYPE_CODE = 'Y'
+  -- AND TXN.REFUND_TRXN = 'N'
+  AND TXN.SNDCOUNTRY_CODE = 'CA';
+ 
+
+-- Table 5: R13+ Transaction History (for lapsed customer identification)
+
+CREATE OR REPLACE TABLE CAR_680_R13_PLUS_HISTORY AS
+SELECT DISTINCT
+    TXN.SNDCUSTOMER_KEY,
+    DATE_TRUNC('WEEK', DATEADD(DAY, 1, TXN.RCVPAYING_DATETIME)) AS ref_week,
+    TXN.RCVPAYING_DATETIME,
+    TXN.PRICING_CHANNEL
+FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW TXN
+WHERE TXN.RCVPAYING_DATETIME >= '2023-09-16'
+  AND TXN.RCVPAYING_DATETIME < '2024-09-16'
+  -- AND TXN.VALID_TXN_TYPE_CODE = 'Y'
+  -- AND TXN.REFUND_TRXN = 'N'
+  AND TXN.SNDCOUNTRY_CODE = 'CA';
+
+ 
+-- Table 6: Customer Classification (NEW vs EXISTING vs LAPSED for each week)
+
+CREATE OR REPLACE TABLE CAR_680_CUSTOMER_CLASSIFICATION AS
+SELECT DISTINCT
+    WT.period_name,
+    WT.week_start,
+    WT.week_end,
+    WT.SNDCUSTOMER_KEY,
+    WT.market_segment,
+    WT.CITY,
+    WT.STATE,
+    CASE
+        WHEN R12.SNDCUSTOMER_KEY IS NOT NULL THEN 'EXISTING'
+        WHEN R13.SNDCUSTOMER_KEY IS NOT NULL THEN 'LAPSED_REACTIVATION'
+        ELSE 'NEW'
+    END AS customer_type,
+    CASE
+        WHEN R12.SNDCUSTOMER_KEY IS NULL AND R13.SNDCUSTOMER_KEY IS NULL THEN 'Y'
+        ELSE 'N'
+    END AS is_new_to_franchise,
+    CASE
+        WHEN R12.SNDCUSTOMER_KEY IS NULL AND R13.SNDCUSTOMER_KEY IS NOT NULL THEN 'Y'
+        ELSE 'N'
+    END AS is_winback
+FROM CAR_680_WEEKLY_DIGITAL_TXNS WT
+LEFT JOIN CAR_680_R12_HISTORY R12
+    ON WT.SNDCUSTOMER_KEY = R12.SNDCUSTOMER_KEY
+    AND R12.ref_week > DATEADD(MONTH, -12, WT.txn_week)
+    AND R12.ref_week <= WT.txn_week
+LEFT JOIN CAR_680_R13_PLUS_HISTORY R13
+    ON WT.SNDCUSTOMER_KEY = R13.SNDCUSTOMER_KEY
+    AND R12.SNDCUSTOMER_KEY IS NULL;
+ 
+-- ========================================================================
+-- Table 7: MAIN AGGREGATED TABLE - Weekly Summary by Market Segment
+-- ========================================================================
+CREATE OR REPLACE TABLE CAR_680_CA_GTA AS
+SELECT
+    WP.period_name,
+    WP.week_start,
+    WP.week_end,
+    WP.period_type,
+    WP.week_order,
+    CG.market_segment,
     
-    -- New Digital Customer Counts
+    -- New Digital Customer Counts (Primary KPI)
     COUNT(DISTINCT CASE
-        WHEN (R12.customer_type = 'NEW' OR R13.lapsed_type = 'LAPSED_REACTIVATION')
+        WHEN CC.customer_type IN ('NEW', 'LAPSED_REACTIVATION')
         THEN WT.SNDCUSTOMER_KEY
     END) AS new_digital_customers,
     
-    -- Breakdown by new vs reactivated
-    COUNT(DISTINCT CASE WHEN R12.customer_type = 'NEW' THEN WT.SNDCUSTOMER_KEY END) AS truly_new_customers,
-    COUNT(DISTINCT CASE WHEN R13.lapsed_type = 'LAPSED_REACTIVATION' THEN WT.SNDCUSTOMER_KEY END) AS lapsed_reactivations,
+    -- Breakdown by customer type
+    COUNT(DISTINCT CASE WHEN CC.customer_type = 'NEW' THEN WT.SNDCUSTOMER_KEY END) AS truly_new_customers,
+    COUNT(DISTINCT CASE WHEN CC.customer_type = 'LAPSED_REACTIVATION' THEN WT.SNDCUSTOMER_KEY END) AS lapsed_reactivations,
+    COUNT(DISTINCT CASE WHEN CC.customer_type = 'EXISTING' THEN WT.SNDCUSTOMER_KEY END) AS existing_customers,
     
-    -- Supporting metrics
+    -- Total metrics
     COUNT(DISTINCT WT.SNDCUSTOMER_KEY) AS total_digital_customers,
-    COUNT(DISTINCT CASE WHEN R12.customer_type = 'EXISTING' THEN WT.SNDCUSTOMER_KEY END) AS existing_customers,
     COUNT(DISTINCT WT.RCVPAYING_DATETIME) AS total_transactions,
+    
+    -- Financial metrics
     SUM(WT.SNDPRINCIPAL_USD) AS total_principal_usd,
-    SUM(WT.TOTAL_CHARGES_USD + WT.NET_FOREIGN_EXCHANGE) AS total_revenue_usd
+    SUM(WT.TOTAL_CHARGES_USD) AS total_fee_usd,
+    SUM(WT.NET_FOREIGN_EXCHANGE) AS total_fx_usd,
+    SUM(WT.revenue_usd) AS total_revenue_usd,
+    
+    -- Average metrics
+    AVG(WT.SNDPRINCIPAL_USD) AS avg_principal_usd,
+    AVG(WT.revenue_usd) AS avg_revenue_usd,
+    
+    -- Transactions per customer
+    COUNT(DISTINCT WT.RCVPAYING_DATETIME) / NULLIF(COUNT(DISTINCT WT.SNDCUSTOMER_KEY), 0) AS txns_per_customer,
+    
+    -- Channel breakdown
+    COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'WEB' THEN WT.SNDCUSTOMER_KEY END) AS web_customers,
+    COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'APP' THEN WT.SNDCUSTOMER_KEY END) AS app_customers,
+    COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'WEB' THEN WT.RCVPAYING_DATETIME END) AS web_txns,
+    COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'APP' THEN WT.RCVPAYING_DATETIME END) AS app_txns
  
-FROM weekly_periods WP
-CROSS JOIN (SELECT DISTINCT market_segment FROM customer_geography) CG
-LEFT JOIN weekly_transactions WT
+FROM CAR_680_WEEKLY_PERIODS WP
+CROSS JOIN (SELECT DISTINCT market_segment FROM CAR_680_CUSTOMER_GEOGRAPHY) CG
+LEFT JOIN CAR_680_WEEKLY_DIGITAL_TXNS WT
     ON WP.period_name = WT.period_name
     AND CG.market_segment = WT.market_segment
-LEFT JOIN r12_lookback R12
-    ON WT.SNDCUSTOMER_KEY = R12.SNDCUSTOMER_KEY
-    AND WT.period_name = R12.period_name
-LEFT JOIN r13_plus_lookback R13
-    ON WT.SNDCUSTOMER_KEY = R13.SNDCUSTOMER_KEY
-    AND WT.period_name = R13.period_name
+LEFT JOIN CAR_680_CUSTOMER_CLASSIFICATION CC
+    ON WT.SNDCUSTOMER_KEY = CC.SNDCUSTOMER_KEY
+    AND WT.period_name = CC.period_name
  
 GROUP BY
     WP.period_name,
     WP.week_start,
     WP.week_end,
     WP.period_type,
+    WP.week_order,
     CG.market_segment
  
 ORDER BY
-    WP.week_start,
+    WP.week_order,
     CG.market_segment;
+ 
+-- ========================================================================
+-- Table 8: Customer-Level Detail (for deep dives)
+-- ========================================================================
+CREATE OR REPLACE TABLE CAR_680_CA_GTA_CUST_LEVEL AS
+SELECT
+    WT.period_name,
+    WT.week_start,
+    WT.week_end,
+    WT.period_type,
+    WT.SNDCUSTOMER_KEY,
+    WT.market_segment,
+    WT.CITY,
+    WT.STATE,
+    CC.customer_type,
+    CC.is_new_to_franchise,
+    CC.is_winback,
+    
+    -- Transaction counts
+    COUNT(DISTINCT WT.RCVPAYING_DATETIME) AS txns_in_week,
+    COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'WEB' THEN WT.RCVPAYING_DATETIME END) AS web_txns,
+    COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'APP' THEN WT.RCVPAYING_DATETIME END) AS app_txns,
+    
+    -- Financial metrics
+    SUM(WT.SNDPRINCIPAL_USD) AS principal_usd,
+    SUM(WT.revenue_usd) AS revenue_usd,
+    
+    -- First and last transaction in week
+    MIN(WT.RCVPAYING_DATETIME) AS first_txn_datetime,
+    MAX(WT.RCVPAYING_DATETIME) AS last_txn_datetime,
+    
+    -- Dominant channel
+    CASE
+        WHEN COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'WEB' THEN WT.RCVPAYING_DATETIME END) >
+             COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'APP' THEN WT.RCVPAYING_DATETIME END)
+        THEN 'WEB'
+        WHEN COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'APP' THEN WT.RCVPAYING_DATETIME END) >
+             COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'WEB' THEN WT.RCVPAYING_DATETIME END)
+        THEN 'APP'
+        ELSE 'MIXED'
+    END AS dominant_channel
+ 
+FROM CAR_680_WEEKLY_DIGITAL_TXNS WT
+INNER JOIN CAR_680_CUSTOMER_CLASSIFICATION CC
+    ON WT.SNDCUSTOMER_KEY = CC.SNDCUSTOMER_KEY
+    AND WT.period_name = CC.period_name
+ 
+GROUP BY
+    WT.period_name,
+    WT.week_start,
+    WT.week_end,
+    WT.period_type,
+    WT.SNDCUSTOMER_KEY,
+    WT.market_segment,
+    WT.CITY,
+    WT.STATE,
+    CC.customer_type,
+    CC.is_new_to_franchise,
+    CC.is_winback;
+ 
+-- Sample queries to validate the data
+-- ========================================================================
+ 
+-- Query 1: High-level summary by week and market
+SELECT
+    period_name,
+    week_start,
+    market_segment,
+    new_digital_customers,
+    total_digital_customers,
+    total_revenue_usd
+FROM CAR_680_CA_GTA
+ORDER BY week_start, market_segment;
+ 
+-- Query 2: Pre vs Campaign comparison
+SELECT
+    period_type,
+    market_segment,
+    SUM(new_digital_customers) AS total_new_customers,
+    SUM(total_revenue_usd) AS total_revenue,
+    AVG(new_digital_customers) AS avg_new_customers_per_week
+FROM CAR_680_CA_GTA
+GROUP BY period_type, market_segment
+ORDER BY period_type, market_segment;
+ 
+-- Query 3: Toronto vs Rest of Canada lift calculation
+SELECT
+    period_type,
+    SUM(CASE WHEN market_segment = 'Toronto GTA' THEN new_digital_customers END) AS toronto_new_customers,
+    SUM(CASE WHEN market_segment = 'Rest of Canada' THEN new_digital_customers END) AS rest_of_canada_new_customers,
+    SUM(CASE WHEN market_segment = 'Toronto GTA' THEN new_digital_customers END) /
+    NULLIF(SUM(CASE WHEN market_segment = 'Rest of Canada' THEN new_digital_customers END), 0) AS toronto_vs_canada_index
+FROM CAR_680_CA_GTA
+GROUP BY period_type;
