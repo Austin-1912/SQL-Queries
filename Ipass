@@ -1,3 +1,4 @@
+
 -- Table 1: Define Weekly Periods
 -- ========================================================================
 CREATE OR REPLACE TABLE CAR_680_WEEKLY_PERIODS AS
@@ -65,6 +66,13 @@ WHERE TXN.RCVPAYING_DATETIME >= '2023-09-16'
   AND TXN.RCVPAYING_DATETIME < '2025-12-01'
   AND TXN.SNDCOUNTRY_CODE = 'CA';
 
+  -- select history_period, MIN(RCVPAYING_DATETIME) AS earliest_txn,
+  -- MAX(RCVPAYING_DATETIME) AS latest_txn,
+  -- COUNT(DISTINCT SNDCUSTOMER_KEY) AS unique_customers,
+  -- COUNT(*) as total_txns
+  -- from car_680_historical_txns
+  -- GROUP by history_period;
+
 
  -- SELECT DATE_TRUNC('WEEK', DATEADD(DAY, 1, CURRENT_DATE));
  --select DATEADD(DAY, 1, DATE_TRUNC('WEEK', DATEADD(DAY, -1, CURRENT_DATE)));
@@ -116,8 +124,8 @@ r12_check AS (
     INNER JOIN CAR_680_HISTORICAL_TXNS HT
         ON CT.SNDCUSTOMER_KEY = HT.SNDCUSTOMER_KEY
         AND HT.history_period = 'R12'
-        AND HT.ref_week > DATEADD(MONTH, -12, CT.txn_week)  -- Dynamic lookback
-        AND HT.ref_week <= CT.txn_week
+        AND HT.ref_week >= DATEADD(MONTH, -12, CT.txn_week)  -- Dynamic lookback
+        AND HT.ref_week < CT.txn_week
 ),
 r13_check AS (
     -- Check for any R13+ activity (only for customers without R12)
