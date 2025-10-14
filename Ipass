@@ -1,11 +1,10 @@
-
 -- Table 1: Define Weekly Periods
 -- ========================================================================
 CREATE OR REPLACE TABLE CAR_680_WEEKLY_PERIODS AS
 SELECT 'Pre-Week 1' AS period_name, DATE('2025-09-16') AS week_start, DATE('2025-09-22') AS week_end, 'PRE' AS period_type, 1 AS week_order
 UNION ALL SELECT 'Pre-Week 2', DATE('2025-09-23'), DATE('2025-09-29'), 'PRE', 2
-UNION ALL SELECT 'Campaign Week 1', DATE('2025-09-30'), DATE('2025-10-06'), 'CAMPAIGN', 3;
--- UNION ALL SELECT 'Campaign Week 2', DATE('2025-10-07'), DATE('2025-10-13'), 'CAMPAIGN', 4
+UNION ALL SELECT 'Campaign Week 1', DATE('2025-09-30'), DATE('2025-10-06'), 'CAMPAIGN', 3
+UNION ALL SELECT 'Campaign Week 2', DATE('2025-10-07'), DATE('2025-10-13'), 'CAMPAIGN', 4;
 -- UNION ALL SELECT 'Campaign Week 3', DATE('2025-10-14'), DATE('2025-10-20'), 'CAMPAIGN', 5
 -- UNION ALL SELECT 'Campaign Week 4', DATE('2025-10-21'), DATE('2025-10-27'), 'CAMPAIGN', 6
 -- UNION ALL SELECT 'Campaign Week 5', DATE('2025-10-28'), DATE('2025-11-03'), 'CAMPAIGN', 7
@@ -39,6 +38,31 @@ SELECT DISTINCT
                                                        'ETOBICOKE', 'SCARBOROUGH', 'NORTH YORK', 'PICKERING',
                                                        'AJAX', 'MILTON', 'WHITBY', 'OSHAWA'))
         THEN 'Toronto GTA'
+        
+        -- Vancouver Metro
+        -- WHEN CV.DMA_DESC LIKE '%VANCOUVER%' OR
+        --      CM.CITY LIKE '%VANCOUVER%' OR
+        --      UPPER(CM.CITY) LIKE '%VANCOUVER%' OR
+        --      (CM.STATE = 'BC' AND UPPER(CM.CITY) IN ('%VANCOUVER%'))
+        -- THEN 'Vancouver'
+        
+        -- Montreal Metro
+        -- WHEN CV.DMA_DESC LIKE '%MONTREAL%' OR
+        --      CM.CITY LIKE '%MONTREAL%' OR
+        --      UPPER(CM.CITY) LIKE '%MONTREAL%' OR
+        --      UPPER(CM.CITY) LIKE '%MONTR_AL%' OR
+        --      (CM.STATE = 'QC' AND UPPER(CM.CITY) IN ('%MONTREAL%'))
+        -- THEN 'Montreal'
+        
+        -- -- British Columbia
+        -- WHEN CM.STATE = 'BC'
+        -- THEN 'British Columbia'
+        
+        -- -- Quebec
+        -- WHEN CM.STATE = 'QC'
+        -- THEN 'Quebec'
+        
+        -- Rest of Canada
         ELSE 'Rest of Canada'
     END AS market_segment
 FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW CM
@@ -278,37 +302,3 @@ GROUP BY
     WT.customer_type,
     WT.is_new_to_franchise,
     WT.is_winback;
-
-
-    -- Sample queries to validate the data
--- ========================================================================
- 
--- Query 1: High-level summary by week and market
-SELECT
-    period_name,
-    week_start,
-    market_segment,
-    new_digital_customers,
-    total_digital_customers,
-FROM CAR_680_CA_GTA
-ORDER BY week_start, market_segment;
- 
--- Query 2: Pre vs Campaign comparison
-SELECT
-    period_type,
-    market_segment,
-    SUM(new_digital_customers) AS total_new_customers,
-    AVG(new_digital_customers) AS avg_new_customers_per_week
-FROM CAR_680_CA_GTA
-GROUP BY period_type, market_segment
-ORDER BY period_type, market_segment;
- 
--- Query 3: Toronto vs Rest of Canada lift calculation
-SELECT
-    period_type,
-    SUM(CASE WHEN market_segment = 'Toronto GTA' THEN new_digital_customers END) AS toronto_new_customers,
-    SUM(CASE WHEN market_segment = 'Rest of Canada' THEN new_digital_customers END) AS rest_of_canada_new_customers,
-    SUM(CASE WHEN market_segment = 'Toronto GTA' THEN new_digital_customers END) /
-    NULLIF(SUM(CASE WHEN market_segment = 'Rest of Canada' THEN new_digital_customers END), 0) AS toronto_vs_canada_index
-FROM CAR_680_CA_GTA
-GROUP BY period_type;
