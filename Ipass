@@ -1,415 +1,53 @@
--- Table 1: Define Weekly Periods
--- ========================================================================
-CREATE OR REPLACE TABLE CAR_680_WEEKLY_PERIODS AS
-SELECT 'Pre-Week 1' AS period_name, DATE('2025-09-16') AS week_start, DATE('2025-09-22') AS week_end, 'PRE' AS period_type, 1 AS week_order
-UNION ALL SELECT 'Pre-Week 2', DATE('2025-09-23'), DATE('2025-09-29'), 'PRE', 2
-UNION ALL SELECT 'Campaign Week 1', DATE('2025-09-30'), DATE('2025-10-06'), 'CAMPAIGN', 3
-UNION ALL SELECT 'Campaign Week 2', DATE('2025-10-07'), DATE('2025-10-13'), 'CAMPAIGN', 4;
--- UNION ALL SELECT 'Campaign Week 3', DATE('2025-10-14'), DATE('2025-10-20'), 'CAMPAIGN', 5
--- UNION ALL SELECT 'Campaign Week 4', DATE('2025-10-21'), DATE('2025-10-27'), 'CAMPAIGN', 6
--- UNION ALL SELECT 'Campaign Week 5', DATE('2025-10-28'), DATE('2025-11-03'), 'CAMPAIGN', 7
--- UNION ALL SELECT 'Campaign Week 6', DATE('2025-11-04'), DATE('2025-11-10'), 'CAMPAIGN', 8
--- UNION ALL SELECT 'Campaign Week 7', DATE('2025-11-11'), DATE('2025-11-17'), 'CAMPAIGN', 9
--- UNION ALL SELECT 'Campaign Week 8', DATE('2025-11-18'), DATE('2025-11-24'), 'CAMPAIGN', 10
--- UNION ALL SELECT 'Campaign Week 9', DATE('2025-11-25'), DATE('2025-12-01'), 'CAMPAIGN', 11;
+I’m reaching out for a weekly data pull request for total digital new customers in the Greater Toronto Area in Canada.
 
+For context, we launched a large Out-Of-Home media buy that we haven’t done before and we’d like to measure the impact that it has on digital new customer acquisition.
 
- -- SELECT DISTINCT city, state from SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW 
- -- WHERE CITY LIKE '%TORONTO%' OR
- --             UPPER(CITY) LIKE '%TORONTO%';
---select * from SUMMARY_GEN.DMA_VW LIMIT 100;
  
--- ========================================================================
---- Table 2: Customer Geography Mapping
--- ========================================================================
-CREATE OR REPLACE TABLE CAR_680_CUSTOMER_GEOGRAPHY AS
-SELECT DISTINCT
-    CM.CUSTOMER_KEY,
-    CM.COUNTRY_CODE,
-    CM.STATE,
-    CM.CITY,
-    CV.DMA_DESC,
-    CASE
-        WHEN CV.DMA_DESC LIKE '%TORONTO%' OR
-             CM.CITY LIKE '%TORONTO%' OR
-             UPPER(CM.CITY) LIKE '%TORONTO%' OR
-             (CM.STATE = 'ON' AND UPPER(CM.CITY) IN ('Ajax',
-'Aurora',
-'Brampton',
-'Brock',
-'Burlington',
-'Caledon',
-'Clarington',
-'East Gwillimbury' ,
-'Georgina',
-'Halton Hills', 
-'King',
-'Markham',
-'Milton',
-'Mississauga',
-'Newmarket',
-'Oakville',
-'Oshawa',
-'Pickering',
-'Richmond Hill', 
-'Scugog',
-'Toronto',
-'Uxbridge',
-'Vaughan',
-'Whitby',
-'Whitchurch – Stouffville'
-))
-        THEN 'Toronto GTA'
-        
-        --Vancouver Metro
-        WHEN CV.DMA_DESC LIKE '%VANCOUVER%' OR
-             CM.CITY LIKE '%VANCOUVER%' OR
-             UPPER(CM.CITY) LIKE '%VANCOUVER%' OR
-             (CM.STATE = 'BC' AND UPPER(CM.CITY) IN ('VANCOUVER', 'BURNABY', 'SURREY', 'RICHMOND',
-                                                       'COQUITLAM', 'DELTA', '%LANGLEY%', 'MAPLE RIDGE',
-                                                       'NEW WESTMINSTER', '%NORTH VANCOUVER', 'PORT COQUITLAM',
-                                                       'PORT MOODY', '%WEST VANCOUVER', 'WHITE ROCK','Anmore',
-                                                       'Belcarra', 'Bowen Island', 'Lions Bay', 'Metro Vancouver A',
-                                                       'Pitt Meadows', 'Tsawwassen'))
-        THEN 'Vancouver'
-        
-        --Montreal Metro
-        WHEN CV.DMA_DESC LIKE '%MONTREAL%' OR
-             CM.CITY LIKE '%MONTREAL%' OR
-             UPPER(CM.CITY) LIKE '%MONTREAL%' OR
-             UPPER(CM.CITY) LIKE '%MONTR_AL%' OR
-             (CM.STATE = 'QC' AND UPPER(CM.CITY) IN ('Baie-d''Urfé',
-'Beaconsfield',
-'Beauharnois',
-'Beloeil',
-'Blainville',
-'Boisbriand',
-'Bois-des-Filion',
-'Boucherville',
-'Brossard',
-'Calixa-Lavallée',
-'Candiac',
-'Carignan',
-'Chambly',
-'Charlemagne',
-'Châteauguay',
-'Contrecoeur',
-'Côte-Saint-Luc',
-'Delson',
-'Deux-Montagnes',
-'Dollard-des-Ormeaux',
-'Dorval',
-'Hampstead',
-'Hudson',
-'Kirkland',
-'La Prairie' ,
-'L''Assomption',
-'Laval',
-'Léry',
-'Les Cèdres' ,
-'L''Île-Cadieux',
-'L''Île-Dorval',
-'L''Île-Perrot',
-'Longueuil',
-'Lorraine',
-'Mascouche',
-'McMasterville',
-'Mercier',
-'Mirabel',
-'Montréal',
-'Montréal-Est',
-'Montréal-Ouest',
-'Mont-Royal',
-'Mont-Saint-Hilaire',
-'Notre-Dame-de-l''Île-Perrot',
-'Oka',
-'Otterburn Park', 
-'Pincourt',
-'Pointe-Calumet',
-'Pointe-Claire',
-'Pointe-des-Cascades',
-'Repentigny',
-'Richelieu',
-'Rosemère',
-'Saint-Amable',
-'Saint-Basile-le-Grand',
-'Saint-Bruno-de-Montarville',
-'Saint-Constant',
-'Sainte-Anne-de-Bellevue',
-'Sainte-Anne-des-Plaines',
-'Sainte-Catherine',
-'Sainte-Julie',
-'Sainte-Marthe-sur-le-Lac',
-'Sainte-Thérèse',
-'Saint-Eustache',
-'Saint-Isidore',
-'Saint-Jean-Baptiste',
-'Saint-Joseph-du-Lac',
-'Saint-Lambert',
-'Saint-Lazare',
-'Saint-Mathias-sur-Richelieu',
-'Saint-Mathieu',
-'Saint-Mathieu-de-Beloeil',
-'Saint-Philippe',
-'Saint-Sulpice',
-'Senneville',
-'Terrasse-Vaudreuil',
-'Terrebonne',
-'Varennes',
-'Vaudreuil-Dorion',
-'Vaudreuil-sur-le-Lac',
-'Verchères',
-'Westmount'
-))
-        THEN 'Montreal'
-        
-        -- -- British Columbia
-        -- WHEN CM.STATE = 'BC'
-        -- THEN 'British Columbia'
-        
-        -- -- Quebec
-        -- WHEN CM.STATE = 'QC'
-        -- THEN 'Quebec'
-        
-        -- Rest of Canada
-        ELSE 'Rest of Canada'
-    END AS market_segment
-FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW CM
-LEFT JOIN SUMMARY_GEN.DMA_ZIPCODE_VW ZIP ON CM.ZIP_POSTAL_CODE = ZIP.ZIP_CODE
-LEFT JOIN SUMMARY_GEN.DMA_VW CV ON ZIP.DMA_CODE = CV.DMA_CODE
-WHERE CM.COUNTRY_CODE = 'CA';
 
--- select DIstinct state from SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW 
--- where state IN ('QC', 'BC', 'ON');
+The OOH campaign will be running from September 30 – November 30.
+
  
--- ========================================================================
--- Table 3: Historical Transaction Lookup (MERGED R12 & R13+)
--- ========================================================================
-CREATE OR REPLACE TABLE CAR_680_HISTORICAL_TXNS AS
-SELECT DISTINCT
-    TXN.SNDCUSTOMER_KEY,
-    DATEADD(DAY, 1, DATE_TRUNC('WEEK', DATEADD(DAY, -1, TXN.RCVPAYING_DATETIME))) AS ref_week,
-    TXN.RCVPAYING_DATETIME,
-    TXN.PRICING_CHANNEL,
-    CASE
-        -- R12: Last 12 months of activity (rolling, includes campaign period transactions)
-        -- Extended to cover up to current date for dynamic lookback
-        WHEN TXN.RCVPAYING_DATETIME >= DATEADD(MONTH, -12, CURRENT_DATE)
-             AND TXN.RCVPAYING_DATETIME < CURRENT_DATE
-        THEN 'R12'
-        
-        -- R13_PLUS: 13-48 months back (lapsed customers)
-        -- This captures customers who were active 1-4 years ago but not in R12
-        WHEN TXN.RCVPAYING_DATETIME >= DATEADD(MONTH, -48, CURRENT_DATE)
-             AND TXN.RCVPAYING_DATETIME < DATEADD(MONTH, -12, CURRENT_DATE)
-        THEN 'R13_PLUS'
-    END AS history_period
-FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW TXN
-WHERE TXN.RCVPAYING_DATETIME >= DATEADD(MONTH, -48, CURRENT_DATE)  -- Look back 4 years
-  AND TXN.RCVPAYING_DATETIME < CURRENT_DATE  -- Up to today
-  AND TXN.SNDCOUNTRY_CODE = 'CA'
-  AND TXN.RCVPAYING_DATETIME IS NOT NULL;
+
+Could your team pull the following:
+
  
---Validation query
-SELECT
-    history_period,
-    MIN(RCVPAYING_DATETIME) AS earliest_txn,
-    MAX(RCVPAYING_DATETIME) AS latest_txn,
-    COUNT(DISTINCT SNDCUSTOMER_KEY) AS unique_customers,
-    COUNT(*) as total_txns
-FROM CAR_680_HISTORICAL_TXNS
-GROUP BY history_period;
+
+Pre-Campaign:
+
+Week 1: September 16 - 22
+
+Week 2: September 23 - 29
+
  
--- ========================================================================
--- Table 4: Current Period Digital Transactions - UPDATED CLASSIFICATION LOGIC
--- ========================================================================
-CREATE OR REPLACE TABLE CAR_680_WEEKLY_DIGITAL_TXNS AS
-WITH current_txns AS (
-    SELECT
-        WP.period_name,
-        WP.week_start,
-        WP.week_end,
-        WP.period_type,
-        WP.week_order,
-        TXN.SNDCUSTOMER_KEY,
-        CG.market_segment,
-        CG.CITY,
-        CG.STATE,
-        DATEADD(DAY, 1, DATE_TRUNC('WEEK', DATEADD(DAY, -1, TXN.RCVPAYING_DATETIME))) AS txn_week,
-        TXN.RCVPAYING_DATETIME,
-        TXN.PRICING_CHANNEL,
-        TXN.PRIMARY_CHANNEL,
-        TXN.SUB_CHANNEL,
-        TXN.SNDCOUNTRY_CODE,
-        TXN.RCVCOUNTRY_CODE
-    FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW TXN
-    INNER JOIN CAR_680_CUSTOMER_GEOGRAPHY CG
-        ON TXN.SNDCUSTOMER_KEY = CG.CUSTOMER_KEY
-    INNER JOIN CAR_680_WEEKLY_PERIODS WP
-        ON TXN.RCVPAYING_DATETIME >= WP.week_start
-        AND TXN.RCVPAYING_DATETIME <= DATEADD(SECOND, 86399, WP.week_end)
-    WHERE TXN.RCVPAYING_DATETIME >= '2025-09-16'
-      AND TXN.RCVPAYING_DATETIME < '2025-12-02'
-      AND TXN.PRICING_CHANNEL IN ('WEB', 'APP')
-      AND TXN.SNDCOUNTRY_CODE = 'CA'
-),
-r12_check AS (
-    -- Dynamic 12-month lookback for each transaction week
-    -- Checks if customer had ANY activity in the 12 months before their current transaction
-    SELECT DISTINCT
-        CT.SNDCUSTOMER_KEY,
-        CT.txn_week,
-        1 AS has_r12
-    FROM current_txns CT
-    INNER JOIN CAR_680_HISTORICAL_TXNS HT
-        ON CT.SNDCUSTOMER_KEY = HT.SNDCUSTOMER_KEY
-        AND HT.history_period = 'R12'
-        -- Look back exactly 12 months from the transaction week
-        AND HT.RCVPAYING_DATETIME >= DATEADD(MONTH, -12, CT.txn_week)
-        AND HT.RCVPAYING_DATETIME < CT.txn_week  -- Before current week starts
-),
-r13_check AS (
-    -- Check for lapsed customers (R13-R48 activity but NO R12 activity)
-    -- These are customers who were active 13-48 months ago but dormant in last 12 months
-    SELECT DISTINCT
-        CT.SNDCUSTOMER_KEY,
-        CT.txn_week,
-        1 AS has_r13
-    FROM current_txns CT
-    INNER JOIN CAR_680_HISTORICAL_TXNS HT
-        ON CT.SNDCUSTOMER_KEY = HT.SNDCUSTOMER_KEY
-        AND HT.history_period = 'R13_PLUS'
-        -- Look back 13-48 months from transaction week
-        AND HT.RCVPAYING_DATETIME >= DATEADD(MONTH, -48, CT.txn_week)
-        AND HT.RCVPAYING_DATETIME < DATEADD(MONTH, -12, CT.txn_week)
-    -- CRITICAL: Only include customers who DON'T have R12 activity
-    WHERE NOT EXISTS (
-        SELECT 1
-        FROM CAR_680_HISTORICAL_TXNS HT_R12
-        WHERE HT_R12.SNDCUSTOMER_KEY = CT.SNDCUSTOMER_KEY
-          AND HT_R12.history_period = 'R12'
-          AND HT_R12.RCVPAYING_DATETIME >= DATEADD(MONTH, -12, CT.txn_week)
-          AND HT_R12.RCVPAYING_DATETIME < CT.txn_week
-    )
-)
-SELECT
-    CT.*,
-    -- Customer classification based on transaction history
-    CASE
-        WHEN R12.has_r12 = 1 THEN 'EXISTING'
-        WHEN R13.has_r13 = 1 THEN 'LAPSED_REACTIVATION'
-        ELSE 'NEW'
-    END AS customer_type,
-    CASE
-        WHEN R12.has_r12 IS NULL AND R13.has_r13 IS NULL THEN 'Y'
-        ELSE 'N'
-    END AS is_new_to_franchise,
-    CASE
-        WHEN R12.has_r12 IS NULL AND R13.has_r13 = 1 THEN 'Y'
-        ELSE 'N'
-    END AS is_winback
-FROM current_txns CT
-LEFT JOIN r12_check R12
-    ON CT.SNDCUSTOMER_KEY = R12.SNDCUSTOMER_KEY
-    AND CT.txn_week = R12.txn_week
-LEFT JOIN r13_check R13
-    ON CT.SNDCUSTOMER_KEY = R13.SNDCUSTOMER_KEY
-    AND CT.txn_week = R13.txn_week;
+
+Campaign:
+
+Week 1: September 30 – October 6
+
+Week 2: October 7 - 13
+
+Week 3: October 14 - 20
+
+Week 4: October 21 – 27
+
+Week 5: October 28 – November 3
+
+Week 6: November 4 - 10
+
+Week 7: November 11 – 17
+
+Week 8: November 18 – 24
+
+Week 9: November 25 – December 1
+
+However, I had a couple of questions regarding the measurement approach. From what I understand, you're considering a pre-post analysis. Would it also be possible to include a comparison with another city—ideally one similar in size to Toronto but without the billboard presence? This would help account for any seasonality effects and strengthen the analysis.
+
+Regarding the pre-post analysis, we could compare against Vancouver, British Columbia or Montreal, Quebec. 
+
  
--- ========================================================================
--- Table 5: MAIN AGGREGATED TABLE (NO CHANGE)
--- ========================================================================
-CREATE OR REPLACE TABLE CAR_680_CA_GTA AS
-SELECT
-    WP.period_name,
-    WP.week_start,
-    WP.week_end,
-    WP.period_type,
-    WP.week_order,
-    CG.market_segment,
-    
-    -- New Digital Customer Counts (Primary KPI)
-    COUNT(DISTINCT CASE
-        WHEN WT.customer_type IN ('NEW', 'LAPSED_REACTIVATION')
-        THEN WT.SNDCUSTOMER_KEY
-    END) AS new_digital_customers,
-    
-    -- Breakdown by customer type
-    COUNT(DISTINCT CASE WHEN WT.customer_type = 'NEW' THEN WT.SNDCUSTOMER_KEY END) AS truly_new_customers,
-    COUNT(DISTINCT CASE WHEN WT.customer_type = 'LAPSED_REACTIVATION' THEN WT.SNDCUSTOMER_KEY END) AS lapsed_reactivations,
-    COUNT(DISTINCT CASE WHEN WT.customer_type = 'EXISTING' THEN WT.SNDCUSTOMER_KEY END) AS existing_customers,
-    
-    -- Total metrics
-    COUNT(DISTINCT WT.SNDCUSTOMER_KEY) AS total_digital_customers,
-    COUNT(DISTINCT WT.RCVPAYING_DATETIME) AS total_transactions,
-    
-    -- Channel breakdown
-    COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'WEB' THEN WT.SNDCUSTOMER_KEY END) AS web_customers,
-    COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'APP' THEN WT.SNDCUSTOMER_KEY END) AS app_customers,
-    COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'WEB' THEN WT.RCVPAYING_DATETIME END) AS web_txns,
-    COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'APP' THEN WT.RCVPAYING_DATETIME END) AS app_txns
-FROM CAR_680_WEEKLY_PERIODS WP
-CROSS JOIN (SELECT DISTINCT market_segment FROM CAR_680_CUSTOMER_GEOGRAPHY) CG
-LEFT JOIN CAR_680_WEEKLY_DIGITAL_TXNS WT
-    ON WP.period_name = WT.period_name
-    AND CG.market_segment = WT.market_segment
-GROUP BY
-    WP.period_name,
-    WP.week_start,
-    WP.week_end,
-    WP.period_type,
-    WP.week_order,
-    CG.market_segment
-ORDER BY
-    WP.week_order,
-    CG.market_segment;
+
+Those are generally the other biggest cities in Canada but Toronto is the biggest. 
+
  
--- ========================================================================
--- Table 6: Customer-Level Detail (NO CHANGE)
--- ========================================================================
-CREATE OR REPLACE TABLE CAR_680_CA_GTA_CUST_LEVEL AS
-SELECT
-    WT.period_name,
-    WT.week_start,
-    WT.week_end,
-    WT.period_type,
-    WT.SNDCUSTOMER_KEY,
-    WT.market_segment,
-    WT.CITY,
-    WT.STATE,
-    WT.customer_type,
-    WT.is_new_to_franchise,
-    WT.is_winback,
-    
-    -- Transaction counts
-    COUNT(DISTINCT WT.RCVPAYING_DATETIME) AS txns_in_week,
-    COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'WEB' THEN WT.RCVPAYING_DATETIME END) AS web_txns,
-    COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'APP' THEN WT.RCVPAYING_DATETIME END) AS app_txns,
-    
-    -- First and last transaction in week
-    MIN(WT.RCVPAYING_DATETIME) AS first_txn_datetime,
-    MAX(WT.RCVPAYING_DATETIME) AS last_txn_datetime,
-    
-    -- Dominant channel
-    CASE
-        WHEN COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'WEB' THEN WT.RCVPAYING_DATETIME END) >
-             COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'APP' THEN WT.RCVPAYING_DATETIME END)
-        THEN 'WEB'
-        WHEN COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'APP' THEN WT.RCVPAYING_DATETIME END) >
-             COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'WEB' THEN WT.RCVPAYING_DATETIME END)
-        THEN 'APP'
-        ELSE 'DIGITAL_MIXED'
-    END AS dominant_channel
-FROM CAR_680_WEEKLY_DIGITAL_TXNS WT
-GROUP BY
-    WT.period_name,
-    WT.week_start,
-    WT.week_end,
-    WT.period_type,
-    WT.SNDCUSTOMER_KEY,
-    WT.market_segment,
-    WT.CITY,
-    WT.STATE,
-    WT.customer_type,
-    WT.is_new_to_franchise,
-    WT.is_winback;
+
+Another thought could be to compare Toronto against “Rest of Canada excluding Toronto” to see how the country average is performing vs the OOH heavy-up in Toronto. 
