@@ -33,26 +33,135 @@ SELECT DISTINCT
         WHEN CV.DMA_DESC LIKE '%TORONTO%' OR
              CM.CITY LIKE '%TORONTO%' OR
              UPPER(CM.CITY) LIKE '%TORONTO%' OR
-             (CM.STATE = 'ON' AND UPPER(CM.CITY) IN ('TORONTO', 'MISSISSAUGA', 'BRAMPTON', 'MARKHAM',
-                                                       'VAUGHAN', 'RICHMOND HILL', 'OAKVILLE', 'BURLINGTON',
-                                                       'ETOBICOKE', 'SCARBOROUGH', 'NORTH YORK', 'PICKERING',
-                                                       'AJAX', 'MILTON', 'WHITBY', 'OSHAWA'))
+             (CM.STATE = 'ON' AND UPPER(CM.CITY) IN ('Ajax',
+'Aurora',
+'Brampton',
+'Brock',
+'Burlington',
+'Caledon',
+'Clarington',
+'East Gwillimbury' ,
+'Georgina',
+'Halton Hills', 
+'King',
+'Markham',
+'Milton',
+'Mississauga',
+'Newmarket',
+'Oakville',
+'Oshawa',
+'Pickering',
+'Richmond Hill', 
+'Scugog',
+'Toronto',
+'Uxbridge',
+'Vaughan',
+'Whitby',
+'Whitchurch – Stouffville'
+))
         THEN 'Toronto GTA'
         
-        -- Vancouver Metro
-        -- WHEN CV.DMA_DESC LIKE '%VANCOUVER%' OR
-        --      CM.CITY LIKE '%VANCOUVER%' OR
-        --      UPPER(CM.CITY) LIKE '%VANCOUVER%' OR
-        --      (CM.STATE = 'BC' AND UPPER(CM.CITY) IN ('%VANCOUVER%'))
-        -- THEN 'Vancouver'
+        --Vancouver Metro
+        WHEN CV.DMA_DESC LIKE '%VANCOUVER%' OR
+             CM.CITY LIKE '%VANCOUVER%' OR
+             UPPER(CM.CITY) LIKE '%VANCOUVER%' OR
+             (CM.STATE = 'BC' AND UPPER(CM.CITY) IN ('VANCOUVER', 'BURNABY', 'SURREY', 'RICHMOND',
+                                                       'COQUITLAM', 'DELTA', '%LANGLEY%', 'MAPLE RIDGE',
+                                                       'NEW WESTMINSTER', '%NORTH VANCOUVER', 'PORT COQUITLAM',
+                                                       'PORT MOODY', '%WEST VANCOUVER', 'WHITE ROCK','Anmore',
+                                                       'Belcarra', 'Bowen Island', 'Lions Bay', 'Metro Vancouver A',
+                                                       'Pitt Meadows', 'Tsawwassen'))
+        THEN 'Vancouver'
         
-        -- Montreal Metro
-        -- WHEN CV.DMA_DESC LIKE '%MONTREAL%' OR
-        --      CM.CITY LIKE '%MONTREAL%' OR
-        --      UPPER(CM.CITY) LIKE '%MONTREAL%' OR
-        --      UPPER(CM.CITY) LIKE '%MONTR_AL%' OR
-        --      (CM.STATE = 'QC' AND UPPER(CM.CITY) IN ('%MONTREAL%'))
-        -- THEN 'Montreal'
+        --Montreal Metro
+        WHEN CV.DMA_DESC LIKE '%MONTREAL%' OR
+             CM.CITY LIKE '%MONTREAL%' OR
+             UPPER(CM.CITY) LIKE '%MONTREAL%' OR
+             UPPER(CM.CITY) LIKE '%MONTR_AL%' OR
+             (CM.STATE = 'QC' AND UPPER(CM.CITY) IN ('Baie-d''Urfé',
+'Beaconsfield',
+'Beauharnois',
+'Beloeil',
+'Blainville',
+'Boisbriand',
+'Bois-des-Filion',
+'Boucherville',
+'Brossard',
+'Calixa-Lavallée',
+'Candiac',
+'Carignan',
+'Chambly',
+'Charlemagne',
+'Châteauguay',
+'Contrecoeur',
+'Côte-Saint-Luc',
+'Delson',
+'Deux-Montagnes',
+'Dollard-des-Ormeaux',
+'Dorval',
+'Hampstead',
+'Hudson',
+'Kirkland',
+'La Prairie' ,
+'L''Assomption',
+'Laval',
+'Léry',
+'Les Cèdres' ,
+'L''Île-Cadieux',
+'L''Île-Dorval',
+'L''Île-Perrot',
+'Longueuil',
+'Lorraine',
+'Mascouche',
+'McMasterville',
+'Mercier',
+'Mirabel',
+'Montréal',
+'Montréal-Est',
+'Montréal-Ouest',
+'Mont-Royal',
+'Mont-Saint-Hilaire',
+'Notre-Dame-de-l''Île-Perrot',
+'Oka',
+'Otterburn Park', 
+'Pincourt',
+'Pointe-Calumet',
+'Pointe-Claire',
+'Pointe-des-Cascades',
+'Repentigny',
+'Richelieu',
+'Rosemère',
+'Saint-Amable',
+'Saint-Basile-le-Grand',
+'Saint-Bruno-de-Montarville',
+'Saint-Constant',
+'Sainte-Anne-de-Bellevue',
+'Sainte-Anne-des-Plaines',
+'Sainte-Catherine',
+'Sainte-Julie',
+'Sainte-Marthe-sur-le-Lac',
+'Sainte-Thérèse',
+'Saint-Eustache',
+'Saint-Isidore',
+'Saint-Jean-Baptiste',
+'Saint-Joseph-du-Lac',
+'Saint-Lambert',
+'Saint-Lazare',
+'Saint-Mathias-sur-Richelieu',
+'Saint-Mathieu',
+'Saint-Mathieu-de-Beloeil',
+'Saint-Philippe',
+'Saint-Sulpice',
+'Senneville',
+'Terrasse-Vaudreuil',
+'Terrebonne',
+'Varennes',
+'Vaudreuil-Dorion',
+'Vaudreuil-sur-le-Lac',
+'Verchères',
+'Westmount'
+))
+        THEN 'Montreal'
         
         -- -- British Columbia
         -- WHEN CM.STATE = 'BC'
@@ -69,6 +178,9 @@ FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW CM
 LEFT JOIN SUMMARY_GEN.DMA_ZIPCODE_VW ZIP ON CM.ZIP_POSTAL_CODE = ZIP.ZIP_CODE
 LEFT JOIN SUMMARY_GEN.DMA_VW CV ON ZIP.DMA_CODE = CV.DMA_CODE
 WHERE CM.COUNTRY_CODE = 'CA';
+
+-- select DIstinct state from SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW 
+-- where state IN ('QC', 'BC', 'ON');
  
 -- ========================================================================
 -- Table 3: Historical Transaction Lookup (MERGED R12 & R13+)
@@ -76,33 +188,40 @@ WHERE CM.COUNTRY_CODE = 'CA';
 CREATE OR REPLACE TABLE CAR_680_HISTORICAL_TXNS AS
 SELECT DISTINCT
     TXN.SNDCUSTOMER_KEY,
-   DATEADD(DAY, 1, DATE_TRUNC('WEEK', DATEADD(DAY, -1, TXN.RCVPAYING_DATETIME))) AS ref_week,
+    DATEADD(DAY, 1, DATE_TRUNC('WEEK', DATEADD(DAY, -1, TXN.RCVPAYING_DATETIME))) AS ref_week,
     TXN.RCVPAYING_DATETIME,
     TXN.PRICING_CHANNEL,
     CASE
-        WHEN TXN.RCVPAYING_DATETIME >= '2024-09-16' AND TXN.RCVPAYING_DATETIME < '2025-09-16'
+        -- R12: Last 12 months of activity (rolling, includes campaign period transactions)
+        -- Extended to cover up to current date for dynamic lookback
+        WHEN TXN.RCVPAYING_DATETIME >= DATEADD(MONTH, -12, CURRENT_DATE)
+             AND TXN.RCVPAYING_DATETIME < CURRENT_DATE
         THEN 'R12'
-        WHEN TXN.RCVPAYING_DATETIME >= '2023-09-16' AND TXN.RCVPAYING_DATETIME < '2024-09-16'
+        
+        -- R13_PLUS: 13-48 months back (lapsed customers)
+        -- This captures customers who were active 1-4 years ago but not in R12
+        WHEN TXN.RCVPAYING_DATETIME >= DATEADD(MONTH, -48, CURRENT_DATE)
+             AND TXN.RCVPAYING_DATETIME < DATEADD(MONTH, -12, CURRENT_DATE)
         THEN 'R13_PLUS'
     END AS history_period
 FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW TXN
-WHERE TXN.RCVPAYING_DATETIME >= '2023-09-16'
-  AND TXN.RCVPAYING_DATETIME < '2025-12-01'
-  AND TXN.SNDCOUNTRY_CODE = 'CA';
-
-  -- select history_period, MIN(RCVPAYING_DATETIME) AS earliest_txn,
-  -- MAX(RCVPAYING_DATETIME) AS latest_txn,
-  -- COUNT(DISTINCT SNDCUSTOMER_KEY) AS unique_customers,
-  -- COUNT(*) as total_txns
-  -- from car_680_historical_txns
-  -- GROUP by history_period;
-
-
- -- SELECT DATE_TRUNC('WEEK', DATEADD(DAY, 1, CURRENT_DATE));
- --select DATEADD(DAY, 1, DATE_TRUNC('WEEK', DATEADD(DAY, -1, CURRENT_DATE)));
+WHERE TXN.RCVPAYING_DATETIME >= DATEADD(MONTH, -48, CURRENT_DATE)  -- Look back 4 years
+  AND TXN.RCVPAYING_DATETIME < CURRENT_DATE  -- Up to today
+  AND TXN.SNDCOUNTRY_CODE = 'CA'
+  AND TXN.RCVPAYING_DATETIME IS NOT NULL;
+ 
+--Validation query
+SELECT
+    history_period,
+    MIN(RCVPAYING_DATETIME) AS earliest_txn,
+    MAX(RCVPAYING_DATETIME) AS latest_txn,
+    COUNT(DISTINCT SNDCUSTOMER_KEY) AS unique_customers,
+    COUNT(*) as total_txns
+FROM CAR_680_HISTORICAL_TXNS
+GROUP BY history_period;
+ 
 -- ========================================================================
--- Table 4: Current Period Digital Transactions with Classification
--- MERGED: Tables 3 & 6 (Digital Txns + Customer Classification)
+-- Table 4: Current Period Digital Transactions - UPDATED CLASSIFICATION LOGIC
 -- ========================================================================
 CREATE OR REPLACE TABLE CAR_680_WEEKLY_DIGITAL_TXNS AS
 WITH current_txns AS (
@@ -121,10 +240,6 @@ WITH current_txns AS (
         TXN.PRICING_CHANNEL,
         TXN.PRIMARY_CHANNEL,
         TXN.SUB_CHANNEL,
-        -- TXN.SNDPRINCIPAL_USD,
-        -- TXN.TOTAL_CHARGES_USD,
-        -- TXN.NET_FOREIGN_EXCHANGE,
-        -- (TXN.TOTAL_CHARGES_USD + TXN.NET_FOREIGN_EXCHANGE) AS revenue_usd,
         TXN.SNDCOUNTRY_CODE,
         TXN.RCVCOUNTRY_CODE
     FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW TXN
@@ -140,6 +255,7 @@ WITH current_txns AS (
 ),
 r12_check AS (
     -- Dynamic 12-month lookback for each transaction week
+    -- Checks if customer had ANY activity in the 12 months before their current transaction
     SELECT DISTINCT
         CT.SNDCUSTOMER_KEY,
         CT.txn_week,
@@ -148,26 +264,37 @@ r12_check AS (
     INNER JOIN CAR_680_HISTORICAL_TXNS HT
         ON CT.SNDCUSTOMER_KEY = HT.SNDCUSTOMER_KEY
         AND HT.history_period = 'R12'
-        AND HT.ref_week >= DATEADD(MONTH, -12, CT.txn_week)  -- Dynamic lookback
-        AND HT.ref_week < CT.txn_week
+        -- Look back exactly 12 months from the transaction week
+        AND HT.RCVPAYING_DATETIME >= DATEADD(MONTH, -12, CT.txn_week)
+        AND HT.RCVPAYING_DATETIME < CT.txn_week  -- Before current week starts
 ),
 r13_check AS (
-    -- Check for any R13+ activity (only for customers without R12)
+    -- Check for lapsed customers (R13-R48 activity but NO R12 activity)
+    -- These are customers who were active 13-48 months ago but dormant in last 12 months
     SELECT DISTINCT
         CT.SNDCUSTOMER_KEY,
+        CT.txn_week,
         1 AS has_r13
     FROM current_txns CT
     INNER JOIN CAR_680_HISTORICAL_TXNS HT
         ON CT.SNDCUSTOMER_KEY = HT.SNDCUSTOMER_KEY
         AND HT.history_period = 'R13_PLUS'
-    LEFT JOIN r12_check R12
-        ON CT.SNDCUSTOMER_KEY = R12.SNDCUSTOMER_KEY
-        AND CT.txn_week = R12.txn_week
-    WHERE R12.SNDCUSTOMER_KEY IS NULL  -- Only customers without R12 history
+        -- Look back 13-48 months from transaction week
+        AND HT.RCVPAYING_DATETIME >= DATEADD(MONTH, -48, CT.txn_week)
+        AND HT.RCVPAYING_DATETIME < DATEADD(MONTH, -12, CT.txn_week)
+    -- CRITICAL: Only include customers who DON'T have R12 activity
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM CAR_680_HISTORICAL_TXNS HT_R12
+        WHERE HT_R12.SNDCUSTOMER_KEY = CT.SNDCUSTOMER_KEY
+          AND HT_R12.history_period = 'R12'
+          AND HT_R12.RCVPAYING_DATETIME >= DATEADD(MONTH, -12, CT.txn_week)
+          AND HT_R12.RCVPAYING_DATETIME < CT.txn_week
+    )
 )
 SELECT
     CT.*,
-    -- Customer classification based on history
+    -- Customer classification based on transaction history
     CASE
         WHEN R12.has_r12 = 1 THEN 'EXISTING'
         WHEN R13.has_r13 = 1 THEN 'LAPSED_REACTIVATION'
@@ -186,10 +313,11 @@ LEFT JOIN r12_check R12
     ON CT.SNDCUSTOMER_KEY = R12.SNDCUSTOMER_KEY
     AND CT.txn_week = R12.txn_week
 LEFT JOIN r13_check R13
-    ON CT.SNDCUSTOMER_KEY = R13.SNDCUSTOMER_KEY;
+    ON CT.SNDCUSTOMER_KEY = R13.SNDCUSTOMER_KEY
+    AND CT.txn_week = R13.txn_week;
  
 -- ========================================================================
--- Table 5: MAIN AGGREGATED TABLE
+-- Table 5: MAIN AGGREGATED TABLE (NO CHANGE)
 -- ========================================================================
 CREATE OR REPLACE TABLE CAR_680_CA_GTA AS
 SELECT
@@ -215,26 +343,13 @@ SELECT
     COUNT(DISTINCT WT.SNDCUSTOMER_KEY) AS total_digital_customers,
     COUNT(DISTINCT WT.RCVPAYING_DATETIME) AS total_transactions,
     
-    -- -- Financial metrics
-    -- SUM(WT.SNDPRINCIPAL_USD) AS total_principal_usd,
-    -- SUM(WT.TOTAL_CHARGES_USD) AS total_fee_usd,
-    -- SUM(WT.NET_FOREIGN_EXCHANGE) AS total_fx_usd,
-    -- SUM(WT.revenue_usd) AS total_revenue_usd,
-    
-    -- -- Average metrics
-    -- AVG(WT.SNDPRINCIPAL_USD) AS avg_principal_usd,
-    -- AVG(WT.revenue_usd) AS avg_revenue_usd,
-    
-    -- -- Transactions per customer
-    -- COUNT(DISTINCT WT.RCVPAYING_DATETIME) / NULLIF(COUNT(DISTINCT WT.SNDCUSTOMER_KEY), 0) AS txns_per_customer,
-    
     -- Channel breakdown
     COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'WEB' THEN WT.SNDCUSTOMER_KEY END) AS web_customers,
     COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'APP' THEN WT.SNDCUSTOMER_KEY END) AS app_customers,
     COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'WEB' THEN WT.RCVPAYING_DATETIME END) AS web_txns,
     COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'APP' THEN WT.RCVPAYING_DATETIME END) AS app_txns
 FROM CAR_680_WEEKLY_PERIODS WP
-CROSS JOIN (SELECT DISTINCT market_segment FROM CAR_680_CUSTOMER_GEOGRAPHY) CG --
+CROSS JOIN (SELECT DISTINCT market_segment FROM CAR_680_CUSTOMER_GEOGRAPHY) CG
 LEFT JOIN CAR_680_WEEKLY_DIGITAL_TXNS WT
     ON WP.period_name = WT.period_name
     AND CG.market_segment = WT.market_segment
@@ -250,7 +365,7 @@ ORDER BY
     CG.market_segment;
  
 -- ========================================================================
--- Table 6: Customer-Level Detail
+-- Table 6: Customer-Level Detail (NO CHANGE)
 -- ========================================================================
 CREATE OR REPLACE TABLE CAR_680_CA_GTA_CUST_LEVEL AS
 SELECT
@@ -270,10 +385,6 @@ SELECT
     COUNT(DISTINCT WT.RCVPAYING_DATETIME) AS txns_in_week,
     COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'WEB' THEN WT.RCVPAYING_DATETIME END) AS web_txns,
     COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'APP' THEN WT.RCVPAYING_DATETIME END) AS app_txns,
-    
-    -- -- Financial metrics
-    -- SUM(WT.SNDPRINCIPAL_USD) AS principal_usd,
-    -- SUM(WT.revenue_usd) AS revenue_usd,
     
     -- First and last transaction in week
     MIN(WT.RCVPAYING_DATETIME) AS first_txn_datetime,
