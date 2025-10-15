@@ -1,469 +1,467 @@
-select RFM_PERSONA from WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL limit 100;
+-----------------------------------------------------------------------------------
+-- STEP 1: RNT Customers Table
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_RNT_CUSTOMERS AS
+WITH params AS (
+  SELECT 12 AS rnt_window_mths
+),
+-- Generate months from Jan 2024 up to the last completed month
 
-select max(MTH_YR) from  WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL;
+months AS (
+  SELECT DISTINCT DATE_TRUNC('MONTH', MTH_YR) AS ref_date
+  FROM WUDNA.CEX_SANDBOX.VA_KPI_2020_2
+  WHERE MTH_YR >= TO_DATE('2024-01-01')
+    AND MTH_YR < DATE_TRUNC('MONTH', CURRENT_DATE)
+),
 
-select max(MTH_YR) from WUDNA.CEX_SANDBOX.SK_CONSOLIDATED_PROPENSITY_SCORES;
+-- Registered customers
+cust_reg AS (
+  SELECT
+    c.customer_key,
+    DATE_TRUNC('MONTH', c.first_registration_date) AS reg_month,
+    first_registration_date,
+    c.country_code,
+    CASE
+    WHEN c.email_address_on_file_flag = 'Y'
+     AND c.opt_email = 'I'
+     AND c.marketing_flag = 'Y'
+    THEN 'Y'
+    ELSE 'N'
+  END AS email_marketable,
+  CASE
+    WHEN (c.opt_sms = 'I'
+      AND c.mobile_number_on_file_flag = 'Y'
+      AND c.marketing_flag = 'Y'
+      AND c.country_code NOT IN ('US','CA'))
+    OR (c.mobile_number_on_file_flag = 'Y'
+      AND c.opt_sms = 'I'
+      AND c.double_opt_sms = 'I'
+      AND c.marketing_flag = 'Y'
+      AND c.country_code IN ('US','CA'))
+    THEN 'Y'
+    ELSE 'N'
+  END AS sms_marketable
+  FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
+  JOIN SUMMARY_GEN.COUNTRY_VW cnt
+    ON c.country_code = cnt.country_code
+  WHERE cnt.super_region = 'LACA'
+    AND c.first_registration_date IS NOT NULL
+),
+-- Transactions
+txns_rnt AS (
+  SELECT DISTINCT
+    t.sndcustomer_key AS customer_key,
+    DATE_TRUNC('MONTH', t.rcvpaying_datetime) AS txn_month,
+    date(min(rcvpaying_datetime)) as first_txn_date
+  FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
+  JOIN SUMMARY_GEN.COUNTRY_VW snd
+    ON t.sndcountry_code = snd.country_code
+  WHERE snd.super_region = 'LACA'
+    AND t.rcvpaying_datetime >= '2023-01-01'
+    Group by t.sndcustomer_key , txn_month
+),
+-- RNT logic: registered in R12 window and no transactions in same R12 window
 
+rnt_no_txn AS (
+  SELECT
+    m.ref_date,
+    r.customer_key,
+    r.country_code,
+    r.reg_month,
+    email_marketable,
+ sms_marketable
+  FROM months m
+  JOIN cust_reg r
+    ON r.reg_month BETWEEN DATEADD(MONTH, - (SELECT rnt_window_mths FROM params) + 1, m.ref_date)
+                      AND m.ref_date
+  LEFT JOIN txns_rnt t
+    ON r.customer_key = t.customer_key
+   AND t.first_txn_date BETWEEN r.reg_month AND LAST_DAY(m.ref_date)
+   and date(r.first_registration_date) <= date(t.first_txn_date)
+  WHERE t.customer_key IS NULL
 
-/*CASE WHEN CHURN_DECILE IN (1,2,3,4,5,6,7,8) THEN '2.Low-Risk' 
-       WHEN CHURN_DECILE IN (9,10)  THEN '1.High-Risk'
-     ELSE 
-           CASE WHEN IPF_BEATS IN ('On Schedule','Ahead Schedule','1 beat late','2 beats late') THEN '2.Low-Risk'
-                WHEN IPF_BEATS IN ('3 beats late','4 beats late','5 beats plus late') THEN '1.High-Risk'
-                ELSE 
-                     CASE WHEN RFM_PERSONA IN ('7.LOST','5.SPORADICS','6.SLIPPING') THEN '1.High-Risk'
-                          WHEN RFM_PERSONA IN ('4.WHALES','2.LOYALS','1.UBER','3.PROMISING','8.ONE AND DONES') THEN '2.Low-Risk'
-                     ELSE '4: NA' END
-                END
-END AS CHURN_RISK,*/ 
-
-
-
-
-
-
-
-
-
-
-
-
-select * from WUDNA.CEX_SANDBOX.CUSTOMER_ENGAGEMENT_FRAMEWORK_CUST_LEVEL limit 100;
-
-select max(mth_yr) from WUDNA.CEX_SANDBOX.CUSTOMER_ENGAGEMENT_FRAMEWORK_CUST_LEVEL;
-
-select count(*), count(distinct customer_key) from CAR_574_AU_NZ_CUSTOMER_BASE;--850,532	850,532
-
-select * from CAR_574_AU_NZ_CUSTOMER_BASE limit 1000;
-
-
-CREATE OR REPLACE TABLE AU_NZ_R12_CUSTOMERS_L0_PRICING as 
-select 
-    distinct sndcustomer_key,
-    CASE WHEN FEE_SEGMENT_USED IN ('N0','P0','S1') THEN 'N0'
-WHEN FEE_SEGMENT_USED IN ('N6','N7','M1','S0','S2','S3') THEN 'N6'
-WHEN FX_SEGMENT_USED IN ('N0','P0','S1') AND FEE_SEGMENT_USED  = 'L0' THEN 'N0'
-WHEN FX_SEGMENT_USED IN ('N6','N7','M1','S0','S2','S3') AND FEE_SEGMENT_USED  = 'L0' THEN 'N6'
-ELSE 'L0'
-END AS PRICING_SEGMENT
-FROM
-    WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
-WHERE
-    SNDCOUNTRY_CODE in ('AU','NZ')
-AND
-    DATE(RCVPAYING_DATETIME)>='2024-07-01'
-AND
-    DATE(RCVPAYING_DATETIME)<='2025-06-30'
-and
-    PRICING_SEGMENT='L0'
-and sndcustomer_key is not null;
-    
-select count(*), count(distinct sndcustomer_key) from AU_NZ_R12_CUSTOMERS_L0_PRICING;
-
-CREATE OR REPLACE TABLE CAR_574_AU_NZ_R12_ACTIVE_TXN_BASE AS
-select
-    SNDCOUNTRY_CODE,
-    SEND_COUNTRY_NAME,
-    SNDCUSTOMER_KEY,
-    TXN_ID,
-    RCVPAYING_DATETIME,
-    PRICING_CHANNEL,
-    case when PRICING_CHANNEL in ('POS','AIR','TMT') THEN 'RETAIL'
-    WHEN PRICING_CHANNEL IN ('WEB','APP') THEN 'DIGITAL'
-    ELSE 'OTHERS' END AS TRANSACTION_CHANNEL,
-    SNDPRINCIPAL_AMOUNT,
-    
-    CASE WHEN FEE_SEGMENT_USED IN ('N0','P0','S1') THEN 'N0'
-WHEN FEE_SEGMENT_USED IN ('N6','N7','M1','S0','S2','S3') THEN 'N6'
-WHEN FX_SEGMENT_USED IN ('N0','P0','S1') AND FEE_SEGMENT_USED  = 'L0' THEN 'N0'
-WHEN FX_SEGMENT_USED IN ('N6','N7','M1','S0','S2','S3') AND FEE_SEGMENT_USED  = 'L0' THEN 'N6'
-ELSE 'L0'
-END AS PRICING_SEGMENT
-    
-FROM
-    WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW A
-WHERE
-    SNDCOUNTRY_CODE in ('AU','NZ')
-AND
-    DATE(RCVPAYING_DATETIME)>='2024-07-01'
-AND
-    DATE(RCVPAYING_DATETIME)<='2025-06-30';
---AND
-   -- SNDCUSTOMER_KEY in (select distinct sndcustomer_key from AU_NZ_R12_CUSTOMERS_L0_PRICING);
-
-
-select count(*),count(distinct sndcustomer_key) from CAR_574_AU_NZ_R12_ACTIVE_TXN_BASE;--6,413,320	634,329
-
-
-
-
-
-select * from CAR_574_AU_NZ_R12_ACTIVE_TXN_BASE limit 100;
-
-select
-    PRICING_SEGMENT,
-    COUNT(*),
-    COUNT(DISTINCT SNDCUSTOMER_KEY)
-FROM
-    CAR_574_AU_NZ_R12_ACTIVE_TXN_BASE
-GROUP BY 1;
-
-
-select
-    SNDCOUNTRY_CODE,
-    COUNT(*),
-    COUNT(DISTINCT SNDCUSTOMER_KEY)
-FROM
-    CAR_574_AU_NZ_R12_ACTIVE_TXN_BASE
-GROUP BY 1;
-
-
-
-CREATE OR REPLACE TABLE CAR_574_AU_NZ_R12_ACTIVE_CUST_SEGMENT_LEVEL_DIGITAL_ONLY_L0 AS 
-SELECT
-    *,
-    CASE WHEN RETAIL_TXN>0 and DIGITAL_TXN>0 THEN 'OMNI_CUST'
-    WHEN RETAIL_TXN>0 and DIGITAL_TXN=0 THEN 'RETAIL_ONLY'
-    WHEN RETAIL_TXN=0 and DIGITAL_TXN>0 THEN 'DIGITAL_ONLY'
-    WHEN RETAIL_TXN=0 and DIGITAL_TXN=0 THEN 'R12_INACTIVE'
-    ELSE 'OTHERS' END AS NATIVE_CHANNEL
-FROM
-    (
-select
-    SNDCUSTOMER_KEY,
-    SEND_COUNTRY_NAME,
-    --'L0' as PRICING_SEGMENT,
-    COUNT(TXN_ID) as TOTAL_TXN,
-    COUNT(case when TRANSACTION_CHANNEL='RETAIL' THEN TXN_ID END) as RETAIL_TXN,
-    COUNT(case when TRANSACTION_CHANNEL='DIGITAL' THEN TXN_ID END) as DIGITAL_TXN,
-    SUM(SNDPRINCIPAL_AMOUNT) as TOTAL_PRINCIPAL
-
-    
-FROM
-    CAR_574_AU_NZ_R12_ACTIVE_TXN_BASE
-GROUP BY ALL
 )
-where NATIVE_CHANNEL='DIGITAL_ONLY' ;
+-- Final RNT customer table
+SELECT DISTINCT
+  rnt.ref_date,
+  rnt.customer_key,
+  rnt.country_code,
+  rnt.reg_month,
+  'Y' AS rnt_flag,
+ email_marketable,
+ sms_marketable
+FROM rnt_no_txn rnt;
 
-CREATE OR REPLACE TABLE CAR_574_AU_NZ_R12_ACTIVE_CUST_SEGMENT_LEVEL_DIGITAL_ONLY_L0_1 AS 
-select 
-    a.*,
-    case when B.SNDCUSTOMER_KEY is null then 'OTHERS' ELSE 'L0' END PRICING_SEGMENT
-FROM
-    CAR_574_AU_NZ_R12_ACTIVE_CUST_SEGMENT_LEVEL_DIGITAL_ONLY_L0 A
-LEFT JOIN
-    AU_NZ_R12_CUSTOMERS_L0_PRICING B
-ON
-    A.SNDCUSTOMER_KEY=B.SNDCUSTOMER_KEY;
+ 
+-----------------------------------------------------------------------------------
+-- STEP 2: Engagement + Corridor Customers Table
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS AS
+SELECT
+  e.sndcustomer_key                                AS customer_key,
+  e.country_code,
+  DATE_TRUNC('MONTH', e.mth_yr)                    AS ref_date,
+  DATE_TRUNC('MONTH', cm.first_registration_date)  AS reg_month,
+  e.r12_txns,
+  CASE WHEN e.r12_txns > 0 THEN 'Y' ELSE 'N' END   AS r12_active,
+  e.r6_txns,
+  CASE WHEN e.r6_txns = 0 AND e.r12_txns > 0 THEN 'Y' ELSE 'N' END AS active_churn_r7_r12,
+  e.pr12_txns,
+  e.ppr12_txns,
+  e.pppr12_txns,
+  CASE WHEN e.r12_txns = 0 AND (e.pr12_txns > 0 OR e.ppr12_txns > 0 OR e.pppr12_txns > 0) THEN 'Y' ELSE 'N' END AS lapsed_r12_plus,
+  e.email_marketable,
+  e.sms_marketable,
+  CASE WHEN e.R12_App_txns >0 THEN 'Y' ELSE 'N' END AS app_marketable_flag,
+  e.retail_digital_flag,
+  e.Web_App_Flag, 
+  e.r12_dominant_channel AS channel_dominance,
+-- Channel Native: 
+  CASE
+    WHEN e.retail_digital_flag = 'R12_INACTIVE' THEN 'R12 Inactive'
+    WHEN e.retail_digital_flag = 'Digital_only' THEN 'Digital Only'
+    WHEN e.retail_digital_flag = 'Retail_only' THEN 'Retail Only'
+    WHEN e.retail_digital_flag = 'Retail+Digital' THEN 'Retail + Digital'
+    ELSE 'Other'
+  END AS channel_native,
+  
+  d.dominant_corridor_name,
+  d.dominant_sndcountry_name,
+  d.dominant_rcvcountry_name,
+  d.dominant_pricing_channel,
+  'N' AS rnt_flag
+FROM WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL e
+JOIN SUMMARY_GEN.COUNTRY_VW c
+  ON e.country_code = c.country_code
+ AND c.super_region = 'LACA'
+LEFT JOIN WUDNA.CEX_SANDBOX.SK_DOMINANCY_METRICS d
+  ON e.sndcustomer_key = d.sndcustomer_key
+ AND e.mth_yr = d.mth_yr 
+LEFT JOIN SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm               
+  ON e.sndcustomer_key = cm.customer_key; 
+ 
+ 
+-----------------------------------------------------------------------------------
+-- STEP 3: Aggregate Engagement Customers
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_ENGAGEMENT_CUSTOMERS_AGG AS
+WITH corridor_ranked AS (
+  SELECT
+    ref_date,
+    dominant_corridor_name,
+    DENSE_RANK() OVER (
+      PARTITION BY ref_date
+      ORDER BY COUNT(DISTINCT customer_key) DESC
+    ) AS corridor_rank
+  FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS
+  GROUP BY ref_date, dominant_corridor_name
+),
+engaged AS (
+  SELECT
+     e.customer_key,
+    e.ref_date,
+    e.country_code,
+    e.r12_txns,
+    e.r6_txns,
+    e.pr12_txns,
+    e.ppr12_txns,
+    e.pppr12_txns,
+    e.dominant_sndcountry_name,
+    e.dominant_rcvcountry_name,
+    e.channel_dominance,
+    e.email_marketable,
+    e.sms_marketable,
+    e.retail_digital_flag,
+    e.Web_App_Flag,
+    e.channel_native,
+    e.rnt_flag,
+    e.r12_active,
+    e.active_churn_r7_r12,
+    e.lapsed_r12_plus,
+    CASE
+      WHEN cr.corridor_rank <= 11 THEN e.dominant_corridor_name
+      ELSE 'Others'
+    END AS corridor_bucket
+  FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS e
+  LEFT JOIN corridor_ranked cr
+    ON e.ref_date = cr.ref_date
+   AND e.dominant_corridor_name = cr.dominant_corridor_name
+)
+SELECT
+  ref_date,
+  country_code,
+  corridor_bucket,
+  dominant_sndcountry_name,
+  dominant_rcvcountry_name,
+  channel_dominance,
+  email_marketable,
+  sms_marketable,
+  retail_digital_flag,
+  Web_App_Flag,
+  channel_native,
+  rnt_flag,
+  r12_active,
+  active_churn_r7_r12,
+  lapsed_r12_plus,
+  COUNT(DISTINCT customer_key) AS customer_count,  
+  COALESCE(SUM(r12_txns), 0) AS total_r12_txns,
+  COALESCE(SUM(r6_txns), 0) AS total_r6_txns,
+  COALESCE(SUM(pr12_txns), 0) AS total_pr12_txns,
+  COALESCE(SUM(ppr12_txns), 0) AS total_ppr12_txns,
+  COALESCE(SUM(pppr12_txns), 0) AS total_pppr12_txns 
+FROM engaged
+GROUP BY
+  ALL;
+ 
+ 
+-----------------------------------------------------------------------------------
+-- STEP 4: Aggregate RNT Customers
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_RNT_CUSTOMERS_AGG AS
+SELECT
+  r.ref_date,
+  r.country_code,
+  'RNT_Only' AS corridor_bucket,
+  CAST(NULL AS VARCHAR) AS dominant_sndcountry_name,
+  CAST(NULL AS VARCHAR) AS dominant_rcvcountry_name,
+  'R12_Inactive' AS channel_dominance,
+  r.email_marketable,
+  r.sms_marketable,
+  'R12_INACTIVE' AS retail_digital_flag,
+  'R12_Inactive' AS Web_App_Flag,
+  'RNT' AS channel_native,
+  'Y' AS rnt_flag,
+  'N' AS r12_active,
+  'N' AS active_churn_r7_r12,
+  'N' AS lapsed_r12_plus,
+  COUNT(DISTINCT r.customer_key) AS customer_count,
+  0 AS total_r12_txns,
+  0 AS total_r6_txns,
+  0 AS total_pr12_txns,
+  0 AS total_ppr12_txns
+FROM LACA_RNT_CUSTOMERS r
+GROUP BY r.ref_date,
+  r.country_code,
+  r.email_marketable,
+  r.sms_marketable;
+ 
+ 
+-----------------------------------------------------------------------------------
+-- STEP 5A: Dimension Base
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_CUSTOMER_DIMENSIONS AS
+SELECT DISTINCT
+  ref_date, country_code, corridor_bucket, dominant_sndcountry_name, dominant_rcvcountry_name,
+  channel_dominance, email_marketable, sms_marketable,
+  retail_digital_flag, Web_App_Flag, channel_native,
+  rnt_flag, r12_active, active_churn_r7_r12, lapsed_r12_plus
+FROM LACA_ENGAGEMENT_CUSTOMERS_AGG
+UNION
+SELECT DISTINCT
+  ref_date, country_code, corridor_bucket, dominant_sndcountry_name, dominant_rcvcountry_name,
+  channel_dominance, email_marketable, sms_marketable,
+  retail_digital_flag, Web_App_Flag, channel_native,
+  rnt_flag, r12_active, active_churn_r7_r12, lapsed_r12_plus
+FROM LACA_RNT_CUSTOMERS_AGG;
 
+ 
+SELECT *,
+    TOTAL_R12_TXNS,
+    TOTAL_R6_TXNS,
+    TOTAL_PR12_TXNS,
+    TOTAL_PPR12_TXNS,
+    TOTAL_PPPR12_TXNS,
 
-select * from CAR_574_AU_NZ_R12_ACTIVE_CUST_SEGMENT_LEVEL_DIGITAL_ONLY_L0_1;
-
-select NATIVE_CHANNEL, count(*), count(distinct sndcustomer_key) from CAR_574_AU_NZ_R12_ACTIVE_CUST_SEGMENT_LEVEL_DIGITAL_ONLY_L0 group by 1;--292,331	292,085
-
-select * from CAR_574_AU_NZ_R12_ACTIVE_CUST_SEGMENT_LEVEL_DIGITAL_ONLY_L0 where NATIVE_CHANNEL='OMNI_CUST' and RETAIL_TXN>0 and DIGITAL_TXN=0;--OMNI_CUST
-
-select * from CAR_574_AU_NZ_R12_ACTIVE_CUST_SEGMENT_LEVEL_DIGITAL_ONLY_L0 where sndcustomer_key in ('4000000000077050236');
-
-
-
-create or replace table CAR_574_AU_NZ_CUSTOMER_BASE as 
-select
-    SNDCUSTOMER_KEY as CUSTOMER_KEY,
-    RETAIL_DIGITAL_FLAG as NATIVE_CHANNEL,
-    COUNTRY_CODE,
-    --COUNTRY_NAME,
-    case when R12_APP_TXNS>=1 then 'YES' ELSE 'NO' END APP_MARKETABLE_FLAG,
-    --IPF_BEATS,
-    --RFM_PERSONA,
-    IPF,
-    --RFM_PERSONA,
-    CASE WHEN CHURN_DECILE IN (1,2,3,4,5,6,7,8) THEN '2.Low-Risk' 
-       WHEN CHURN_DECILE IN (9,10)  THEN '1.High-Risk'
-     ELSE 
-           CASE WHEN IPF_BEATS IN ('On Schedule','Ahead Schedule','1 beat late','2 beats late') THEN '2.Low-Risk'
-                WHEN IPF_BEATS IN ('3 beats late','4 beats late','5 beats plus late') THEN '1.High-Risk'
-                ELSE 
-                     CASE WHEN RFM_PERSONA IN ('7.LOST','5.SPORADICS','6.SLIPPING') THEN '1.High-Risk'
-                          WHEN RFM_PERSONA IN ('4.WHALES','2.LOYALS','1.UBER','3.PROMISING','8.ONE AND DONES') THEN '2.Low-Risk'
-                     ELSE '4: NA' END
-                END
-END AS CHURN_RISK
+    CASE
+        WHEN TOTAL_R12_TXNS = 0 AND TOTAL_PR12_TXNS > 0 AND TOTAL_PPR12_TXNS = 0 AND TOTAL_PPPR12_TXNS = 0 THEN 'R13-R24 Active'
+        WHEN TOTAL_R12_TXNS = 0 AND TOTAL_PR12_TXNS = 0 AND TOTAL_PPR12_TXNS > 0 AND TOTAL_PPPR12_TXNS = 0 THEN 'R25-R36 Active'
+        WHEN TOTAL_R12_TXNS = 0 AND TOTAL_PR12_TXNS = 0 AND TOTAL_PPR12_TXNS = 0 AND TOTAL_PPPR12_TXNS > 0 THEN 'R37-R48 Active'
+        WHEN TOTAL_R12_TXNS = 0 AND TOTAL_PR12_TXNS > 0 AND TOTAL_PPR12_TXNS > 0 AND TOTAL_PPPR12_TXNS = 0 THEN 'R13-R36 Active'
+        WHEN TOTAL_R12_TXNS = 0 AND TOTAL_PR12_TXNS = 0 AND TOTAL_PPR12_TXNS > 0 AND TOTAL_PPPR12_TXNS > 0 THEN 'R24-R48 Active'
+        WHEN TOTAL_R12_TXNS = 0 AND TOTAL_PR12_TXNS > 0 AND TOTAL_PPR12_TXNS > 0 AND TOTAL_PPPR12_TXNS > 0 THEN 'R13-R48 Active'
+        WHEN TOTAL_R12_TXNS = 0 AND TOTAL_PR12_TXNS > 0 AND TOTAL_PPR12_TXNS = 0 AND TOTAL_PPPR12_TXNS > 0 THEN 'R13-R24 Active and R36-R48 Active'
+        else 'OTHER' end as LEVEL3_BREAKDOWN
     
-FROM
-   --WUDNA.CEX_SANDBOX.CUSTOMER_ENGAGEMENT_FRAMEWORK_CUST_LEVEL
-   WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL
-WHERE
-    COUNTRY_CODE in ('AU','NZ')
-AND
-  NATIVE_CHANNEL in ('Digital Only')  
-AND
-    MTH_YR='2025-06-01'
-AND
-    SNDCUSTOMER_KEY in (select distinct sndcustomer_key from CAR_574_AU_NZ_R12_ACTIVE_CUST_SEGMENT_LEVEL_DIGITAL_ONLY_L0_1);
+FROM LACA_CUSTOMER_SEGMENTATION_FINAL 
+WHERE 
+    TOTAL_R12_TXNS = 0
+LIMIT 100;
 
-SELECT MAX(MTH_YR) FROM  WUDNA.CEX_SANDBOX.CUSTOMER_ENGAGEMENT_FRAMEWORK_CUST_LEVEL; --2025-06-01
+SELECT 
+LACA_CUSTOMER_SEGMENTATION_FINAL;
+ 
+-----------------------------------------------------------------------------------
+-- STEP 5B: Final Reporting Table
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_CUSTOMER_SEGMENTATION_FINAL AS
+SELECT
+  a.ref_date,
+  a.country_code,
+  cv.COUNTRY_NAME AS laca_country,
+  a.corridor_bucket,
+  a.dominant_sndcountry_name,
+  a.dominant_rcvcountry_name,
+  a.channel_dominance,
+  a.email_marketable,
+  a.sms_marketable,
+  a.retail_digital_flag,
+  a.Web_App_Flag,
+  a.channel_native,
+  a.rnt_flag,
+  a.r12_active,
+  a.active_churn_r7_r12,
+  a.lapsed_r12_plus,
+  
+  -- Keep engagement and RNT separate
+  COALESCE(b.customer_count, 0) AS engagement_customer_count,
+  COALESCE(b.total_r12_txns, 0) AS total_r12_txns,
+  COALESCE(b.total_r6_txns, 0) AS total_r6_txns,
+  COALESCE(b.total_pr12_txns, 0) AS total_pr12_txns,
+  COALESCE(b.total_ppr12_txns, 0) AS total_ppr12_txns,
+  COALESCE(b.total_pppr12_txns, 0) AS total_pppr12_txns, 
+  
+  COALESCE(c.customer_count, 0) AS rnt_customer_count,
+  
+  -- Total uses the appropriate count based on rnt_flag
+  CASE
+    WHEN a.rnt_flag = 'Y' THEN COALESCE(c.customer_count, 0)
+    ELSE COALESCE(b.customer_count, 0)
+  END AS customer_count,  
+  
+  COALESCE(b.customer_count, 0) + COALESCE(c.customer_count, 0) AS total_customer_count,
+  
+  -- Helper columns for Power BI
+  YEAR(a.ref_date) AS year,
+  MONTH(a.ref_date) AS month_number,
+  TO_CHAR(a.ref_date, 'YYYY-MM') AS year_month,
+  TO_CHAR(a.ref_date, 'Mon-YY') AS month_label,
+  
+  -- Audience Segmentation
+  CASE
+  WHEN a.r12_active = 'Y' THEN 'Active R1-R12'
+    WHEN a.rnt_flag = 'Y' THEN 'Registered Not Transacted'
+    WHEN a.active_churn_r7_r12 = 'Y' THEN 'Active Churn R7-R12'    
+    WHEN a.lapsed_r12_plus = 'Y' THEN 'Lapsed R12+'
+    ELSE 'Other'
+  END AS audience_segment, 
+  
+  -- Marketability Status
+  CASE
+    WHEN a.email_marketable = 'Y' AND a.sms_marketable = 'Y' THEN 'Email + SMS Marketable'
+    WHEN a.email_marketable = 'Y' THEN 'Email Marketable'
+    WHEN a.sms_marketable = 'Y' THEN 'SMS Marketable'
+    ELSE 'Non Marketable'
+  END AS marketability_segment,
 
+  -- Lapsed Breakdown (for decomposition)
+CASE
+  WHEN a.lapsed_r12_plus = 'Y' AND COALESCE(b.total_pr12_txns, 0) > 0 THEN 'PR12 Active (R13-R24)'
+  WHEN a.lapsed_r12_plus = 'Y' AND COALESCE(b.total_ppr12_txns, 0) > 0 THEN 'PPR12 Active (R25-R36)'
+  WHEN a.lapsed_r12_plus = 'Y' AND COALESCE(b.total_pppr12_txns, 0) > 0 THEN 'PPPR12 Active (R37-R48)'
+  ELSE NULL
+END AS lapsed_breakdown,
 
-select count(*), count(distinct CUSTOMER_KEY) from CAR_574_AU_NZ_CUSTOMER_BASE;--289,616	289,616
+-- Top-level breakdown
+CASE
+  WHEN a.rnt_flag = 'Y' THEN 'RNT Customers'
+  WHEN a.r12_active = 'Y' OR a.lapsed_r12_plus = 'Y' THEN 'Transacted Customers'
+  ELSE 'Other'
+END AS customer_type,
 
-select * from CAR_574_AU_NZ_CUSTOMER_BASE;
+-- Second-level breakdown for Transacted
+CASE
+  WHEN a.r12_active = 'Y' THEN 'Active R1-R12'
+  WHEN a.lapsed_r12_plus = 'Y' THEN 'Lapsed R12+'
+  WHEN a.r12_active = 'N' AND a.lapsed_r12_plus = 'N' AND a.rnt_flag = 'N' THEN 'Dormant/Never Transacted'
+  ELSE NULL
+END AS level2_engagement_status,
 
+-- Level 3a: Active Breakdown (only for Active R1-R12)
+-- CASE
+--   WHEN a.r12_active = 'Y' AND a.active_churn_r7_r12 = 'Y' THEN 'Churn R7-R12'
+--   WHEN a.r12_active = 'Y' AND a.active_churn_r7_r12 = 'N' THEN 'Active R1-R6'
+--   ELSE NULL
+-- END AS level3_active_breakdown,
 
-select * from CAR_574_AU_NZ_R12_ACTIVE_CUST_SEGMENT_LEVEL_DIGITAL_ONLY_L0;
+--Level 3b: Lapsed Breakdown (only for Lapsed R12+)
+-- CASE
+--   WHEN a.r12_active = 'Y' THEN
+--     CASE WHEN a.active_churn_r7_r12 = 'Y' THEN 'Churn R7-12' ELSE 'Active R1-6' END
+--   WHEN a.lapsed_r12_plus = 'Y' AND COALESCE(b.total_pr12_txns, 0) > 0 AND COALESCE(b.total_ppr12_txns, 0) = 0 AND COALESCE(b.total_pppr12_txns, 0) = 0
+--     THEN 'PR12 Active (13-24 months)'
+--   WHEN a.lapsed_r12_plus = 'Y' AND COALESCE(b.total_ppr12_txns, 0) > 0 AND COALESCE(b.total_pppr12_txns, 0) = 0 AND COALESCE(b.total_pr12_txns, 0) = 0
+--     THEN 'PPR12 Active (25-36 months)'
+--   WHEN a.lapsed_r12_plus = 'Y' AND COALESCE(b.total_pppr12_txns, 0) > 0  AND COALESCE(b.total_pr12_txns, 0) = 0 AND COALESCE(b.total_ppr12_txns, 0) = 0
+--     THEN 'PPPR12 Active (37-48 months)'
+--   ELSE NULL
+-- END AS level3_breakdown,
 
-select 289951-292331;
+CASE
+  WHEN a.r12_active = 'Y' THEN
+    CASE WHEN a.active_churn_r7_r12 = 'Y' THEN 'Churn R7-12' ELSE 'Active R1-6' END
+        WHEN B.TOTAL_R12_TXNS = 0 AND B.TOTAL_PR12_TXNS > 0 AND B.TOTAL_PPR12_TXNS = 0 AND B.TOTAL_PPPR12_TXNS = 0 THEN 'R13-R24 Active'
+        WHEN B.TOTAL_R12_TXNS = 0 AND B.TOTAL_PR12_TXNS = 0 AND B.TOTAL_PPR12_TXNS > 0 AND B.TOTAL_PPPR12_TXNS = 0 THEN 'R25-R36 Active'
+        WHEN B.TOTAL_R12_TXNS = 0 AND B.TOTAL_PR12_TXNS = 0 AND B.TOTAL_PPR12_TXNS = 0 AND B.TOTAL_PPPR12_TXNS > 0 THEN 'R37-R48 Active'
+        WHEN B.TOTAL_R12_TXNS = 0 AND B.TOTAL_PR12_TXNS > 0 AND B.TOTAL_PPR12_TXNS > 0 AND B.TOTAL_PPPR12_TXNS = 0 THEN 'R13-R36 Active'
+        WHEN B.TOTAL_R12_TXNS = 0 AND B.TOTAL_PR12_TXNS = 0 AND B.TOTAL_PPR12_TXNS > 0 AND B.TOTAL_PPPR12_TXNS > 0 THEN 'R25-R48 Active'
+        WHEN B.TOTAL_R12_TXNS = 0 AND B.TOTAL_PR12_TXNS > 0 AND B.TOTAL_PPR12_TXNS > 0 AND B.TOTAL_PPPR12_TXNS > 0 THEN 'R13-R48 Active'
+        WHEN B.TOTAL_R12_TXNS = 0 AND B.TOTAL_PR12_TXNS > 0 AND B.TOTAL_PPR12_TXNS = 0 AND B.TOTAL_PPPR12_TXNS > 0 THEN 'R13-R24 Active and R37-R48 Active'
+        else 'OTHER' end as LEVEL3_BREAKDOWN,
 
+--     CASE
+--   WHEN a.r12_active = 'Y' THEN
+--     CASE WHEN a.active_churn_r7_r12 = 'Y' THEN 'Churn R7-12' ELSE 'Active R1-6' END
+--   WHEN a.lapsed_r12_plus = 'Y' THEN
+--     CASE WHEN COALESCE(b.total_pr12_txns, 0) > 0 THEN 'PR12 Active (13-24 months)'  -- CHECK MOST RECENT FIRST
+-- WHEN COALESCE(b.total_ppr12_txns, 0) > 0 THEN 'PPR12 Active (25-36 months)'
+-- WHEN COALESCE(b.total_pppr12_txns, 0) > 0 THEN 'PPPR12 Active (37-48 months)'
+--     END
+--   ELSE NULL
+-- END AS level3_breakdown,
 
-CREATE OR REPLACE TABLE CAR_574_AU_NZ_R12_ACTIVE_CUST_LEVEL_DIGITAL_ONLY_WITH_IPF_RFM as 
-select
-    a.sndcustomer_key,
-    a.send_country_name,
-    a.pricing_segment,
-    a.total_txn,
-    a.total_principal,
-    a.native_channel,
-    --b.customer_key,
-    b.APP_MARKETABLE_FLAG,
-    b.IPF_BEATS,
-    b.RFM_PERSONA,
-    b.CHURN_RISK
-    
-FROM
-    CAR_574_AU_NZ_R12_ACTIVE_CUST_SEGMENT_LEVEL_DIGITAL_ONLY_L0_1 AS A
-INNER JOIN
-    CAR_574_AU_NZ_CUSTOMER_BASE B
-ON
-    A.SNDCUSTOMER_KEY=B.CUSTOMER_KEY;
-
-
-select count(*), count(distinct sndcustomer_key) from CAR_574_AU_NZ_R12_ACTIVE_CUST_LEVEL_DIGITAL_ONLY_WITH_IPF_RFM;--289,835	289,591
-
-select * from WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW limit 199;
-
-CREATE OR REPLACE TABLE CAR_574_AU_NZ_R12_ACTIVE_CUST_LEVEL_DIGITAL_ONLY_WITH_IPF_RFM_MARKETABLE_FLAG as 
-select
-    a.*,
-    b.customer_UMN,
-    case when b.MARKETING_FLAG='Y' and b.EMAIL_ADDRESS_ON_FILE_FLAG='Y' and b.OPT_EMAIL='I' then 'YES' ELSE 'NO' END AS EMAIL_MARKETABLE_FLAG, 
-    case when b.MARKETING_FLAG='Y' and b.mobile_number_on_file_flag='Y' and b.OPT_SMS='I' then 'YES' ELSE 'NO' END AS SMS_MARKETABLE_FLAG ,
-    b.GLOBAL_HOLDOUT,
-    case when a.app_marketable_flag='YES' or EMAIL_MARKETABLE_FLAG='YES' or SMS_MARKETABLE_FLAG='YES' THEN 'YES' ELSE 'NO' END AS MARKETABILITY_FLAG
-    
-FROM
-    CAR_574_AU_NZ_R12_ACTIVE_CUST_LEVEL_DIGITAL_ONLY_WITH_IPF_RFM A
-LEFT JOIN
-    WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW B
-ON
-    A.SNDCUSTOMER_KEY=B.CUSTOMER_KEY;
-
-
-select * from CAR_574_AU_NZ_R12_ACTIVE_CUST_LEVEL_DIGITAL_ONLY_WITH_IPF_RFM_MARKETABLE_FLAG;
-select * from WUDNA.CEX_SANDBOX.SK_CONSOLIDATED_PROPENSITY_SCORES limit 100;
-
-
-
-select * from 
-
-select
-    a.*,
-    B.R2D_DECILE,
-    B.R2D_SCORES
-FROM
-   CAR_574_AU_NZ_R12_ACTIVE_CUST_LEVEL_DIGITAL_ONLY_WITH_IPF_RFM_MARKETABLE_FLAG A
-LEFT JOIN
-   WUDNA.CEX_SANDBOX.SK_CONSOLIDATED_PROPENSITY_SCORES B
-ON
-    A.SNDCUSTOMER_KEY=B.SNDCUSTOMER_KEY;
-
---CUSTOMER LIST EXTRACTION
-
---AUSTRALIA HIGH CHURN DIGITAL ONLY L0 MARKETABLE CUSTOMERS 
-
-select 
-'@'|| SNDCUSTOMER_KEY as CUSTOMER_KEY, 
-SEND_COUNTRY_NAME, 
-PRICING_SEGMENT, 
-TOTAL_TXN, 
-TOTAL_PRINCIPAL as TOTAL_PRINCIPAL_AMT_AUD, 
-NATIVE_CHANNEL, 
-APP_MARKETABLE_FLAG, 
-IPF_BEATS, 
-RFM_PERSONA, 
-CHURN_RISK, 
-CUSTOMER_UMN, 
-EMAIL_MARKETABLE_FLAG, 
-SMS_MARKETABLE_FLAG, 
-GLOBAL_HOLDOUT, 
-MARKETABILITY_FLAG
-from 
-    CAR_574_AU_NZ_R12_ACTIVE_CUST_LEVEL_DIGITAL_ONLY_WITH_IPF_RFM_MARKETABLE_FLAG 
-where 
-    CHURN_RISK='1.High-Risk' 
-and SEND_COUNTRY_NAME='AUSTRALIA' 
-and PRICING_SEGMENT='L0' 
-and MARKETABILITY_FLAG='YES';
-
---AUSTRALIA LOW CHURN DIGITAL ONLY L0 MARKETABLE CUSTOMERS 
-
-select 
-'@'|| SNDCUSTOMER_KEY as CUSTOMER_KEY, 
-SEND_COUNTRY_NAME, 
-PRICING_SEGMENT, 
-TOTAL_TXN, 
-TOTAL_PRINCIPAL as TOTAL_PRINCIPAL_AMT_AUD, 
-NATIVE_CHANNEL, 
-APP_MARKETABLE_FLAG, 
-IPF_BEATS, 
-RFM_PERSONA, 
-CHURN_RISK, 
-CUSTOMER_UMN, 
-EMAIL_MARKETABLE_FLAG, 
-SMS_MARKETABLE_FLAG, 
-GLOBAL_HOLDOUT, 
-MARKETABILITY_FLAG
-from 
-    CAR_574_AU_NZ_R12_ACTIVE_CUST_LEVEL_DIGITAL_ONLY_WITH_IPF_RFM_MARKETABLE_FLAG 
-where 
-    CHURN_RISK='2.Low-Risk' 
-and SEND_COUNTRY_NAME='AUSTRALIA' 
-and PRICING_SEGMENT='L0' 
-and MARKETABILITY_FLAG='YES';
-
-
---NEW-ZEALAND HIGH CHURN DIGITAL ONLY L0 MARKETABLE CUSTOMERS
-select 
-'@'|| SNDCUSTOMER_KEY as CUSTOMER_KEY, 
-SEND_COUNTRY_NAME, 
-PRICING_SEGMENT, 
-TOTAL_TXN, 
-TOTAL_PRINCIPAL as TOTAL_PRINCIPAL_AMT_AUD, 
-NATIVE_CHANNEL, 
-APP_MARKETABLE_FLAG, 
-IPF_BEATS, 
-RFM_PERSONA, 
-CHURN_RISK, 
-CUSTOMER_UMN, 
-EMAIL_MARKETABLE_FLAG, 
-SMS_MARKETABLE_FLAG, 
-GLOBAL_HOLDOUT, 
-MARKETABILITY_FLAG
-from 
-    CAR_574_AU_NZ_R12_ACTIVE_CUST_LEVEL_DIGITAL_ONLY_WITH_IPF_RFM_MARKETABLE_FLAG 
-where 
-    CHURN_RISK='1.High-Risk' 
-and SEND_COUNTRY_NAME='NEW ZEALAND' 
-and PRICING_SEGMENT='L0' 
-and MARKETABILITY_FLAG='YES';
-
-
---NEW-ZEALAND LOW CHURN DIGITAL ONLY L0 MARKETABLE CUSTOMERS
-select 
-'@'|| SNDCUSTOMER_KEY as CUSTOMER_KEY, 
-SEND_COUNTRY_NAME, 
-PRICING_SEGMENT, 
-TOTAL_TXN, 
-TOTAL_PRINCIPAL as TOTAL_PRINCIPAL_AMT_AUD, 
-NATIVE_CHANNEL, 
-APP_MARKETABLE_FLAG, 
-IPF_BEATS, 
-RFM_PERSONA, 
-CHURN_RISK, 
-CUSTOMER_UMN, 
-EMAIL_MARKETABLE_FLAG, 
-SMS_MARKETABLE_FLAG, 
-GLOBAL_HOLDOUT, 
-MARKETABILITY_FLAG
-from 
-    CAR_574_AU_NZ_R12_ACTIVE_CUST_LEVEL_DIGITAL_ONLY_WITH_IPF_RFM_MARKETABLE_FLAG 
-where 
-    CHURN_RISK='2.Low-Risk' 
-and SEND_COUNTRY_NAME='NEW ZEALAND' 
-and PRICING_SEGMENT='L0' 
-and MARKETABILITY_FLAG='YES';
-
-
-
-
-select 
-* 
-from 
-    CAR_574_AU_NZ_R12_ACTIVE_CUST_LEVEL_DIGITAL_ONLY_WITH_IPF_RFM_MARKETABLE_FLAG 
-where 
-    CHURN_RISK='2.Low-Risk' 
-and SEND_COUNTRY_NAME='AUSTRALIA' 
-and PRICING_SEGMENT='L0' 
-and MARKETABILITY_FLAG='YES';
-    
-CREATE OR REPLACE TABLE CAR_574_AU_NZ_R12_ACTIVE_CUST_LEVEL_DIGITAL_ONLY_WITH_IPF_RFM_MARKETABLE_FLAG_DOMINANT_CORRIDOR_NZ_TO_IN_PH AS 
-select 
-    a.*,
-    b.dominant_corridor,
-    b.DOMINANT_SNDCOUNTRY_NAME,
-    b.dominant_rcvcountry_name
-from
-   CAR_574_AU_NZ_R12_ACTIVE_CUST_LEVEL_DIGITAL_ONLY_WITH_IPF_RFM_MARKETABLE_FLAG A
-LEFT JOIN
-    WUDNA.CEX_SANDBOX.SK_DOMINANCY_METRICS B
-ON
-    A.SNDCUSTOMER_KEY=B.SNDCUSTOMER_KEY
-where
-    B.MTH_YR='2025-06-01'
-AND
-    a.send_country_name in ('NEW ZEALAND')
-AND
-    b.dominant_corridor in ('NZ-PH','NZ-IN');
-
-
-select * from CAR_574_AU_NZ_R12_ACTIVE_CUST_LEVEL_DIGITAL_ONLY_WITH_IPF_RFM_MARKETABLE_FLAG_DOMINANT_CORRIDOR_NZ_TO_IN_PH where CHURN_RISK='1.High-Risk'
-and PRICING_SEGMENT='L0' and marketability_flag='YES';
-
-
-select
-    SEND_COUNTRY_NAME,
-    CHURN_RISK,
-    PRICING_SEGMENT,
-    COUNT(DISTINCT SNDCUSTOMER_KEY),
-    COUNT(SNDCUSTOMER_KEY)
-FROM
-    CAR_574_AU_NZ_R12_ACTIVE_CUST_LEVEL_DIGITAL_ONLY_WITH_IPF_RFM_MARKETABLE_FLAG_DOMINANT_CORRIDOR_NZ_TO_IN_PH
-where 
-    CHURN_RISK='1.High-Risk'
-GROUP BY ALL;
-
-
-CREATE OR REPLACE TABLE CAR_574_AU_NZ_R12_ACTIVE_CUST_LEVEL_DIGITAL_ONLY_WITH_IPF_RFM_MARKETABLE_FLAG_DOMINANT_CORRIDOR_AU_TO_IN_PH AS 
-select 
-    a.*,
-    b.dominant_corridor,
-    b.DOMINANT_SNDCOUNTRY_NAME,
-    b.dominant_rcvcountry_name
-from
-   CAR_574_AU_NZ_R12_ACTIVE_CUST_LEVEL_DIGITAL_ONLY_WITH_IPF_RFM_MARKETABLE_FLAG A
-LEFT JOIN
-    WUDNA.CEX_SANDBOX.SK_DOMINANCY_METRICS B
-ON
-    A.SNDCUSTOMER_KEY=B.SNDCUSTOMER_KEY
-where
-    B.MTH_YR='2025-06-01'
-AND
-    a.send_country_name in ('AUSTRALIA')
-AND
-    b.dominant_corridor in ('AU-PH','AU-IN');
-
-select * from CAR_574_AU_NZ_R12_ACTIVE_CUST_LEVEL_DIGITAL_ONLY_WITH_IPF_RFM_MARKETABLE_FLAG_DOMINANT_CORRIDOR_AU_TO_IN_PH where CHURN_RISK='1.High-Risk'
-and PRICING_SEGMENT='L0' and MARKETABILITY_FLAG='YES';--17k
-
-
-
-select
-    SEND_COUNTRY_NAME,
-    CHURN_RISK,
-    PRICING_SEGMENT,
-    COUNT(DISTINCT SNDCUSTOMER_KEY),
-    COUNT(SNDCUSTOMER_KEY)
-FROM
-    CAR_574_AU_NZ_R12_ACTIVE_CUST_LEVEL_DIGITAL_ONLY_WITH_IPF_RFM_MARKETABLE_FLAG_DOMINANT_CORRIDOR_AU_TO_IN_PH
-where 
-    CHURN_RISK='1.High-Risk'
-GROUP BY ALL;
+  
+  'LACA' AS region,
+  
+  -- Corridor Grouping
+  CASE
+    WHEN a.corridor_bucket = 'RNT_Only' THEN 'RNT Only'
+    WHEN a.corridor_bucket = 'Others' THEN 'Other Corridors'
+    ELSE a.corridor_bucket
+  END AS corridor_group
+FROM LACA_CUSTOMER_DIMENSIONS a
+LEFT JOIN SUMMARY_GEN.COUNTRY_VW cv
+  ON a.country_code = cv.country_code
+  AND cv.super_region = 'LACA'
+LEFT JOIN LACA_ENGAGEMENT_CUSTOMERS_AGG b
+  ON a.ref_date = b.ref_date
+  AND a.country_code = b.country_code
+  AND NVL(a.corridor_bucket, 'NA') = NVL(b.corridor_bucket, 'NA')
+  AND NVL(a.dominant_sndcountry_name, 'NA') = NVL(b.dominant_sndcountry_name, 'NA')
+  AND NVL(a.dominant_rcvcountry_name, 'NA') = NVL(b.dominant_rcvcountry_name, 'NA')
+  AND NVL(a.channel_dominance, 'NA') = NVL(b.channel_dominance, 'NA')
+  AND NVL(a.email_marketable, 'NA') = NVL(b.email_marketable, 'NA')
+  AND NVL(a.sms_marketable, 'NA') = NVL(b.sms_marketable, 'NA')
+  AND NVL(a.retail_digital_flag, 'NA') = NVL(b.retail_digital_flag, 'NA')
+  AND NVL(a.Web_App_Flag, 'NA') = NVL(b.Web_App_Flag, 'NA')
+  AND NVL(a.channel_native, 'NA') = NVL(b.channel_native, 'NA')
+  AND NVL(a.rnt_flag, 'NA') = NVL(b.rnt_flag, 'NA')
+  AND NVL(a.r12_active, 'NA') = NVL(b.r12_active, 'NA')
+  AND NVL(a.active_churn_r7_r12, 'NA') = NVL(b.active_churn_r7_r12, 'NA')
+  AND NVL(a.lapsed_r12_plus, 'NA') = NVL(b.lapsed_r12_plus, 'NA')
+LEFT JOIN LACA_RNT_CUSTOMERS_AGG c
+  ON a.ref_date = c.ref_date
+  AND a.country_code = c.country_code
+  AND NVL(a.corridor_bucket, 'NA') = NVL(c.corridor_bucket, 'NA')
+  AND NVL(a.dominant_sndcountry_name, 'NA') = NVL(c.dominant_sndcountry_name, 'NA')
+  AND NVL(a.dominant_rcvcountry_name, 'NA') = NVL(c.dominant_rcvcountry_name, 'NA')
+  AND NVL(a.channel_dominance, 'NA') = NVL(c.channel_dominance, 'NA')
+  AND NVL(a.email_marketable, 'NA') = NVL(c.email_marketable, 'NA')
+  AND NVL(a.sms_marketable, 'NA') = NVL(c.sms_marketable, 'NA')
+  AND NVL(a.retail_digital_flag, 'NA') = NVL(c.retail_digital_flag, 'NA')
+  AND NVL(a.Web_App_Flag, 'NA') = NVL(c.Web_App_Flag, 'NA')
+  AND NVL(a.channel_native, 'NA') = NVL(c.channel_native, 'NA')
+  AND NVL(a.rnt_flag, 'NA') = NVL(c.rnt_flag, 'NA')
+  AND NVL(a.r12_active, 'NA') = NVL(c.r12_active, 'NA')
+  AND NVL(a.active_churn_r7_r12, 'NA') = NVL(c.active_churn_r7_r12, 'NA')
+  AND NVL(a.lapsed_r12_plus, 'NA') = NVL(c.lapsed_r12_plus, 'NA')
+WHERE a.ref_date >= '2023-12-01';
