@@ -1,53 +1,6 @@
-I’m reaching out for a weekly data pull request for total digital new customers in the Greater Toronto Area in Canada.
-
-For context, we launched a large Out-Of-Home media buy that we haven’t done before and we’d like to measure the impact that it has on digital new customer acquisition.
-
- 
-
-The OOH campaign will be running from September 30 – November 30.
-
- 
-
-Could your team pull the following:
-
- 
-
-Pre-Campaign:
-
-Week 1: September 16 - 22
-
-Week 2: September 23 - 29
-
- 
-
-Campaign:
-
-Week 1: September 30 – October 6
-
-Week 2: October 7 - 13
-
-Week 3: October 14 - 20
-
-Week 4: October 21 – 27
-
-Week 5: October 28 – November 3
-
-Week 6: November 4 - 10
-
-Week 7: November 11 – 17
-
-Week 8: November 18 – 24
-
-Week 9: November 25 – December 1
-
-However, I had a couple of questions regarding the measurement approach. From what I understand, you're considering a pre-post analysis. Would it also be possible to include a comparison with another city—ideally one similar in size to Toronto but without the billboard presence? This would help account for any seasonality effects and strengthen the analysis.
-
-Regarding the pre-post analysis, we could compare against Vancouver, British Columbia or Montreal, Quebec. 
-
- 
-
-Those are generally the other biggest cities in Canada but Toronto is the biggest. 
-
- 
-
-Another thought could be to compare Toronto against “Rest of Canada excluding Toronto” to see how the country average is performing vs the OOH heavy-up in Toronto. 
+select * from WUDNA.CEX_SANDBOX.EMAIL_MARKETABLE_CONTROL_CAR_688;
+select * from WUDNA.CEX_SANDBOX.APP_MARKETABLE_TEST_CAR_688;
+select * from WUDNA.CEX_SANDBOX.EMAIL_MARKETABLE_TEST_CAR_688;
+select * from WUDNA.CEX_SANDBOX.SMS_MARKETABLE_TEST_CAR_688;
+select * from WUDNA.CEX_SANDBOX.APP_MARKETABLE_CONTROL_CAR_688;
+select * from WUDNA.CEX_SANDBOX.SMS_MARKETABLE_CONTROL_CAR_688;
