@@ -1,23 +1,77 @@
-Below are the campaigns sent to test Preferred channel:
+-- Base Campaign Table with Test/Control and Channel Information
+CREATE OR REPLACE TABLE CAR_688_CAMPAIGN_BASE AS
+SELECT
+    a.CAMPAIGN_NAME,
+    a.CUSTOMER_KEY,
+    a.EVENT_CAPTURED_DT as communication_sent_date,
+    
+    -- Extract Channel from Campaign Name
+    CASE
+        
+        WHEN SUBSTR(ACTIVITY_CODE,3,1) = 'S' THEN 'SMS'
+        WHEN SUBSTR(ACTIVITY_CODE,3,1) = 'E' THEN 'EMAIL'
+        WHEN SUBSTR(ACTIVITY_CODE,3,1) IN ('P', 'I', 'C') THEN 'APP'
+        ELSE 'Unknown'
+    END AS Communication_Channel,
 
-Email 
+    CASE
+        
+        WHEN SUBSTR(ACTIVITY_CODE,3,1) = 'S' THEN 'SMS'
+        WHEN SUBSTR(ACTIVITY_CODE,3,1) = 'E' THEN 'EMAIL'
+        WHEN SUBSTR(ACTIVITY_CODE,3,1) = 'P' THEN 'Push'
+        WHEN SUBSTR(ACTIVITY_CODE,3,1) = 'I' THEN 'IN-APP'
+        WHEN SUBSTR(ACTIVITY_CODE,3,1) = 'C' THEN 'Content Card'
+        ELSE 'Unknown'
+    END AS Channel_Type,
 
-EMAIL_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericENControl
-
-EMAIL_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericENTest
-
- 
-
-SMS
-
-SMS_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericControl
-
-SMS_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericTest
-
- 
-
-App
-
-APP_Awareness_APN_CTADigital_EUtoIndiaDiwaliGeneric_Wave1EUGeneric-variant1
-
-APP_Awareness_APN_CTADigital_EUtoIndiaDiwaliGeneric_Wave1EUGeneric-control
+    
+    -- Extract Test/Control Flag from Campaign Name
+    CASE
+    WHEN CAMPAIGN_NAME ILIKE '%control%' OR CAMPAIGN_NAME ILIKE '%-control%' THEN 'Control'
+    ELSE 'Test'
+END AS test_control_flag,
+    
+    -- Communication Metrics
+    CASE
+        WHEN substr(a.ACTIVITY_CODE, 3, 1) = 'P' THEN a.TOTAL_EMAILS_SENT
+        ELSE 1
+    END as communications_sent,
+    
+    CASE
+        WHEN a.EMAILS_UN_DELIVERED > 0 THEN 1
+        ELSE 0
+    END as communication_undelivered,
+    
+    CASE
+        WHEN a.EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0 THEN 1
+        ELSE 0
+    END as communication_opened_7days,
+    
+    CASE
+        WHEN a.EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0 THEN 1
+        ELSE 0
+    END as communication_clicked_7days,
+    
+    -- Additional useful fields
+    a.COUNTRY,
+    a.ACTIVITY_CODE,
+    a.EMAIL_MARKETABLE,
+    a.SMS_MARKETABLE,
+    a.APP_MARKETABLE,
+    a.RFM_PERSONA,
+    a.CHANNEL_DOMINANCE,
+    a.CORRIDOR
+ 
+FROM SJ_BI_CAMPAIGN_WISE_EMAIL_COMMUNICATIONS_2_V2_MYWU_UPDATE_CUSTOMER_LEVEL a
+ 
+WHERE UPPER(CAMPAIGN_NAME) IN (
+    -- Email Campaigns
+    UPPER('EMAIL_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericENControl'),
+    UPPER('EMAIL_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericENTest'),
+    
+    -- SMS Campaigns
+    UPPER('SMS_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericControl'),
+    UPPER('SMS_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericTest'))
+    OR UPPER(CAMPAIGN_NAME) ilike any (UPPER('APP_Awareness_APN_CTADigital_EUtoIndiaDiwaliGeneric_Wave1EUGeneric-variant1%'),
+    UPPER('APP_Awareness_APN_CTADigital_EUtoIndiaDiwaliGeneric_Wave1EUGeneric-control%'))
+;
