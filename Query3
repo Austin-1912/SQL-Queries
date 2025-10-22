@@ -1,68 +1,376 @@
-CREATE OR REPLACE TABLE AU_Corridors AS
-WITH base_txn AS (
-    SELECT DISTINCT
-        t.SNDCUSTOMER_KEY,         -- 19-digit GID
-        UPPER(t.SNDCOUNTRY_CODE) AS sndcountry_code,
-        UPPER(t.RCVCOUNTRY_CODE) AS rcvcountry_code,
-        t.PRICING_CHANNEL,
-        CASE 
-            WHEN PRICING_CHANNEL IN ('TMT', 'POS', 'AIR') THEN 'Retail'
-            WHEN PRICING_CHANNEL IN ('WEB', 'APP') THEN 'Digital'
-            ELSE 'OTHER'
-        END AS Channel
-    FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t  
-    WHERE UPPER(t.SNDCOUNTRY_CODE) = 'AU'
-      AND UPPER(t.RCVCOUNTRY_CODE) IN ('PK', 'CO', 'NP')
-      -- AND DATE(t.RCVPAYING_DATETIME) >= '2024-10-01' 
-      -- AND DATE(t.RCVPAYING_DATETIME) <= '2025-09-30'
-),
+select * from WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW  limit 5 ;
+select * from WUDNA.SUMMARY_GEN.WUDNA_ACCOUNT_MASTER_VW limit 5;
+select * from	WUDNA.CEX_SANDBOX.SK_DOMINANCY_METRICS limit 5 ;
+select * from WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW limit 5;
+select  count(distinct sndcustomer_key), count(*) from WUDATA_CDO_AIML.SHARE_SECURE.RFM_R12_TXN_CUST_SCORED_SECURED ;
 
-app_flag AS (
-    SELECT
-       DISTINCT SNDCUSTOMER_KEY
-    FROM base_txn
-    WHERE PRICING_CHANNEL = 'APP'
-    GROUP BY SNDCUSTOMER_KEY
-)
 
-SELECT DISTINCT
-    b.SNDCUSTOMER_KEY AS gid_customer_key,
-    cm.customer_umn    AS umn_customer_key,
-    b.sndcountry_code,
-    b.rcvcountry_code,
+// base table
+create or replace table car_672_base as 
+select 
+    distinct a.sndcustomer_key, 
+    case when dominant_pricing_channel in ('APP', 'WEB') then 'digital'
+        when dominant_pricing_channel in ('POS', 'TMT', 'AIR') then 'retail'
+        else 'NA' end dominant_pricing_channel,
+    dominant_sndcountry_name,
+    c.global_holdout
+from WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW a
+left join WUDNA.CEX_SANDBOX.SK_DOMINANCY_METRICS b
+on a.sndcustomer_key = b.sndcustomer_key and mth_yr = '2025-08-01'
+left join WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
+on a.sndcustomer_key = c.customer_key
+where sndcountry_code in ('AT','BE','DK','FR','DE','GB','IE','IT','NL','NO','PT','ES','SE','CH')
+and rcv_country_name = 'INDIA'
+and rcvpaying_datetime >= '2024-09-29'
+and rcvpaying_datetime < '2025-09-29' ;
+
+select * from car_672_base; -- 369,611
+
+
+select EMAIL_MARKETABLE, SMS_MARKETABLE, APP_MARKETABLE, 
+count(distinct customer_key)
+ from car_672_base a 
+left join yg_preferred_channel_cust_final b
+on a.sndcustomer_key = b.customer_key
+group by all
+;
+
+select * from yg_preferred_channel_cust_final limit 50;
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+// email marketable table
+create or replace table car_672_email as
+select a.*, b.*, c.rfm_persona, d.customer_umn
+from car_672_base a 
+left join yg_preferred_channel_cust_final b
+on a.sndcustomer_key = b.customer_key
+left join WUDATA_CDO_AIML.SHARE_SECURE.RFM_R12_TXN_CUST_SCORED_SECURED c
+on a.sndcustomer_key = c.sndcustomer_key
+where EMAIL_MARKETABLE = 'Y';
+
+
+
+
+select count(distinct sndcustomer_key) from car_672_email; -- 69,641  ;
+
+
+// email only stratification
+create or replace table car_672_email_only_customers as
+select
+    '@' || sndcustomer_key   sndcustomer_key,
+    dominant_sndcountry_name,
+    rfm_persona,
+    DOMINANT_PRICING_CHANNEL,
+    global_holdout,
+    case
+        when (row_number() over(partition by dominant_sndcountry_name, rfm_persona, DOMINANT_PRICING_CHANNEL order by sndcustomer_key)) % 2 = 0 then 'test'
+        else 'control' end test_control_flag
+        
+    -- count(distinct CUSTOMER_KEY) total_cust,
+    -- count(distinct case when to_number(CUSTOMER_KEY) % 2 = 0 then CUSTOMER_KEY end) Even_Cust,
+    -- count(distinct case when to_number(CUSTOMER_KEY) % 2 = 1 then CUSTOMER_KEY end) Odd_Cust
+from car_672_email
+where EMAIL_MARKETABLE = 'Y'
+and SMS_MARKETABLE = 'N'
+and APP_MARKETABLE = 'N' -- 8,979
+;
+
+-- select    
+--     dominant_sndcountry_name,
+--     rfm_persona,
+--     DOMINANT_PRICING_CHANNEL,
+--     test_control_flag,
+--     count(distinct sndcustomer_key)
+--     from t1 group by all 
+--     order by 1,2,3,4
+;  
+
+
+
+// email + sms / app  marketable and preferred channel = email
+create or replace table car_672_Multichannel_Email_Preferred_customers as
+with t1 as (
+select *,
+
+    row_number() over(partition by  dominant_sndcountry_name, rfm_persona, DOMINANT_PRICING_CHANNEL order by sndcustomer_key) rn,
+    count(sndcustomer_key) over(partition by  dominant_sndcountry_name, rfm_persona, DOMINANT_PRICING_CHANNEL order by sndcustomer_key  RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rn_sum
     
+from car_672_email
+where EMAIL_MARKETABLE = 'Y'
+and (SMS_MARKETABLE = 'Y' or APP_MARKETABLE = 'Y')
+and preferred_channel = 'Email' 
+order by     COUNTRY_NAME,    rfm_persona,    DOMINANT_PRICING_CHANNEL, rn)
 
-    -- Marketability Flags
-    CASE 
-        WHEN cm.marketing_flag = 'Y' AND cm.email_address_on_file_flag = 'Y' AND cm.opt_email = 'I' THEN 'Y'
-        ELSE 'N'
-    END AS email_marketability_flag,
-
-    CASE 
-        WHEN cm.marketing_flag = 'Y' AND cm.mobile_number_on_file_flag = 'Y' AND cm.opt_sms = 'I' THEN 'Y'
-        ELSE 'N'
-    END AS sms_marketability_flag,
-
-    CASE WHEN af.SNDCUSTOMER_KEY IS NOT NULL THEN 'Y' ELSE 'N' END AS App_Marketability_Flag,
-    CASE 
-        WHEN email_marketability_flag = 'Y' OR sms_marketability_flag = 'Y' OR af.SNDCUSTOMER_KEY IS NOT NULL THEN 'Y' ELSE 'N' END AS MARKETABILITY_FLAG
-
-FROM base_txn b
-JOIN SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
-  ON b.SNDCUSTOMER_KEY = cm.customer_key
-LEFT JOIN app_flag af
-  ON b.SNDCUSTOMER_KEY = af.SNDCUSTOMER_KEY;
+select 
+    '@' || sndcustomer_key   sndcustomer_key,
+    dominant_sndcountry_name,
+    rfm_persona,
+    DOMINANT_PRICING_CHANNEL,
+    global_holdout,
+    case when rn <= rn_sum * 0.8 then 'test' else 'control' end test_control_flag
+from t1 
+group by ALL
+; -- 26,301
 
 
-  
----------------------------------------------------------------------------------------------------------------------
-  -- SELECT COUNT(gid_customer_key), COUNT(DISTINCT gid_customer_key) FROM AU_IN_Corridor;
-  -- select COUNT(marketability_flag) from NZ_IN_CORRIDOR Group by marketability_flag having marketability_flag = 'Y';
-  
-  SELECT '@' || GID_CUSTOMER_KEY AS GID,
-         '@' || UMN_CUSTOMER_KEY AS UMN,
-         email_marketability_flag,
-         sms_marketability_flag,
-         App_Marketability_Flag,
-         MARKETABILITY_FLAG,
-         FROM AU_Corridors;
+// email + sms / app marketable and preferred channel = sms / app
+create or replace table car_672_Multichannel_Other_Preferred_customers as
+select 
+    '@' || sndcustomer_key   sndcustomer_key,
+    dominant_sndcountry_name,
+    rfm_persona,
+    DOMINANT_PRICING_CHANNEL,
+    global_holdout,
+    'control' test_control_flag
+from car_672_email
+where EMAIL_MARKETABLE = 'Y'
+and (SMS_MARKETABLE = 'Y' or APP_MARKETABLE = 'Y')
+and preferred_channel in ('APP', 'SMS') ; -- 34,361
+
+
+// final email table
+create or replace table car_672_Final_Email_Campaigns as
+Select * from car_672_email_only_customers
+union 
+Select * from car_672_Multichannel_Email_Preferred_customers
+Union 
+Select a.* from car_672_Multichannel_Other_Preferred_customers a;
+
+
+// validation
+Select 
+    test_control_flag,
+    b.preferred_channel,
+    a.global_holdout,
+    count(*),
+    count(distinct a.sndcustomer_key)  
+from car_672_Final_Email_Campaigns a
+left outer join car_672_email b on a.sndcustomer_key = '@' || b.sndcustomer_key
+group by all 
+order by 1,2;
+
+
+//final output
+Select * from car_672_Final_Email_Campaigns a where test_control_flag='test';
+Select * from car_672_Final_Email_Campaigns a where test_control_flag='control';
+
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+//sms marketable table
+create or replace table car_672_sms as
+select a.*, b.*, c.rfm_persona
+from car_672_base a 
+left join yg_preferred_channel_cust_final b
+on a.sndcustomer_key = b.customer_key
+left join WUDATA_CDO_AIML.SHARE_SECURE.RFM_R12_TXN_CUST_SCORED_SECURED c
+on a.sndcustomer_key = c.sndcustomer_key
+where SMS_MARKETABLE = 'Y';
+
+select * from car_672_sms; -- 95,004
+
+
+// sms only stratification
+create or replace table car_672_sms_only_customers as
+select
+    '@' || sndcustomer_key   sndcustomer_key,
+    dominant_sndcountry_name,
+    rfm_persona,
+    DOMINANT_PRICING_CHANNEL,
+    global_holdout,
+    case
+        when (row_number() over(partition by dominant_sndcountry_name, rfm_persona, DOMINANT_PRICING_CHANNEL order by sndcustomer_key )) % 2 = 0 then 'test'
+        else 'control' end test_control_flag
+        
+    -- count(distinct CUSTOMER_KEY) total_cust,
+    -- count(distinct case when to_number(CUSTOMER_KEY) % 2 = 0 then CUSTOMER_KEY end) Even_Cust,
+    -- count(distinct case when to_number(CUSTOMER_KEY) % 2 = 1 then CUSTOMER_KEY end) Odd_Cust
+from car_672_sms
+where EMAIL_MARKETABLE = 'N'
+and SMS_MARKETABLE = 'Y'
+and APP_MARKETABLE = 'N'; -- 40,606
+
+
+// sms + email / app marketable and preferred channel = sms
+create table car_672_Multichannel_sms_Preferred_customers as
+with t1 as (
+select *,
+    row_number() over(partition by  dominant_sndcountry_name, rfm_persona, DOMINANT_PRICING_CHANNEL order by sndcustomer_key) rn,
+    count(sndcustomer_key) over(partition by  dominant_sndcountry_name, rfm_persona, DOMINANT_PRICING_CHANNEL order by sndcustomer_key  RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rn_sum
+from car_672_sms
+where SMS_MARKETABLE = 'Y'
+and (EMAIL_MARKETABLE = 'Y' or APP_MARKETABLE = 'Y')
+and preferred_channel = 'SMS' 
+order by     COUNTRY_NAME,    rfm_persona,    DOMINANT_PRICING_CHANNEL, rn)
+
+select 
+    '@' || sndcustomer_key   sndcustomer_key,
+    dominant_sndcountry_name,
+    rfm_persona,
+    DOMINANT_PRICING_CHANNEL,
+    global_holdout,
+    case when rn <= rn_sum * 0.8 then 'test' else 'control' end test_control_flag
+from t1 ; --481
+
+
+// sms + email / app marketable and preferred channel = email / app
+create table sms_others_marketable_preferred_others as
+select 
+    '@' || sndcustomer_key   sndcustomer_key,
+    dominant_sndcountry_name,
+    rfm_persona,
+    DOMINANT_PRICING_CHANNEL,
+    global_holdout,
+    'control' test_control_flag
+from car_672_sms
+where SMS_MARKETABLE = 'Y'
+and (EMAIL_MARKETABLE = 'Y' or APP_MARKETABLE = 'Y')
+and preferred_channel in ('Email', 'APP') ; -- 53,917
+
+
+// sms_final table
+create table car_672_final_sms_campaigns as 
+select * from car_672_sms_only_customers
+union
+select * from car_672_Multichannel_sms_Preferred_customers
+union
+select * from sms_others_marketable_preferred_others;
+
+// validation
+Select 
+    test_control_flag,
+    b.preferred_channel,
+    a.global_holdout,
+    count(*),
+    count(distinct a.sndcustomer_key)  
+from car_672_final_sms_campaigns a
+left outer join car_672_sms b on a.sndcustomer_key = '@' || b.sndcustomer_key
+group by all 
+order by 1,2;
+
+
+//final output
+Select * from car_672_final_sms_campaigns a where test_control_flag='test';
+Select * from car_672_final_sms_campaigns a where test_control_flag='control';
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+// app marketable
+create or replace table car_672_app as
+select a.*, b.*, c.rfm_persona, customer_umn
+from car_672_base a 
+left join yg_preferred_channel_cust_final b
+on a.sndcustomer_key = b.customer_key
+left join WUDATA_CDO_AIML.SHARE_SECURE.RFM_R12_TXN_CUST_SCORED_SECURED c
+on a.sndcustomer_key = c.sndcustomer_key
+left join WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW d
+on a.sndcustomer_key = d.customer_key
+where APP_MARKETABLE = 'Y';
+
+
+select count(distinct sndcustomer_key), count(distinct customer_umn) from car_672_app ; -- 79,346   78,538
+
+
+// app only stratification
+create or replace table car_672_app_only_customers as 
+select
+    '@' || sndcustomer_key   sndcustomer_key,
+    customer_umn,
+    dominant_sndcountry_name,
+    rfm_persona,
+    DOMINANT_PRICING_CHANNEL,
+    global_holdout,
+    case
+        when (row_number() over(partition by dominant_sndcountry_name, rfm_persona, DOMINANT_PRICING_CHANNEL order by sndcustomer_key)) % 2 = 0 then 'test'
+        else 'control' end test_control_flag
+        
+    -- count(distinct CUSTOMER_KEY) total_cust,
+    -- count(distinct case when to_number(CUSTOMER_KEY) % 2 = 0 then CUSTOMER_KEY end) Even_Cust,
+    -- count(distinct case when to_number(CUSTOMER_KEY) % 2 = 1 then CUSTOMER_KEY end) Odd_Cust
+from car_672_app
+where EMAIL_MARKETABLE = 'N'
+and SMS_MARKETABLE = 'N'
+and APP_MARKETABLE = 'Y'; -- 41,522
+
+
+
+// app + email / sms marketable and preferred channel = app
+create or replace table car_672_multichannel_preferred_app_customers as 
+with t1 as (
+select *,
+    row_number() over(partition by  dominant_sndcountry_name, rfm_persona, DOMINANT_PRICING_CHANNEL order by sndcustomer_key) rn,
+    count(sndcustomer_key) over(partition by  dominant_sndcountry_name, rfm_persona, DOMINANT_PRICING_CHANNEL order by sndcustomer_key  RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rn_sum
+from car_672_app
+where APP_MARKETABLE = 'Y'
+and (EMAIL_MARKETABLE = 'Y' or SMS_MARKETABLE = 'Y')
+and preferred_channel = 'APP'
+order by     COUNTRY_NAME,    rfm_persona,    DOMINANT_PRICING_CHANNEL, rn)
+
+select 
+    '@' || sndcustomer_key   sndcustomer_key,
+    customer_umn,
+    dominant_sndcountry_name,
+    rfm_persona,
+    DOMINANT_PRICING_CHANNEL,
+    global_holdout,
+    case when rn <= rn_sum * 0.8 then 'test' else 'control' end test_control_flag
+from t1 ; -- 36,000
+
+
+// app + email / sms marketable and preferred channel = email /sms
+create or replace table car_672_app_others_preferred_others_customers as
+select 
+    '@' || sndcustomer_key   sndcustomer_key,
+    customer_umn,
+    dominant_sndcountry_name,
+    rfm_persona,
+    DOMINANT_PRICING_CHANNEL,
+    global_holdout,
+    'control' test_control_flag
+from car_672_app
+where APP_MARKETABLE = 'Y'
+and (EMAIL_MARKETABLE = 'Y' or SMS_MARKETABLE = 'Y')
+and preferred_channel in ('Email', 'SMS') ;  -- 1,824
+
+
+// final app table
+create or replace table car_672_final_app_campaigns as
+select * from car_672_app_only_customers
+union
+select * from car_672_multichannel_preferred_app_customers
+union
+select * from car_672_app_others_preferred_others_customers;
+
+
+// validation
+Select 
+    test_control_flag,
+    b.preferred_channel,
+    a.global_holdout,
+    count(*),
+    count(distinct a.sndcustomer_key)  
+from car_672_final_app_campaigns a
+left outer join car_672_app b on a.sndcustomer_key = '@' || b.sndcustomer_key
+group by all 
+order by 1,2;
+
+
+// final output
+select * from car_672_final_app_campaigns where test_control_flag = 'test';
+select * from car_672_final_app_campaigns where test_control_flag = 'control';
+
+
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
