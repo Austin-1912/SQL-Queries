@@ -1,12 +1,23 @@
-SJ_BI_CAMPAIGN_WISE_EMAIL_COMMUNICATIONS_2_V2_MYWU_UPDATE_CUSTOMER_LEVEL
+Below are the campaigns sent to test Preferred channel:
 
-substr(activity_code,3,1) as channel,
- 
-SUM(Case when Channel = 'P' THEN (TOTAL_EMAILS_SENT) ELSE 1 END) as communications_sent,
+Email 
 
-count(case when EMAILS_UN_DELIVERED > 0 then 1 end) as Communications_undelivered,
- 
-count(case when EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0 then 1 end) as communications_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION,
+EMAIL_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericENControl
 
-count(case when EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0  then 1 end) as communications_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION,
- 
+EMAIL_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericENTest
+
+ 
+
+SMS
+
+SMS_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericControl
+
+SMS_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericTest
+
+ 
+
+App
+
+APP_Awareness_APN_CTADigital_EUtoIndiaDiwaliGeneric_Wave1EUGeneric-variant1
+
+APP_Awareness_APN_CTADigital_EUtoIndiaDiwaliGeneric_Wave1EUGeneric-control
