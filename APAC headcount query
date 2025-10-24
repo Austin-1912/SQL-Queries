@@ -1,544 +1,91 @@
-ALTER TABLE WUDNA.CEX_SANDBOX.EMAIL_MARKETABLE_Test1_CAR_688
-RENAME TO WUDNA.CEX_SANDBOX.EMAIL_MARKETABLE_Test_CAR_688;
-
-
-select * from SJ_BI_CAMPAIGN_WISE_EMAIL_COMMUNICATIONS_2_V2_MYWU_UPDATE_CUSTOMER_LEVEL
-limit 100;
-
-DESC VIEW SJ_BI_CAMPAIGN_WISE_EMAIL_COMMUNICATIONS_2_V2_MYWU_UPDATE_CUSTOMER_LEVEL;
-select * from WUDNA.CEX_SANDBOX.EMAIL_MARKETABLE_CONTROL_CAR_688;
-select * from WUDNA.CEX_SANDBOX.APP_MARKETABLE_TEST_CAR_688;
-select * from WUDNA.CEX_SANDBOX.EMAIL_MARKETABLE_TEST_CAR_688;
-select * from WUDNA.CEX_SANDBOX.SMS_MARKETABLE_TEST_CAR_688;
-select * from WUDNA.CEX_SANDBOX.APP_MARKETABLE_CONTROL_CAR_688;
-select * from WUDNA.CEX_SANDBOX.SMS_MARKETABLE_CONTROL_CAR_688;
-select * from yg_preferred_channel_cust_final limit 100;
-
-WITH validation_data AS (
-    -- EMAIL MARKETABLE TEST Validation
-SELECT
-    'EMAIL_TEST' as campaign_segment,
-    a.sndcustomer_key,
-    b.EMAIL_MARKETABLE,
-    b.SMS_MARKETABLE,
-    b.APP_MARKETABLE,
-    b.preferred_channel,
-    CASE
-        WHEN b.EMAIL_MARKETABLE = 'Y' THEN 'CORRECT'
-        ELSE 'INCORRECT - NOT EMAIL MARKETABLE'
-    END as validation_status,
-    CASE
-        WHEN b.preferred_channel = 'Email' AND (b.SMS_MARKETABLE = 'Y' OR b.APP_MARKETABLE = 'Y') THEN 'Multi-channel Email Preferred'
-        WHEN b.preferred_channel IN ('SMS', 'APP') AND (b.SMS_MARKETABLE = 'Y' OR b.APP_MARKETABLE = 'Y') THEN 'WARNING: Multi-channel Other Preferred (Should be Control)'
-        WHEN b.EMAIL_MARKETABLE = 'Y' AND b.SMS_MARKETABLE = 'N' AND b.APP_MARKETABLE = 'N' THEN 'Email Only'
-        ELSE 'Other'
-    END as customer_type
-FROM WUDNA.CEX_SANDBOX.EMAIL_MARKETABLE_TEST_CAR_688 a
-LEFT JOIN yg_preferred_channel_cust_final b
-ON SUBSTR(a.SNDCUSTOMER_KEY, 2, 19) = b.customer_key
- 
-UNION ALL
- 
--- EMAIL MARKETABLE CONTROL Validation
-SELECT
-    'EMAIL_CONTROL' as campaign_segment,
-    a.sndcustomer_key,
-    b.EMAIL_MARKETABLE,
-    b.SMS_MARKETABLE,
-    b.APP_MARKETABLE,
-    b.preferred_channel,
-    CASE
-        WHEN b.EMAIL_MARKETABLE = 'Y' THEN 'CORRECT'
-        ELSE 'INCORRECT - NOT EMAIL MARKETABLE'
-    END as validation_status,
-    CASE
-        WHEN b.preferred_channel = 'Email' AND (b.SMS_MARKETABLE = 'Y' OR b.APP_MARKETABLE = 'Y') THEN 'Multi-channel Email Preferred'
-        WHEN b.preferred_channel IN ('SMS', 'APP') AND (b.SMS_MARKETABLE = 'Y' OR b.APP_MARKETABLE = 'Y') THEN 'Multi-channel Other Preferred (Expected in Control)'
-        WHEN b.EMAIL_MARKETABLE = 'Y' AND b.SMS_MARKETABLE = 'N' AND b.APP_MARKETABLE = 'N' THEN 'Email Only'
-        ELSE 'Other'
-    END as customer_type
-FROM WUDNA.CEX_SANDBOX.EMAIL_MARKETABLE_CONTROL_CAR_688 a
-LEFT JOIN yg_preferred_channel_cust_final b
-ON SUBSTR(a.SNDCUSTOMER_KEY, 2, 19) = b.customer_key
- 
-UNION ALL
- 
--- SMS MARKETABLE TEST Validation
-SELECT
-    'SMS_TEST' as campaign_segment,
-    a.sndcustomer_key,
-    b.EMAIL_MARKETABLE,
-    b.SMS_MARKETABLE,
-    b.APP_MARKETABLE,
-    b.preferred_channel,
-    CASE
-        WHEN b.SMS_MARKETABLE = 'Y' THEN 'CORRECT'
-        ELSE 'INCORRECT - NOT SMS MARKETABLE'
-    END as validation_status,
-    CASE
-        WHEN b.preferred_channel = 'SMS' AND (b.EMAIL_MARKETABLE = 'Y' OR b.APP_MARKETABLE = 'Y') THEN 'Multi-channel SMS Preferred'
-        WHEN b.preferred_channel IN ('Email', 'APP') AND (b.EMAIL_MARKETABLE = 'Y' OR b.APP_MARKETABLE = 'Y') THEN 'WARNING: Multi-channel Other Preferred (Should be Control)'
-        WHEN b.SMS_MARKETABLE = 'Y' AND b.EMAIL_MARKETABLE = 'N' AND b.APP_MARKETABLE = 'N' THEN 'SMS Only'
-        ELSE 'Other'
-    END as customer_type
-FROM WUDNA.CEX_SANDBOX.SMS_MARKETABLE_TEST_CAR_688 a
-LEFT JOIN yg_preferred_channel_cust_final b
-ON SUBSTR(a.SNDCUSTOMER_KEY, 2, 19) = b.customer_key
- 
-UNION ALL
- 
--- SMS MARKETABLE CONTROL Validation
-SELECT
-    'SMS_CONTROL' as campaign_segment,
-    a.sndcustomer_key,
-    b.EMAIL_MARKETABLE,
-    b.SMS_MARKETABLE,
-    b.APP_MARKETABLE,
-    b.preferred_channel,
-    CASE
-        WHEN b.SMS_MARKETABLE = 'Y' THEN 'CORRECT'
-        ELSE 'INCORRECT - NOT SMS MARKETABLE'
-    END as validation_status,
-    CASE
-        WHEN b.preferred_channel = 'SMS' AND (b.EMAIL_MARKETABLE = 'Y' OR b.APP_MARKETABLE = 'Y') THEN 'Multi-channel SMS Preferred'
-        WHEN b.preferred_channel IN ('Email', 'APP') AND (b.EMAIL_MARKETABLE = 'Y' OR b.APP_MARKETABLE = 'Y') THEN 'Multi-channel Other Preferred (Expected in Control)'
-        WHEN b.SMS_MARKETABLE = 'Y' AND b.EMAIL_MARKETABLE = 'N' AND b.APP_MARKETABLE = 'N' THEN 'SMS Only'
-        ELSE 'Other'
-    END as customer_type
-FROM WUDNA.CEX_SANDBOX.SMS_MARKETABLE_CONTROL_CAR_688 a
-LEFT JOIN yg_preferred_channel_cust_final b
-ON SUBSTR(a.SNDCUSTOMER_KEY, 2, 19) = b.customer_key
- 
-UNION ALL
- 
--- APP MARKETABLE TEST Validation
-SELECT
-    'APP_TEST' as campaign_segment,
-    a.sndcustomer_key,
-    b.EMAIL_MARKETABLE,
-    b.SMS_MARKETABLE,
-    b.APP_MARKETABLE,
-    b.preferred_channel,
-    CASE
-        WHEN b.APP_MARKETABLE = 'Y' THEN 'CORRECT'
-        ELSE 'INCORRECT - NOT APP MARKETABLE'
-    END as validation_status,
-    CASE
-        WHEN b.preferred_channel = 'APP' AND (b.EMAIL_MARKETABLE = 'Y' OR b.SMS_MARKETABLE = 'Y') THEN 'Multi-channel APP Preferred'
-        WHEN b.preferred_channel IN ('Email', 'SMS') AND (b.EMAIL_MARKETABLE = 'Y' OR b.SMS_MARKETABLE = 'Y') THEN 'WARNING: Multi-channel Other Preferred (Should be Control)'
-        WHEN b.APP_MARKETABLE = 'Y' AND b.EMAIL_MARKETABLE = 'N' AND b.SMS_MARKETABLE = 'N' THEN 'APP Only'
-        ELSE 'Other'
-    END as customer_type
-FROM WUDNA.CEX_SANDBOX.APP_MARKETABLE_TEST_CAR_688 a
-LEFT JOIN yg_preferred_channel_cust_final b
-ON SUBSTR(a.SNDCUSTOMER_KEY, 2, 19) = b.customer_key
- 
-UNION ALL
- 
--- APP MARKETABLE CONTROL Validation
-SELECT
-    'APP_CONTROL' as campaign_segment,
-    a.sndcustomer_key,
-    b.EMAIL_MARKETABLE,
-    b.SMS_MARKETABLE,
-    b.APP_MARKETABLE,
-    b.preferred_channel,
-    CASE
-        WHEN b.APP_MARKETABLE = 'Y' THEN 'CORRECT'
-        ELSE 'INCORRECT - NOT APP MARKETABLE'
-    END as validation_status,
-    CASE
-        WHEN b.preferred_channel = 'APP' AND (b.EMAIL_MARKETABLE = 'Y' OR b.SMS_MARKETABLE = 'Y') THEN 'Multi-channel APP Preferred'
-        WHEN b.preferred_channel IN ('Email', 'SMS') AND (b.EMAIL_MARKETABLE = 'Y' OR b.SMS_MARKETABLE = 'Y') THEN 'Multi-channel Other Preferred (Expected in Control)'
-        WHEN b.APP_MARKETABLE = 'Y' AND b.EMAIL_MARKETABLE = 'N' AND b.SMS_MARKETABLE = 'N' THEN 'APP Only'
-        ELSE 'Other'
-    END as customer_type
-FROM WUDNA.CEX_SANDBOX.APP_MARKETABLE_CONTROL_CAR_688 a
-LEFT JOIN yg_preferred_channel_cust_final b
-ON SUBSTR(a.SNDCUSTOMER_KEY, 2, 19) = b.customer_key
+WITH car_688_campaigns_only AS (
+    SELECT CUSTOMER_KEY, CAMPAIGN_NAME
+    FROM AK_CAMPAIGN_WISE_BIRD_COMMUNICATIONS_EMAIL_FINAL
+    WHERE UPPER(CAMPAIGN_NAME) IN (
+        UPPER('EMAIL_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericENControl'),
+        UPPER('EMAIL_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericENTest')
+    )
+    
+    UNION ALL
+    
+    SELECT CUSTOMER_KEY, CAMPAIGN_NAME
+    FROM SJ_BI_CAMPAIGN_WISE_EMAIL_COMMUNICATIONS_2_V2_MYWU_UPDATE_CUSTOMER_LEVEL
+    WHERE UPPER(CAMPAIGN_NAME) IN (
+        UPPER('SMS_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericControl'),
+        UPPER('SMS_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericTest')
+    )
+    
+    UNION ALL
+    
+    SELECT CUSTOMER_KEY, CAMPAIGN_NAME
+    FROM SJ_BI_CAMPAIGN_WISE_EMAIL_COMMUNICATIONS_2_V2_MYWU_UPDATE_CUSTOMER_LEVEL
+    WHERE UPPER(CAMPAIGN_NAME) ILIKE UPPER('APP_Awareness_APN_CTADigital_EUtoIndiaDiwaliGeneric_Wave1EUGeneric-variant1%')
+       OR UPPER(CAMPAIGN_NAME) ILIKE UPPER('APP_Awareness_APN_CTADigital_EUtoIndiaDiwaliGeneric_Wave1EUGeneric-control%')
 )
-SELECT
-    campaign_segment,
-    validation_status,
-    customer_type,
-    preferred_channel,
-    COUNT(DISTINCT sndcustomer_key) as customer_count
-FROM validation_data
-GROUP BY campaign_segment, validation_status, customer_type, preferred_channel
-ORDER BY campaign_segment, validation_status, customer_type;
-
-select * from SJ_BI_CAMPAIGN_WISE_EMAIL_COMMUNICATIONS_2_V2_MYWU_UPDATE_CUSTOMER_LEVEL
- WHERE UPPER(CAMPAIGN_NAME) IN (
-    -- Email Campaigns
-    UPPER('EMAIL_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericENControl'),
-    UPPER('EMAIL_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericENTest'),
-    
-    -- SMS Campaigns
-    UPPER('SMS_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericControl'),
-    UPPER('SMS_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericTest'))
-    OR UPPER(CAMPAIGN_NAME) ilike any (UPPER('APP_Awareness_APN_CTADigital_EUtoIndiaDiwaliGeneric_Wave1EUGeneric-variant1%'),
-    UPPER('APP_Awareness_APN_CTADigital_EUtoIndiaDiwaliGeneric_Wave1EUGeneric-control%'))
-;
 
 
-select * from AK_CAMPAIGN_WISE_BIRD_COMMUNICATIONS_EMAIL_FINAL limit 100;
-
-
-//Validation: Check if correct campaigns were sent to correct groups
- 
--- EMAIL TEST Validation
-SELECT
-    'EMAIL_TEST' as validation_segment,
-    COUNT(DISTINCT a.SNDCUSTOMER_KEY) as customers_in_original_list,
-    COUNT(DISTINCT CASE
-        WHEN b.CUSTOMER_KEY IS NOT NULL
-            AND b.test_control_flag = 'Test'
-            AND b.Communication_Channel = 'EMAIL'
-        THEN b.CUSTOMER_KEY
-    END) as customers_received_correct_campaign,
-    COUNT(DISTINCT CASE
-        WHEN b.CUSTOMER_KEY IS NOT NULL
-            AND (b.test_control_flag = 'Control' OR b.Communication_Channel != 'EMAIL')
-        THEN b.CUSTOMER_KEY
-    END) as customers_received_WRONG_campaign,
-    COUNT(DISTINCT CASE
-        WHEN b.CUSTOMER_KEY IS NULL
-        THEN SUBSTR(a.SNDCUSTOMER_KEY, 2, 19)
-    END) as customers_NOT_found_in_campaign
+-- EMAIL TEST mismatches
+SELECT 'EMAIL_TEST' AS segment,
+       '@' || SUBSTR(a.SNDCUSTOMER_KEY, 2, 19) AS mismatched_customer_key,
+       c.CAMPAIGN_NAME AS received_campaign
 FROM WUDNA.CEX_SANDBOX.EMAIL_MARKETABLE_TEST_CAR_688 a
-LEFT JOIN CAR_688_CAMPAIGN_BASE b
-ON SUBSTR(a.SNDCUSTOMER_KEY, 2, 19) = b.CUSTOMER_KEY
- 
+LEFT JOIN car_688_campaigns_only c
+    ON SUBSTR(a.SNDCUSTOMER_KEY, 2, 19) = c.CUSTOMER_KEY
+WHERE UPPER(c.CAMPAIGN_NAME) IS DISTINCT FROM UPPER('EMAIL_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericENTest')
+
 UNION ALL
- 
--- EMAIL CONTROL Validation
-SELECT
-    'EMAIL_CONTROL' as validation_segment,
-    COUNT(DISTINCT a.SNDCUSTOMER_KEY) as customers_in_original_list,
-    COUNT(DISTINCT CASE
-        WHEN b.CUSTOMER_KEY IS NOT NULL
-            AND b.test_control_flag = 'Control'
-            AND b.Communication_Channel = 'EMAIL'
-        THEN b.CUSTOMER_KEY
-    END) as customers_received_correct_campaign,
-    COUNT(DISTINCT CASE
-        WHEN b.CUSTOMER_KEY IS NOT NULL
-            AND (b.test_control_flag = 'Test' OR b.Communication_Channel != 'EMAIL')
-        THEN b.CUSTOMER_KEY
-    END) as customers_received_WRONG_campaign,
-    COUNT(DISTINCT CASE
-        WHEN b.CUSTOMER_KEY IS NULL
-        THEN SUBSTR(a.SNDCUSTOMER_KEY, 2, 19)
-    END) as customers_NOT_found_in_campaign
+
+-- EMAIL CONTROL mismatches
+SELECT 'EMAIL_CONTROL',
+       '@' || SUBSTR(a.SNDCUSTOMER_KEY, 2, 19),
+       c.CAMPAIGN_NAME
 FROM WUDNA.CEX_SANDBOX.EMAIL_MARKETABLE_CONTROL_CAR_688 a
-LEFT JOIN CAR_688_CAMPAIGN_BASE b
-ON SUBSTR(a.SNDCUSTOMER_KEY, 2, 19) = b.CUSTOMER_KEY
- 
+LEFT JOIN car_688_campaigns_only c
+    ON SUBSTR(a.SNDCUSTOMER_KEY, 2, 19) = c.CUSTOMER_KEY
+WHERE UPPER(c.CAMPAIGN_NAME) IS DISTINCT FROM UPPER('EMAIL_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericENControl')
+
 UNION ALL
- 
--- SMS TEST Validation
-SELECT
-    'SMS_TEST' as validation_segment,
-    COUNT(DISTINCT a.SNDCUSTOMER_KEY) as customers_in_original_list,
-    COUNT(DISTINCT CASE
-        WHEN b.CUSTOMER_KEY IS NOT NULL
-            AND b.test_control_flag = 'Test'
-            AND b.Communication_Channel = 'SMS'
-        THEN b.CUSTOMER_KEY
-    END) as customers_received_correct_campaign,
-    COUNT(DISTINCT CASE
-        WHEN b.CUSTOMER_KEY IS NOT NULL
-            AND (b.test_control_flag = 'Control' OR b.Communication_Channel != 'SMS')
-        THEN b.CUSTOMER_KEY
-    END) as customers_received_WRONG_campaign,
-    COUNT(DISTINCT CASE
-        WHEN b.CUSTOMER_KEY IS NULL
-        THEN SUBSTR(a.SNDCUSTOMER_KEY, 2, 19)
-    END) as customers_NOT_found_in_campaign
+
+-- SMS TEST mismatches
+SELECT 'SMS_TEST',
+       '@' || SUBSTR(a.SNDCUSTOMER_KEY, 2, 19),
+       c.CAMPAIGN_NAME
 FROM WUDNA.CEX_SANDBOX.SMS_MARKETABLE_TEST_CAR_688 a
-LEFT JOIN CAR_688_CAMPAIGN_BASE b
-ON SUBSTR(a.SNDCUSTOMER_KEY, 2, 19) = b.CUSTOMER_KEY
- 
+LEFT JOIN car_688_campaigns_only c
+    ON SUBSTR(a.SNDCUSTOMER_KEY, 2, 19) = c.CUSTOMER_KEY
+WHERE UPPER(c.CAMPAIGN_NAME) IS DISTINCT FROM UPPER('SMS_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericTest')
+
 UNION ALL
- 
--- SMS CONTROL Validation
-SELECT
-    'SMS_CONTROL' as validation_segment,
-    COUNT(DISTINCT a.SNDCUSTOMER_KEY) as customers_in_original_list,
-    COUNT(DISTINCT CASE
-        WHEN b.CUSTOMER_KEY IS NOT NULL
-            AND b.test_control_flag = 'Control'
-            AND b.Communication_Channel = 'SMS'
-        THEN b.CUSTOMER_KEY
-    END) as customers_received_correct_campaign,
-    COUNT(DISTINCT CASE
-        WHEN b.CUSTOMER_KEY IS NOT NULL
-            AND (b.test_control_flag = 'Test' OR b.Communication_Channel != 'SMS')
-        THEN b.CUSTOMER_KEY
-    END) as customers_received_WRONG_campaign,
-    COUNT(DISTINCT CASE
-        WHEN b.CUSTOMER_KEY IS NULL
-        THEN SUBSTR(a.SNDCUSTOMER_KEY, 2, 19)
-    END) as customers_NOT_found_in_campaign
+
+-- SMS CONTROL mismatches
+SELECT 'SMS_CONTROL',
+       '@' || SUBSTR(a.SNDCUSTOMER_KEY, 2, 19),
+       c.CAMPAIGN_NAME
 FROM WUDNA.CEX_SANDBOX.SMS_MARKETABLE_CONTROL_CAR_688 a
-LEFT JOIN CAR_688_CAMPAIGN_BASE b
-ON SUBSTR(a.SNDCUSTOMER_KEY, 2, 19) = b.CUSTOMER_KEY
- 
+LEFT JOIN car_688_campaigns_only c
+    ON SUBSTR(a.SNDCUSTOMER_KEY, 2, 19) = c.CUSTOMER_KEY
+WHERE UPPER(c.CAMPAIGN_NAME) IS DISTINCT FROM UPPER('SMS_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericControl')
+
 UNION ALL
- 
--- APP TEST Validation
-SELECT
-    'APP_TEST' as validation_segment,
-    COUNT(DISTINCT a.SNDCUSTOMER_KEY) as customers_in_original_list,
-    COUNT(DISTINCT CASE
-        WHEN b.CUSTOMER_KEY IS NOT NULL
-            AND b.test_control_flag = 'Test'
-            AND b.Communication_Channel = 'APP'
-        THEN b.CUSTOMER_KEY
-    END) as customers_received_correct_campaign,
-    COUNT(DISTINCT CASE
-        WHEN b.CUSTOMER_KEY IS NOT NULL
-            AND (b.test_control_flag = 'Control' OR b.Communication_Channel != 'APP')
-        THEN b.CUSTOMER_KEY
-    END) as customers_received_WRONG_campaign,
-    COUNT(DISTINCT CASE
-        WHEN b.CUSTOMER_KEY IS NULL
-        THEN SUBSTR(a.SNDCUSTOMER_KEY, 2, 19)
-    END) as customers_NOT_found_in_campaign
+
+-- APP TEST mismatches
+SELECT 'APP_TEST',
+       '@' || SUBSTR(a.SNDCUSTOMER_KEY, 2, 19),
+       c.CAMPAIGN_NAME
 FROM WUDNA.CEX_SANDBOX.APP_MARKETABLE_TEST_CAR_688 a
-LEFT JOIN CAR_688_CAMPAIGN_BASE b
-ON SUBSTR(a.SNDCUSTOMER_KEY, 2, 19) = b.CUSTOMER_KEY
- 
+LEFT JOIN car_688_campaigns_only c
+    ON SUBSTR(a.SNDCUSTOMER_KEY, 2, 19) = c.CUSTOMER_KEY
+WHERE c.CAMPAIGN_NAME IS NULL
+   OR NOT ILIKE(c.CAMPAIGN_NAME, 'APP_Awareness_APN_CTADigital_EUtoIndiaDiwaliGeneric_Wave1EUGeneric-variant1%')
+
 UNION ALL
- 
--- APP CONTROL Validation
-SELECT
-    'APP_CONTROL' as validation_segment,
-    COUNT(DISTINCT a.SNDCUSTOMER_KEY) as customers_in_original_list,
-    COUNT(DISTINCT CASE
-        WHEN b.CUSTOMER_KEY IS NOT NULL
-            AND b.test_control_flag = 'Control'
-            AND b.Communication_Channel = 'APP'
-        THEN b.CUSTOMER_KEY
-    END) as customers_received_correct_campaign,
-    COUNT(DISTINCT CASE
-        WHEN b.CUSTOMER_KEY IS NOT NULL
-            AND (b.test_control_flag = 'Test' OR b.Communication_Channel != 'APP')
-        THEN b.CUSTOMER_KEY
-    END) as customers_received_WRONG_campaign,
-    COUNT(DISTINCT CASE
-        WHEN b.CUSTOMER_KEY IS NULL
-        THEN SUBSTR(a.SNDCUSTOMER_KEY, 2, 19)
-    END) as customers_NOT_found_in_campaign
+
+-- APP CONTROL mismatches
+SELECT 'APP_CONTROL',
+       '@' || SUBSTR(a.SNDCUSTOMER_KEY, 2, 19),
+       c.CAMPAIGN_NAME
 FROM WUDNA.CEX_SANDBOX.APP_MARKETABLE_CONTROL_CAR_688 a
-LEFT JOIN CAR_688_CAMPAIGN_BASE b
-ON SUBSTR(a.SNDCUSTOMER_KEY, 2, 19) = b.CUSTOMER_KEY;
-
--- Base Campaign Table with Test/Control and Channel Information
-CREATE OR REPLACE TABLE CAR_688_CAMPAIGN_BASE AS
--- Get SMS and APP campaigns from the main table
-SELECT
-    a.CAMPAIGN_NAME,
-    a.CUSTOMER_KEY,
-    a.EVENT_CAPTURED_DT as communication_sent_date,
-    
-    -- Extract Channel from Campaign Name
-    CASE
-        WHEN SUBSTR(ACTIVITY_CODE,3,1) = 'S' THEN 'SMS'
-        WHEN SUBSTR(ACTIVITY_CODE,3,1) = 'E' THEN 'EMAIL'
-        WHEN SUBSTR(ACTIVITY_CODE,3,1) IN ('P', 'I', 'C') THEN 'APP'
-        ELSE 'Unknown'
-    END AS Communication_Channel,
- 
-    CASE
-        WHEN SUBSTR(ACTIVITY_CODE,3,1) = 'S' THEN 'SMS'
-        WHEN SUBSTR(ACTIVITY_CODE,3,1) = 'E' THEN 'EMAIL'
-        WHEN SUBSTR(ACTIVITY_CODE,3,1) = 'P' THEN 'Push'
-        WHEN SUBSTR(ACTIVITY_CODE,3,1) = 'I' THEN 'IN-APP'
-        WHEN SUBSTR(ACTIVITY_CODE,3,1) = 'C' THEN 'Content Card'
-        ELSE 'Unknown'
-    END AS Channel_Type,
-    
-    -- Extract Test/Control Flag from Campaign Name
-    CASE
-        WHEN CAMPAIGN_NAME ILIKE '%control%' OR CAMPAIGN_NAME ILIKE '%-control%' THEN 'Control'
-        ELSE 'Test'
-    END AS test_control_flag,
-    
-    -- Communication Metrics
-    CASE
-        WHEN substr(a.ACTIVITY_CODE, 3, 1) = 'P' THEN a.TOTAL_EMAILS_SENT
-        ELSE 1
-    END as communications_sent,
-    
-    CASE
-        WHEN a.EMAILS_UN_DELIVERED > 0 THEN 1
-        ELSE 0
-    END as communication_undelivered,
-    
-    CASE
-        WHEN a.EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0 THEN 1
-        ELSE 0
-    END as communication_opened_7days,
-    
-    CASE
-        WHEN a.EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0 THEN 1
-        ELSE 0
-    END as communication_clicked_7days,
-    
-    -- -- Additional useful fields
-    -- a.COUNTRY,
-    -- a.ACTIVITY_CODE,
-    -- a.EMAIL_MARKETABLE,
-    -- a.SMS_MARKETABLE,
-    -- a.APP_MARKETABLE,
-    -- a.RFM_PERSONA,
-    -- a.CHANNEL_DOMINANCE,
-    -- a.CORRIDOR
-FROM SJ_BI_CAMPAIGN_WISE_EMAIL_COMMUNICATIONS_2_V2_MYWU_UPDATE_CUSTOMER_LEVEL a
-WHERE (UPPER(CAMPAIGN_NAME) IN (
-    -- SMS Campaigns
-    UPPER('SMS_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericControl'),
-    UPPER('SMS_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericTest'))
-    OR UPPER(CAMPAIGN_NAME) ILIKE ANY (
-        UPPER('APP_Awareness_APN_CTADigital_EUtoIndiaDiwaliGeneric_Wave1EUGeneric-variant1%'),
-        UPPER('APP_Awareness_APN_CTADigital_EUtoIndiaDiwaliGeneric_Wave1EUGeneric-control%')
-    ))
- 
-UNION ALL
- 
--- Get EMAIL campaigns from the email-specific table
-SELECT
-    b.CAMPAIGN_NAME,
-    b.CUSTOMER_KEY,
-    b.EVENT_CAPTURED_DT as communication_sent_date,
-    
-    -- Extract Channel from Campaign Name
-    CASE
-        WHEN SUBSTR(ACTIVITY_CODE,3,1) = 'S' THEN 'SMS'
-        WHEN SUBSTR(ACTIVITY_CODE,3,1) = 'E' THEN 'EMAIL'
-        WHEN SUBSTR(ACTIVITY_CODE,3,1) IN ('P', 'I', 'C') THEN 'APP'
-        ELSE 'Unknown'
-    END AS Communication_Channel,
- 
-    CASE
-        WHEN SUBSTR(ACTIVITY_CODE,3,1) = 'S' THEN 'SMS'
-        WHEN SUBSTR(ACTIVITY_CODE,3,1) = 'E' THEN 'EMAIL'
-        WHEN SUBSTR(ACTIVITY_CODE,3,1) = 'P' THEN 'Push'
-        WHEN SUBSTR(ACTIVITY_CODE,3,1) = 'I' THEN 'IN-APP'
-        WHEN SUBSTR(ACTIVITY_CODE,3,1) = 'C' THEN 'Content Card'
-        ELSE 'Unknown'
-    END AS Channel_Type,
-    
-    -- Extract Test/Control Flag from Campaign Name
-    CASE
-        WHEN CAMPAIGN_NAME ILIKE '%control%' OR CAMPAIGN_NAME ILIKE '%-control%' THEN 'Control'
-        ELSE 'Test'
-    END AS test_control_flag,
-    
-    -- Communication Metrics
-    CASE
-        WHEN substr(b.ACTIVITY_CODE, 3, 1) = 'P' THEN b.TOTAL_EMAILS_SENT
-        ELSE 1
-    END as communications_sent,
-    
-    CASE
-        WHEN b.EMAILS_UN_DELIVERED > 0 THEN 1
-        ELSE 0
-    END as communication_undelivered,
-    
-    CASE
-        WHEN b.EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0 THEN 1
-        ELSE 0
-    END as communication_opened_7days,
-    
-    CASE
-        WHEN b.EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0 THEN 1
-        ELSE 0
-    END as communication_clicked_7days,
-    
-    -- -- Additional useful fields
-    -- b.COUNTRY,
-    -- b.ACTIVITY_CODE,
-    -- b.EMAIL_MARKETABLE,
-    -- b.SMS_MARKETABLE,
-    -- b.APP_MARKETABLE,
-    -- b.RFM_PERSONA,
-    -- b.CHANNEL_DOMINANCE,
-    -- b.CORRIDOR
-FROM AK_CAMPAIGN_WISE_BIRD_COMMUNICATIONS_EMAIL_FINAL b
-WHERE UPPER(CAMPAIGN_NAME) IN (
-    -- Email Campaigns
-    UPPER('EMAIL_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericENControl'),
-    UPPER('EMAIL_Awareness_APN_CTAOmnichannel_EUtoIndiaDiwaliGeneric_Wave1EUGenericENTest')
-);
-
-CREATE OR REPLACE TABLE CAR_688_CAMPAIGN_SUMMARY AS
-SELECT
-    Communication_Channel,
-    Channel_Type,
-    test_control_flag,
-    CAMPAIGN_NAME,
-    
-    -- Basic Counts
-    COUNT(DISTINCT CUSTOMER_KEY) as unique_customers,
-    SUM(communications_sent) as total_communications_sent,
-    SUM(communication_undelivered) as total_undelivered,
-    
-    -- Total Communications Successfully Delivered
-    SUM(communications_sent) - SUM(communication_undelivered) as total_communications_delivered,
-    
-    SUM(communication_opened_7days) as total_opened_7days,
-    SUM(communication_clicked_7days) as total_clicked_7days,
-    
-    -- Click Rate (for Content Card, Email, In-App, SMS)
-    -- Based on delivered communications only
-    CASE
-        WHEN Channel_Type IN ('Content Card', 'EMAIL', 'IN-APP', 'SMS')
-            AND (SUM(communications_sent) - SUM(communication_undelivered)) > 0
-        THEN ROUND((SUM(communication_clicked_7days) * 100.0) / (SUM(communications_sent) - SUM(communication_undelivered)), 2)
-        ELSE NULL
-    END as click_rate,
-    
-    -- Open Rate (for Email, Push)
-    -- Based on delivered communications only
-    CASE
-        WHEN Channel_Type IN ('EMAIL', 'Push')
-            AND (SUM(communications_sent) - SUM(communication_undelivered)) > 0
-        THEN ROUND((SUM(communication_opened_7days) * 100.0) / (SUM(communications_sent) - SUM(communication_undelivered)), 2)
-        ELSE NULL
-    END as open_rate,
-    
-    -- -- Delivery Rate (bonus metric)
-    -- CASE
-    --     WHEN SUM(communications_sent) > 0
-    --     THEN ROUND(((SUM(communications_sent) - SUM(communication_undelivered)) * 100.0) / SUM(communications_sent), 2)
-    --     ELSE NULL
-    -- END as delivery_rate
-    
-FROM CAR_688_CAMPAIGN_BASE
-GROUP BY Communication_Channel, Channel_Type, test_control_flag, CAMPAIGN_NAME
-ORDER BY Communication_Channel, test_control_flag;
- 
--- View the results
-SELECT * FROM CAR_688_CAMPAIGN_SUMMARY;
- 
- 
--- Summary view to check the data
-SELECT
-    communication_channel,
-    CHANNEL_TYPE,
-    test_control_flag,
-    CAMPAIGN_NAME,
-    COUNT(DISTINCT customer_key) as unique_customers,
-    SUM(communications_sent) as total_communications_sent,
-    SUM(communication_undelivered) as total_undelivered,
-    SUM(communication_opened_7days) as total_opened_7days,
-    SUM(communication_clicked_7days) as total_clicked_7days,
-    MIN(communication_sent_date) as first_sent_date,
-    MAX(communication_sent_date) as last_sent_date
-FROM CAR_688_CAMPAIGN_BASE
-GROUP BY communication_channel, CHANNEL_TYPE, test_control_flag, CAMPAIGN_NAME
-ORDER BY communication_channel, CHANNEL_TYPE, test_control_flag;
-
-
+LEFT JOIN car_688_campaigns_only c
+    ON SUBSTR(a.SNDCUSTOMER_KEY, 2, 19) = c.CUSTOMER_KEY
+WHERE c.CAMPAIGN_NAME IS NULL
+   OR NOT ILIKE(c.CAMPAIGN_NAME, 'APP_Awareness_APN_CTADigital_EUtoIndiaDiwaliGeneric_Wave1EUGeneric-control%');
