@@ -1,4 +1,34 @@
-CREATE OR REPLACE TABLE LACA_ENGAGEMENT_CUSTOMERS_AGG_test AS
+Yes, moving the CASE statement into the aggregate table will work! This is actually a better approach because it calculates the breakdown at aggregation time rather than in the final join. Let me provide you with the corrected script with backups.
+-----------------------------------------------------------------------------------
+-- BACKUP: Create backup of existing aggregate table
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_ENGAGEMENT_CUSTOMERS_AGG_BACKUP 
+CLONE LACA_ENGAGEMENT_CUSTOMERS_AGG;
+
+-- Verify backup
+SELECT 
+    'BACKUP' AS source,
+    COUNT(*) AS row_count,
+    COUNT(DISTINCT customer_key) AS distinct_customers,
+    MIN(ref_date) AS min_date,
+    MAX(ref_date) AS max_date
+FROM LACA_ENGAGEMENT_CUSTOMERS_AGG_BACKUP
+
+UNION ALL
+
+SELECT 
+    'ORIGINAL' AS source,
+    COUNT(*) AS row_count,
+    COUNT(DISTINCT customer_key) AS distinct_customers,
+    MIN(ref_date) AS min_date,
+    MAX(ref_date) AS max_date
+FROM LACA_ENGAGEMENT_CUSTOMERS_AGG;
+
+
+-----------------------------------------------------------------------------------
+-- STEP 3: Aggregate Engagement Customers (UPDATED WITH LEVEL3_BREAKDOWN)
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_ENGAGEMENT_CUSTOMERS_AGG AS
 WITH corridor_ranked AS (
   SELECT
     ref_date,
@@ -12,7 +42,7 @@ WITH corridor_ranked AS (
 ),
 engaged AS (
   SELECT
-     e.customer_key,
+    e.customer_key,
     e.ref_date,
     e.country_code,
     e.r12_txns,
@@ -35,7 +65,22 @@ engaged AS (
     CASE
       WHEN cr.corridor_rank <= 11 THEN e.dominant_corridor_name
       ELSE 'Others'
-    END AS corridor_bucket
+    END AS corridor_bucket,
+    
+    -- Add Level 3 Breakdown Calculation HERE at customer level
+    CASE
+      WHEN e.r12_active = 'Y' AND e.active_churn_r7_r12 = 'Y' THEN 'Churn R7-R12'
+      WHEN e.r12_active = 'Y' AND e.active_churn_r7_r12 = 'N' THEN 'Active R1-R6'
+      WHEN e.r12_txns = 0 AND e.pr12_txns > 0 AND e.ppr12_txns = 0 AND e.pppr12_txns = 0 THEN 'R13-R24 Active'
+      WHEN e.r12_txns = 0 AND e.pr12_txns = 0 AND e.ppr12_txns > 0 AND e.pppr12_txns = 0 THEN 'R25-R36 Active'
+      WHEN e.r12_txns = 0 AND e.pr12_txns = 0 AND e.ppr12_txns = 0 AND e.pppr12_txns > 0 THEN 'R37-R48 Active'
+      WHEN e.r12_txns = 0 AND e.pr12_txns > 0 AND e.ppr12_txns > 0 AND e.pppr12_txns = 0 THEN 'R13-R36 Active'
+      WHEN e.r12_txns = 0 AND e.pr12_txns = 0 AND e.ppr12_txns > 0 AND e.pppr12_txns > 0 THEN 'R25-R48 Active'
+      WHEN e.r12_txns = 0 AND e.pr12_txns > 0 AND e.ppr12_txns > 0 AND e.pppr12_txns > 0 THEN 'R13-R48 Active'
+      WHEN e.r12_txns = 0 AND e.pr12_txns > 0 AND e.ppr12_txns = 0 AND e.pppr12_txns > 0 THEN 'R13-R24 & R37-R48 Active'
+      ELSE NULL
+    END AS level3_breakdown
+    
   FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS e
   LEFT JOIN corridor_ranked cr
     ON e.ref_date = cr.ref_date
@@ -57,29 +102,265 @@ SELECT
   r12_active,
   active_churn_r7_r12,
   lapsed_r12_plus,
-  customer_key,  
+  level3_breakdown,  -- ADD THIS NEW DIMENSION
+  COUNT(DISTINCT customer_key) AS customer_count,  
   COALESCE(SUM(r12_txns), 0) AS total_r12_txns,
   COALESCE(SUM(r6_txns), 0) AS total_r6_txns,
   COALESCE(SUM(pr12_txns), 0) AS total_pr12_txns,
   COALESCE(SUM(ppr12_txns), 0) AS total_ppr12_txns,
   COALESCE(SUM(pppr12_txns), 0) AS total_pppr12_txns 
 FROM engaged
-GROUP BY
-  ALL;
+GROUP BY ALL;
 
-  SELECT
-  count(customer_key) AS customer_count,
+
+-----------------------------------------------------------------------------------
+-- Validate the new aggregate table
+-----------------------------------------------------------------------------------
+SELECT 
+  ref_date,
+  level3_breakdown,
+  SUM(customer_count) AS customers
+FROM LACA_ENGAGEMENT_CUSTOMERS_AGG
+WHERE ref_date = '2025-09-01'
+  AND level3_breakdown IS NOT NULL
+GROUP BY ref_date, level3_breakdown
+ORDER BY customers DESC;
+
+
+-----------------------------------------------------------------------------------
+-- STEP 5A: Dimension Base (UPDATED - ADD level3_breakdown)
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_CUSTOMER_DIMENSIONS_BACKUP 
+CLONE LACA_CUSTOMER_DIMENSIONS;
+
+CREATE OR REPLACE TABLE LACA_CUSTOMER_DIMENSIONS AS
+SELECT DISTINCT
+  ref_date, 
+  country_code, 
+  corridor_bucket, 
+  dominant_sndcountry_name, 
+  dominant_rcvcountry_name,
+  channel_dominance, 
+  email_marketable, 
+  sms_marketable,
+  retail_digital_flag, 
+  Web_App_Flag, 
+  channel_native,
+  rnt_flag, 
+  r12_active, 
+  active_churn_r7_r12, 
+  lapsed_r12_plus,
+  level3_breakdown  -- ADD THIS
+FROM LACA_ENGAGEMENT_CUSTOMERS_AGG
+
+UNION
+
+SELECT DISTINCT
+  ref_date, 
+  country_code, 
+  corridor_bucket, 
+  dominant_sndcountry_name, 
+  dominant_rcvcountry_name,
+  channel_dominance, 
+  email_marketable, 
+  sms_marketable,
+  retail_digital_flag, 
+  Web_App_Flag, 
+  channel_native,
+  rnt_flag, 
+  r12_active, 
+  active_churn_r7_r12, 
+  lapsed_r12_plus,
+  CAST(NULL AS VARCHAR) AS level3_breakdown  -- NULL for RNT
+FROM LACA_RNT_CUSTOMERS_AGG;
+
+
+-----------------------------------------------------------------------------------
+-- STEP 5B: Final Reporting Table (UPDATED - SIMPLIFIED level3_breakdown)
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_CUSTOMER_SEGMENTATION_FINAL_BACKUP 
+CLONE LACA_CUSTOMER_SEGMENTATION_FINAL;
+
+CREATE OR REPLACE TABLE LACA_CUSTOMER_SEGMENTATION_FINAL AS
+SELECT
+  a.ref_date,
+  a.country_code,
+  cv.COUNTRY_NAME AS laca_country,
+  a.corridor_bucket,
+  a.dominant_sndcountry_name,
+  a.dominant_rcvcountry_name,
+  a.channel_dominance,
+  a.email_marketable,
+  a.sms_marketable,
+  a.retail_digital_flag,
+  a.Web_App_Flag,
+  a.channel_native,
+  a.rnt_flag,
+  a.r12_active,
+  a.active_churn_r7_r12,
+  a.lapsed_r12_plus,
+  
+  COALESCE(b.customer_count, 0) AS engagement_customer_count,
+  COALESCE(b.total_r12_txns, 0) AS total_r12_txns,
+  COALESCE(b.total_r6_txns, 0) AS total_r6_txns,
+  COALESCE(b.total_pr12_txns, 0) AS total_pr12_txns,
+  COALESCE(b.total_ppr12_txns, 0) AS total_ppr12_txns,
+  COALESCE(b.total_pppr12_txns, 0) AS total_pppr12_txns, 
+  
+  COALESCE(c.customer_count, 0) AS rnt_customer_count,
+  
   CASE
-  -- WHEN a.r12_active = 'Y' THEN
-  --   CASE WHEN a.active_churn_r7_r12 = 'Y' THEN 'Churn R7-12' ELSE 'Active R1-6' END
-        WHEN B.TOTAL_R12_TXNS = 0 AND B.TOTAL_PR12_TXNS > 0 AND B.TOTAL_PPR12_TXNS = 0 AND B.TOTAL_PPPR12_TXNS = 0 THEN 'R13-R24 Active'
-        WHEN B.TOTAL_R12_TXNS = 0 AND B.TOTAL_PR12_TXNS = 0 AND B.TOTAL_PPR12_TXNS > 0 AND B.TOTAL_PPPR12_TXNS = 0 THEN 'R25-R36 Active'
-        WHEN B.TOTAL_R12_TXNS = 0 AND B.TOTAL_PR12_TXNS = 0 AND B.TOTAL_PPR12_TXNS = 0 AND B.TOTAL_PPPR12_TXNS > 0 THEN 'R37-R48 Active'
-        WHEN B.TOTAL_R12_TXNS = 0 AND B.TOTAL_PR12_TXNS > 0 AND B.TOTAL_PPR12_TXNS > 0 AND B.TOTAL_PPPR12_TXNS = 0 THEN 'R13-R36 Active'
-        WHEN B.TOTAL_R12_TXNS = 0 AND B.TOTAL_PR12_TXNS = 0 AND B.TOTAL_PPR12_TXNS > 0 AND B.TOTAL_PPPR12_TXNS > 0 THEN 'R25-R48 Active'
-        WHEN B.TOTAL_R12_TXNS = 0 AND B.TOTAL_PR12_TXNS > 0 AND B.TOTAL_PPR12_TXNS > 0 AND B.TOTAL_PPPR12_TXNS > 0 THEN 'R13-R48 Active'
-        WHEN B.TOTAL_R12_TXNS = 0 AND B.TOTAL_PR12_TXNS > 0 AND B.TOTAL_PPR12_TXNS = 0 AND B.TOTAL_PPPR12_TXNS > 0 THEN 'R13-R24 Active and R37-R48 Active'
-        else 'OTHER' end as LEVEL3_BREAKDOWN
-FROM LACA_ENGAGEMENT_CUSTOMERS_AGG_test b
-where ref_date = '2025-09-01'
-GROUP BY all;
+    WHEN a.rnt_flag = 'Y' THEN COALESCE(c.customer_count, 0)
+    ELSE COALESCE(b.customer_count, 0)
+  END AS customer_count,  
+  
+  COALESCE(b.customer_count, 0) + COALESCE(c.customer_count, 0) AS total_customer_count,
+  
+  YEAR(a.ref_date) AS year,
+  MONTH(a.ref_date) AS month_number,
+  TO_CHAR(a.ref_date, 'YYYY-MM') AS year_month,
+  TO_CHAR(a.ref_date, 'Mon-YY') AS month_label,
+  
+  CASE
+    WHEN a.r12_active = 'Y' THEN 'Active R1-R12'
+    WHEN a.rnt_flag = 'Y' THEN 'Registered Not Transacted'
+    WHEN a.active_churn_r7_r12 = 'Y' THEN 'Active Churn R7-R12'    
+    WHEN a.lapsed_r12_plus = 'Y' THEN 'Lapsed R12+'
+    ELSE 'Other'
+  END AS audience_segment, 
+  
+  CASE
+    WHEN a.email_marketable = 'Y' AND a.sms_marketable = 'Y' THEN 'Email + SMS Marketable'
+    WHEN a.email_marketable = 'Y' THEN 'Email Marketable'
+    WHEN a.sms_marketable = 'Y' THEN 'SMS Marketable'
+    ELSE 'Non Marketable'
+  END AS marketability_segment,
+
+  CASE
+    WHEN a.lapsed_r12_plus = 'Y' AND COALESCE(b.total_pr12_txns, 0) > 0 THEN 'PR12 Active (R13-R24)'
+    WHEN a.lapsed_r12_plus = 'Y' AND COALESCE(b.total_ppr12_txns, 0) > 0 THEN 'PPR12 Active (R25-R36)'
+    WHEN a.lapsed_r12_plus = 'Y' AND COALESCE(b.total_pppr12_txns, 0) > 0 THEN 'PPPR12 Active (R37-R48)'
+    ELSE NULL
+  END AS lapsed_breakdown,
+
+  CASE
+    WHEN a.rnt_flag = 'Y' THEN 'RNT Customers'
+    WHEN a.r12_active = 'Y' OR a.lapsed_r12_plus = 'Y' THEN 'Transacted Customers'
+    ELSE 'Other'
+  END AS customer_type,
+
+  CASE
+    WHEN a.r12_active = 'Y' THEN 'Active R1-R12'
+    WHEN a.lapsed_r12_plus = 'Y' THEN 'Lapsed R12+'
+    WHEN a.r12_active = 'N' AND a.lapsed_r12_plus = 'N' AND a.rnt_flag = 'N' THEN 'Dormant/Never Transacted'
+    ELSE NULL
+  END AS level2_engagement_status,
+
+  -- SIMPLIFIED: Just pull from dimension table instead of recalculating
+  a.level3_breakdown,
+  
+  'LACA' AS region,
+  
+  CASE
+    WHEN a.corridor_bucket = 'RNT_Only' THEN 'RNT Only'
+    WHEN a.corridor_bucket = 'Others' THEN 'Other Corridors'
+    ELSE a.corridor_bucket
+  END AS corridor_group
+  
+FROM LACA_CUSTOMER_DIMENSIONS a
+LEFT JOIN SUMMARY_GEN.COUNTRY_VW cv
+  ON a.country_code = cv.country_code
+  AND cv.super_region = 'LACA'
+LEFT JOIN LACA_ENGAGEMENT_CUSTOMERS_AGG b
+  ON a.ref_date = b.ref_date
+  AND a.country_code = b.country_code
+  AND NVL(a.corridor_bucket, 'NA') = NVL(b.corridor_bucket, 'NA')
+  AND NVL(a.dominant_sndcountry_name, 'NA') = NVL(b.dominant_sndcountry_name, 'NA')
+  AND NVL(a.dominant_rcvcountry_name, 'NA') = NVL(b.dominant_rcvcountry_name, 'NA')
+  AND NVL(a.channel_dominance, 'NA') = NVL(b.channel_dominance, 'NA')
+  AND NVL(a.email_marketable, 'NA') = NVL(b.email_marketable, 'NA')
+  AND NVL(a.sms_marketable, 'NA') = NVL(b.sms_marketable, 'NA')
+  AND NVL(a.retail_digital_flag, 'NA') = NVL(b.retail_digital_flag, 'NA')
+  AND NVL(a.Web_App_Flag, 'NA') = NVL(b.Web_App_Flag, 'NA')
+  AND NVL(a.channel_native, 'NA') = NVL(b.channel_native, 'NA')
+  AND NVL(a.rnt_flag, 'NA') = NVL(b.rnt_flag, 'NA')
+  AND NVL(a.r12_active, 'NA') = NVL(b.r12_active, 'NA')
+  AND NVL(a.active_churn_r7_r12, 'NA') = NVL(b.active_churn_r7_r12, 'NA')
+  AND NVL(a.lapsed_r12_plus, 'NA') = NVL(b.lapsed_r12_plus, 'NA')
+  AND NVL(a.level3_breakdown, 'NA') = NVL(b.level3_breakdown, 'NA')  -- ADD THIS JOIN CONDITION
+LEFT JOIN LACA_RNT_CUSTOMERS_AGG c
+  ON a.ref_date = c.ref_date
+  AND a.country_code = c.country_code
+  AND NVL(a.corridor_bucket, 'NA') = NVL(c.corridor_bucket, 'NA')
+  AND NVL(a.dominant_sndcountry_name, 'NA') = NVL(c.dominant_sndcountry_name, 'NA')
+  AND NVL(a.dominant_rcvcountry_name, 'NA') = NVL(c.dominant_rcvcountry_name, 'NA')
+  AND NVL(a.channel_dominance, 'NA') = NVL(c.channel_dominance, 'NA')
+  AND NVL(a.email_marketable, 'NA') = NVL(c.email_marketable, 'NA')
+  AND NVL(a.sms_marketable, 'NA') = NVL(c.sms_marketable, 'NA')
+  AND NVL(a.retail_digital_flag, 'NA') = NVL(c.retail_digital_flag, 'NA')
+  AND NVL(a.Web_App_Flag, 'NA') = NVL(c.Web_App_Flag, 'NA')
+  AND NVL(a.channel_native, 'NA') = NVL(c.channel_native, 'NA')
+  AND NVL(a.rnt_flag, 'NA') = NVL(c.rnt_flag, 'NA')
+  AND NVL(a.r12_active, 'NA') = NVL(c.r12_active, 'NA')
+  AND NVL(a.active_churn_r7_r12, 'NA') = NVL(c.active_churn_r7_r12, 'NA')
+  AND NVL(a.lapsed_r12_plus, 'NA') = NVL(c.lapsed_r12_plus, 'NA')
+WHERE a.ref_date >= '2023-12-01';
+
+
+-----------------------------------------------------------------------------------
+-- VALIDATION: Compare old vs new
+-----------------------------------------------------------------------------------
+-- Check level3_breakdown distribution
+SELECT 
+  'NEW' AS source,
+  ref_date,
+  level3_breakdown,
+  SUM(customer_count) AS customers
+FROM LACA_CUSTOMER_SEGMENTATION_FINAL
+WHERE ref_date = '2025-09-01'
+GROUP BY source, ref_date, level3_breakdown
+
+UNION ALL
+
+SELECT 
+  'OLD' AS source,
+  ref_date,
+  level3_breakdown,
+  SUM(customer_count) AS customers
+FROM LACA_CUSTOMER_SEGMENTATION_FINAL_BACKUP
+WHERE ref_date = '2025-09-01'
+GROUP BY source, ref_date, level3_breakdown
+
+ORDER BY level3_breakdown, source;
+
+
+-----------------------------------------------------------------------------------
+-- ROLLBACK SCRIPT (if needed)
+-----------------------------------------------------------------------------------
+-- Run this ONLY if the new version has issues
+
+-- CREATE OR REPLACE TABLE LACA_ENGAGEMENT_CUSTOMERS_AGG 
+-- CLONE LACA_ENGAGEMENT_CUSTOMERS_AGG_BACKUP;
+
+-- CREATE OR REPLACE TABLE LACA_CUSTOMER_DIMENSIONS 
+-- CLONE LACA_CUSTOMER_DIMENSIONS_BACKUP;
+
+-- CREATE OR REPLACE TABLE LACA_CUSTOMER_SEGMENTATION_FINAL 
+-- CLONE LACA_CUSTOMER_SEGMENTATION_FINAL_BACKUP;
+Key Changes Made:
+Added level3_breakdown calculation in Step 3 at customer-level BEFORE aggregation
+Added level3_breakdown to GROUP BY in the aggregate SELECT
+Added level3_breakdown to Step 5A dimension base
+Added level3_breakdown to join conditions in Step 5B
+Simplified Step 5B by just pulling a.level3_breakdown instead of recalculating
+Why This Works:
+Calculates breakdown at customer level before aggregation (like your test)
+Makes level3_breakdown a dimension (like corridor_bucket)
+Joins properly using NVL matching on all dimensions including level3_breakdown
+Avoids recalculation issues in the final table
+Next Steps:
+Run the script
+Run the validation query to compare old vs new
+If numbers match your test query → Success! ✅
+If numbers don't match → Run the rollback script (commented at bottom)
+The validation query will show you side-by-side comparison of old vs new for the same month. Let me know the results!
