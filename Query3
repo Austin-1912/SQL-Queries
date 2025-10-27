@@ -1,376 +1,574 @@
-select * from WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW  limit 5 ;
-select * from WUDNA.SUMMARY_GEN.WUDNA_ACCOUNT_MASTER_VW limit 5;
-select * from	WUDNA.CEX_SANDBOX.SK_DOMINANCY_METRICS limit 5 ;
-select * from WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW limit 5;
-select  count(distinct sndcustomer_key), count(*) from WUDATA_CDO_AIML.SHARE_SECURE.RFM_R12_TXN_CUST_SCORED_SECURED ;
-
-
-// base table
-create or replace table car_672_base as 
-select 
-    distinct a.sndcustomer_key, 
-    case when dominant_pricing_channel in ('APP', 'WEB') then 'digital'
-        when dominant_pricing_channel in ('POS', 'TMT', 'AIR') then 'retail'
-        else 'NA' end dominant_pricing_channel,
-    dominant_sndcountry_name,
-    c.global_holdout
-from WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW a
-left join WUDNA.CEX_SANDBOX.SK_DOMINANCY_METRICS b
-on a.sndcustomer_key = b.sndcustomer_key and mth_yr = '2025-08-01'
-left join WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
-on a.sndcustomer_key = c.customer_key
-where sndcountry_code in ('AT','BE','DK','FR','DE','GB','IE','IT','NL','NO','PT','ES','SE','CH')
-and rcv_country_name = 'INDIA'
-and rcvpaying_datetime >= '2024-09-29'
-and rcvpaying_datetime < '2025-09-29' ;
-
-select * from car_672_base; -- 369,611
-
-
-select EMAIL_MARKETABLE, SMS_MARKETABLE, APP_MARKETABLE, 
-count(distinct customer_key)
- from car_672_base a 
-left join yg_preferred_channel_cust_final b
-on a.sndcustomer_key = b.customer_key
-group by all
-;
-
-select * from yg_preferred_channel_cust_final limit 50;
-
-------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-// email marketable table
-create or replace table car_672_email as
-select a.*, b.*, c.rfm_persona, d.customer_umn
-from car_672_base a 
-left join yg_preferred_channel_cust_final b
-on a.sndcustomer_key = b.customer_key
-left join WUDATA_CDO_AIML.SHARE_SECURE.RFM_R12_TXN_CUST_SCORED_SECURED c
-on a.sndcustomer_key = c.sndcustomer_key
-where EMAIL_MARKETABLE = 'Y';
-
-
-
-
-select count(distinct sndcustomer_key) from car_672_email; -- 69,641  ;
-
-
-// email only stratification
-create or replace table car_672_email_only_customers as
-select
-    '@' || sndcustomer_key   sndcustomer_key,
-    dominant_sndcountry_name,
-    rfm_persona,
-    DOMINANT_PRICING_CHANNEL,
-    global_holdout,
-    case
-        when (row_number() over(partition by dominant_sndcountry_name, rfm_persona, DOMINANT_PRICING_CHANNEL order by sndcustomer_key)) % 2 = 0 then 'test'
-        else 'control' end test_control_flag
-        
-    -- count(distinct CUSTOMER_KEY) total_cust,
-    -- count(distinct case when to_number(CUSTOMER_KEY) % 2 = 0 then CUSTOMER_KEY end) Even_Cust,
-    -- count(distinct case when to_number(CUSTOMER_KEY) % 2 = 1 then CUSTOMER_KEY end) Odd_Cust
-from car_672_email
-where EMAIL_MARKETABLE = 'Y'
-and SMS_MARKETABLE = 'N'
-and APP_MARKETABLE = 'N' -- 8,979
-;
-
--- select    
---     dominant_sndcountry_name,
---     rfm_persona,
---     DOMINANT_PRICING_CHANNEL,
---     test_control_flag,
---     count(distinct sndcustomer_key)
---     from t1 group by all 
---     order by 1,2,3,4
-;  
-
-
-
-// email + sms / app  marketable and preferred channel = email
-create or replace table car_672_Multichannel_Email_Preferred_customers as
-with t1 as (
-select *,
-
-    row_number() over(partition by  dominant_sndcountry_name, rfm_persona, DOMINANT_PRICING_CHANNEL order by sndcustomer_key) rn,
-    count(sndcustomer_key) over(partition by  dominant_sndcountry_name, rfm_persona, DOMINANT_PRICING_CHANNEL order by sndcustomer_key  RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rn_sum
-    
-from car_672_email
-where EMAIL_MARKETABLE = 'Y'
-and (SMS_MARKETABLE = 'Y' or APP_MARKETABLE = 'Y')
-and preferred_channel = 'Email' 
-order by     COUNTRY_NAME,    rfm_persona,    DOMINANT_PRICING_CHANNEL, rn)
-
-select 
-    '@' || sndcustomer_key   sndcustomer_key,
-    dominant_sndcountry_name,
-    rfm_persona,
-    DOMINANT_PRICING_CHANNEL,
-    global_holdout,
-    case when rn <= rn_sum * 0.8 then 'test' else 'control' end test_control_flag
-from t1 
-group by ALL
-; -- 26,301
-
-
-// email + sms / app marketable and preferred channel = sms / app
-create or replace table car_672_Multichannel_Other_Preferred_customers as
-select 
-    '@' || sndcustomer_key   sndcustomer_key,
-    dominant_sndcountry_name,
-    rfm_persona,
-    DOMINANT_PRICING_CHANNEL,
-    global_holdout,
-    'control' test_control_flag
-from car_672_email
-where EMAIL_MARKETABLE = 'Y'
-and (SMS_MARKETABLE = 'Y' or APP_MARKETABLE = 'Y')
-and preferred_channel in ('APP', 'SMS') ; -- 34,361
-
-
-// final email table
-create or replace table car_672_Final_Email_Campaigns as
-Select * from car_672_email_only_customers
-union 
-Select * from car_672_Multichannel_Email_Preferred_customers
-Union 
-Select a.* from car_672_Multichannel_Other_Preferred_customers a;
-
-
-// validation
-Select 
-    test_control_flag,
-    b.preferred_channel,
-    a.global_holdout,
-    count(*),
-    count(distinct a.sndcustomer_key)  
-from car_672_Final_Email_Campaigns a
-left outer join car_672_email b on a.sndcustomer_key = '@' || b.sndcustomer_key
-group by all 
-order by 1,2;
-
-
-//final output
-Select * from car_672_Final_Email_Campaigns a where test_control_flag='test';
-Select * from car_672_Final_Email_Campaigns a where test_control_flag='control';
-
-
--------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-//sms marketable table
-create or replace table car_672_sms as
-select a.*, b.*, c.rfm_persona
-from car_672_base a 
-left join yg_preferred_channel_cust_final b
-on a.sndcustomer_key = b.customer_key
-left join WUDATA_CDO_AIML.SHARE_SECURE.RFM_R12_TXN_CUST_SCORED_SECURED c
-on a.sndcustomer_key = c.sndcustomer_key
-where SMS_MARKETABLE = 'Y';
-
-select * from car_672_sms; -- 95,004
-
-
-// sms only stratification
-create or replace table car_672_sms_only_customers as
-select
-    '@' || sndcustomer_key   sndcustomer_key,
-    dominant_sndcountry_name,
-    rfm_persona,
-    DOMINANT_PRICING_CHANNEL,
-    global_holdout,
-    case
-        when (row_number() over(partition by dominant_sndcountry_name, rfm_persona, DOMINANT_PRICING_CHANNEL order by sndcustomer_key )) % 2 = 0 then 'test'
-        else 'control' end test_control_flag
-        
-    -- count(distinct CUSTOMER_KEY) total_cust,
-    -- count(distinct case when to_number(CUSTOMER_KEY) % 2 = 0 then CUSTOMER_KEY end) Even_Cust,
-    -- count(distinct case when to_number(CUSTOMER_KEY) % 2 = 1 then CUSTOMER_KEY end) Odd_Cust
-from car_672_sms
-where EMAIL_MARKETABLE = 'N'
-and SMS_MARKETABLE = 'Y'
-and APP_MARKETABLE = 'N'; -- 40,606
-
-
-// sms + email / app marketable and preferred channel = sms
-create table car_672_Multichannel_sms_Preferred_customers as
-with t1 as (
-select *,
-    row_number() over(partition by  dominant_sndcountry_name, rfm_persona, DOMINANT_PRICING_CHANNEL order by sndcustomer_key) rn,
-    count(sndcustomer_key) over(partition by  dominant_sndcountry_name, rfm_persona, DOMINANT_PRICING_CHANNEL order by sndcustomer_key  RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rn_sum
-from car_672_sms
-where SMS_MARKETABLE = 'Y'
-and (EMAIL_MARKETABLE = 'Y' or APP_MARKETABLE = 'Y')
-and preferred_channel = 'SMS' 
-order by     COUNTRY_NAME,    rfm_persona,    DOMINANT_PRICING_CHANNEL, rn)
-
-select 
-    '@' || sndcustomer_key   sndcustomer_key,
-    dominant_sndcountry_name,
-    rfm_persona,
-    DOMINANT_PRICING_CHANNEL,
-    global_holdout,
-    case when rn <= rn_sum * 0.8 then 'test' else 'control' end test_control_flag
-from t1 ; --481
-
-
-// sms + email / app marketable and preferred channel = email / app
-create table sms_others_marketable_preferred_others as
-select 
-    '@' || sndcustomer_key   sndcustomer_key,
-    dominant_sndcountry_name,
-    rfm_persona,
-    DOMINANT_PRICING_CHANNEL,
-    global_holdout,
-    'control' test_control_flag
-from car_672_sms
-where SMS_MARKETABLE = 'Y'
-and (EMAIL_MARKETABLE = 'Y' or APP_MARKETABLE = 'Y')
-and preferred_channel in ('Email', 'APP') ; -- 53,917
-
-
-// sms_final table
-create table car_672_final_sms_campaigns as 
-select * from car_672_sms_only_customers
-union
-select * from car_672_Multichannel_sms_Preferred_customers
-union
-select * from sms_others_marketable_preferred_others;
-
-// validation
-Select 
-    test_control_flag,
-    b.preferred_channel,
-    a.global_holdout,
-    count(*),
-    count(distinct a.sndcustomer_key)  
-from car_672_final_sms_campaigns a
-left outer join car_672_sms b on a.sndcustomer_key = '@' || b.sndcustomer_key
-group by all 
-order by 1,2;
-
-
-//final output
-Select * from car_672_final_sms_campaigns a where test_control_flag='test';
-Select * from car_672_final_sms_campaigns a where test_control_flag='control';
-
--------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-
-// app marketable
-create or replace table car_672_app as
-select a.*, b.*, c.rfm_persona, customer_umn
-from car_672_base a 
-left join yg_preferred_channel_cust_final b
-on a.sndcustomer_key = b.customer_key
-left join WUDATA_CDO_AIML.SHARE_SECURE.RFM_R12_TXN_CUST_SCORED_SECURED c
-on a.sndcustomer_key = c.sndcustomer_key
-left join WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW d
-on a.sndcustomer_key = d.customer_key
-where APP_MARKETABLE = 'Y';
-
-
-select count(distinct sndcustomer_key), count(distinct customer_umn) from car_672_app ; -- 79,346   78,538
-
-
-// app only stratification
-create or replace table car_672_app_only_customers as 
-select
-    '@' || sndcustomer_key   sndcustomer_key,
-    customer_umn,
-    dominant_sndcountry_name,
-    rfm_persona,
-    DOMINANT_PRICING_CHANNEL,
-    global_holdout,
-    case
-        when (row_number() over(partition by dominant_sndcountry_name, rfm_persona, DOMINANT_PRICING_CHANNEL order by sndcustomer_key)) % 2 = 0 then 'test'
-        else 'control' end test_control_flag
-        
-    -- count(distinct CUSTOMER_KEY) total_cust,
-    -- count(distinct case when to_number(CUSTOMER_KEY) % 2 = 0 then CUSTOMER_KEY end) Even_Cust,
-    -- count(distinct case when to_number(CUSTOMER_KEY) % 2 = 1 then CUSTOMER_KEY end) Odd_Cust
-from car_672_app
-where EMAIL_MARKETABLE = 'N'
-and SMS_MARKETABLE = 'N'
-and APP_MARKETABLE = 'Y'; -- 41,522
-
-
-
-// app + email / sms marketable and preferred channel = app
-create or replace table car_672_multichannel_preferred_app_customers as 
-with t1 as (
-select *,
-    row_number() over(partition by  dominant_sndcountry_name, rfm_persona, DOMINANT_PRICING_CHANNEL order by sndcustomer_key) rn,
-    count(sndcustomer_key) over(partition by  dominant_sndcountry_name, rfm_persona, DOMINANT_PRICING_CHANNEL order by sndcustomer_key  RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rn_sum
-from car_672_app
-where APP_MARKETABLE = 'Y'
-and (EMAIL_MARKETABLE = 'Y' or SMS_MARKETABLE = 'Y')
-and preferred_channel = 'APP'
-order by     COUNTRY_NAME,    rfm_persona,    DOMINANT_PRICING_CHANNEL, rn)
-
-select 
-    '@' || sndcustomer_key   sndcustomer_key,
-    customer_umn,
-    dominant_sndcountry_name,
-    rfm_persona,
-    DOMINANT_PRICING_CHANNEL,
-    global_holdout,
-    case when rn <= rn_sum * 0.8 then 'test' else 'control' end test_control_flag
-from t1 ; -- 36,000
-
-
-// app + email / sms marketable and preferred channel = email /sms
-create or replace table car_672_app_others_preferred_others_customers as
-select 
-    '@' || sndcustomer_key   sndcustomer_key,
-    customer_umn,
-    dominant_sndcountry_name,
-    rfm_persona,
-    DOMINANT_PRICING_CHANNEL,
-    global_holdout,
-    'control' test_control_flag
-from car_672_app
-where APP_MARKETABLE = 'Y'
-and (EMAIL_MARKETABLE = 'Y' or SMS_MARKETABLE = 'Y')
-and preferred_channel in ('Email', 'SMS') ;  -- 1,824
-
-
-// final app table
-create or replace table car_672_final_app_campaigns as
-select * from car_672_app_only_customers
-union
-select * from car_672_multichannel_preferred_app_customers
-union
-select * from car_672_app_others_preferred_others_customers;
-
-
-// validation
-Select 
-    test_control_flag,
-    b.preferred_channel,
-    a.global_holdout,
-    count(*),
-    count(distinct a.sndcustomer_key)  
-from car_672_final_app_campaigns a
-left outer join car_672_app b on a.sndcustomer_key = '@' || b.sndcustomer_key
-group by all 
-order by 1,2;
-
-
-// final output
-select * from car_672_final_app_campaigns where test_control_flag = 'test';
-select * from car_672_final_app_campaigns where test_control_flag = 'control';
-
-
-
--------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-
+# LACA Customer Segmentation - Comprehensive Validation Guide
+
+## Table of Contents
+1. [RNT Customer Validation](#1-rnt-customer-validation)
+2. [R12 Active Customer Validation](#2-r12-active-customer-validation)
+3. [Engagement Segments Validation](#3-engagement-segments-validation)
+4. [Active Breakdown Validation](#4-active-breakdown-validation-churn-vs-active-r1-r6)
+5. [Lapsed Breakdown Validation](#5-lapsed-breakdown-validation)
+6. [Corridor Bucketing Validation](#6-corridor-bucketing-validation)
+7. [Data Quality Checks](#7-data-quality-checks)
+8. [Final Output Validation](#8-final-output-validation)
+
+---
+
+## 1. RNT Customer Validation
+
+### Purpose
+Validate that RNT (Registered Not Transacted) customers are correctly identified as customers who registered in the last 12 months but have never transacted.
+
+### Validation Query 1.1: RNT Count Comparison
+```sql
+SELECT
+    -- Registered customers in LACA for the last 12 months up to Aug 2025
+    (SELECT COUNT(DISTINCT c.customer_key)
+     FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
+     JOIN SUMMARY_GEN.COUNTRY_VW cnt
+       ON c.country_code = cnt.country_code
+     WHERE cnt.super_region = 'LACA'
+       AND DATE_TRUNC('MONTH', c.first_registration_date)
+             BETWEEN DATEADD(MONTH, -11, TO_DATE('2025-08-01'))
+                 AND TO_DATE('2025-08-31')) AS registered_customers,
+ 
+    -- RNT_Test: Registered but did NOT transact in the same 12-month window
+    (SELECT COUNT(DISTINCT c.customer_key)
+     FROM (
+         SELECT c.customer_key
+         FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
+         JOIN SUMMARY_GEN.COUNTRY_VW cnt
+           ON c.country_code = cnt.country_code
+         WHERE cnt.super_region = 'LACA'
+           AND DATE_TRUNC('MONTH', c.first_registration_date)
+                 BETWEEN DATEADD(MONTH, -11, TO_DATE('2025-08-01'))
+                     AND TO_DATE('2025-08-31')
+     ) c
+     LEFT JOIN (
+         SELECT DISTINCT t.sndcustomer_key
+         FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
+         JOIN SUMMARY_GEN.COUNTRY_VW snd
+           ON t.sndcountry_code = snd.country_code
+         WHERE snd.super_region = 'LACA'
+           AND DATE_TRUNC('MONTH', t.rcvpaying_datetime)
+                 BETWEEN DATEADD(MONTH, -11, TO_DATE('2025-08-01'))
+                     AND TO_DATE('2025-08-31')
+     ) t
+     ON c.customer_key = t.sndcustomer_key
+     WHERE t.sndcustomer_key IS NULL) AS RNT_Test,
+ 
+    -- RNT_Main: from the existing RNT table for Aug 2025
+    (SELECT COUNT(DISTINCT customer_key)
+     FROM LACA_RNT_CUSTOMERS
+     WHERE ref_date = TO_DATE('2025-08-01')) AS RNT_Main;
+```
+
+**Expected Result:**
+- `RNT_Test` should approximately equal `RNT_Main` (±1% acceptable due to timing differences)
+- `RNT_Main` should be less than `registered_customers`
+
+**✓ Pass Criteria:** `RNT_Main` / `registered_customers` should be between 50-80% (typical RNT rate)
+
+### Validation Query 1.2: Sample RNT Customers
+```sql
+SELECT
+  customer_key,
+  TO_CHAR(reg_month, 'Mon-YY') AS registered_month,
+  TO_CHAR(ref_date, 'Mon-YY') AS reference_month,
+  rnt_flag
+FROM LACA_RNT_CUSTOMERS
+WHERE ref_date = (SELECT MAX(ref_date) FROM LACA_RNT_CUSTOMERS)
+ORDER BY reg_month DESC
+LIMIT 10;
+```
+
+**✓ Pass Criteria:** All returned customers should have `rnt_flag = 'Y'` and registration within 12 months of ref_date
+
+### Validation Query 1.3: Verify RNT Customers Have No Transactions
+```sql
+SELECT
+    c.customer_key,
+    DATE_TRUNC('MONTH', c.first_registration_date) AS reg_month,
+    MIN(DATE(t.rcvpaying_datetime)) AS first_txn_date,
+    MAX(DATE(t.rcvpaying_datetime)) AS last_txn_date,
+    COUNT(t.sndcustomer_key) AS txn_count
+FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
+LEFT JOIN SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
+       ON c.customer_key = t.sndcustomer_key
+WHERE c.customer_key IN (
+    SELECT customer_key FROM LACA_RNT_CUSTOMERS 
+    WHERE ref_date = (SELECT MAX(ref_date) FROM LACA_RNT_CUSTOMERS)
+    LIMIT 100
+)
+GROUP BY c.customer_key, DATE_TRUNC('MONTH', c.first_registration_date)
+HAVING COUNT(t.sndcustomer_key) > 0
+ORDER BY c.customer_key;
+```
+
+**✓ Pass Criteria:** This query should return 0 rows (no RNT customers should have transactions)
+
+---
+
+## 2. R12 Active Customer Validation
+
+### Purpose
+Validate that R12 Active customers match across all layers (source → aggregate → final table).
+
+### Validation Query 2.1: Three-Level Count Comparison
+```sql
+WITH final_counts AS (
+  SELECT
+    ref_date,
+    SUM(CASE WHEN r12_active = 'Y' THEN engagement_customer_count ELSE 0 END) AS r12_active_final
+  FROM LACA_CUSTOMER_SEGMENTATION_FINAL
+  GROUP BY ref_date
+),
+agg_counts AS (
+  SELECT
+    ref_date,
+    SUM(CASE WHEN r12_active = 'Y' THEN customer_count ELSE 0 END) AS r12_active_agg
+  FROM LACA_ENGAGEMENT_CUSTOMERS_AGG
+  GROUP BY ref_date
+),
+source_counts AS (
+  SELECT
+    ref_date,
+    COUNT(DISTINCT CASE WHEN r12_active = 'Y' THEN customer_key END) AS r12_active_source
+  FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS
+  GROUP BY ref_date
+)
+SELECT
+  COALESCE(f.ref_date, a.ref_date, s.ref_date) AS ref_date,
+  s.r12_active_source,
+  a.r12_active_agg,
+  f.r12_active_final,
+  CASE
+    WHEN s.r12_active_source = a.r12_active_agg
+     AND a.r12_active_agg = f.r12_active_final
+    THEN '✓ Match'
+    ELSE '✗ Mismatch'
+  END AS validation_status
+FROM final_counts f
+FULL OUTER JOIN agg_counts a ON f.ref_date = a.ref_date
+FULL OUTER JOIN source_counts s ON f.ref_date = s.ref_date
+ORDER BY ref_date;
+```
+
+**✓ Pass Criteria:** All months should show '✓ Match'
+
+### Validation Query 2.2: Check for Misclassified RNT
+```sql
+SELECT
+  ref_date,
+  COUNT(*) AS issue_count,
+  LISTAGG(DISTINCT customer_key, ', ') WITHIN GROUP (ORDER BY customer_key) AS problem_customers
+FROM LACA_CUSTOMER_SEGMENTATION_FINAL
+WHERE rnt_flag = 'Y' AND r12_active = 'Y'
+GROUP BY ref_date
+HAVING COUNT(*) > 0;
+```
+
+**✓ Pass Criteria:** This query should return 0 rows (no customer can be both RNT and R12 Active)
+
+---
+
+## 3. Engagement Segments Validation
+
+### Purpose
+Validate that all engagement segments (Active, Churn, Lapsed, Other) are mutually exclusive and complete.
+
+### Validation Query 3.1: Segment Distribution
+```sql
+SELECT 
+  ref_date,
+  audience_segment,
+  SUM(customer_count) AS customers,
+  ROUND(100.0 * SUM(customer_count) / SUM(SUM(customer_count)) OVER (PARTITION BY ref_date), 2) AS pct
+FROM LACA_CUSTOMER_SEGMENTATION_FINAL
+GROUP BY ref_date, audience_segment
+ORDER BY ref_date, customers DESC;
+```
+
+**✓ Pass Criteria:** 
+- All 5 segments should appear: Active R1-R12, Registered Not Transacted, Lapsed R12+, Other
+- Active R1-R12 should be 30-50% of total
+- RNT should be 40-60% of total
+- Lapsed should be 5-15% of total
+- "Other" should be < 5%
+
+### Validation Query 3.2: Segment Flag Consistency
+```sql
+SELECT 
+  ref_date, 
+  r12_active, 
+  active_churn_r7_r12, 
+  rnt_flag, 
+  lapsed_r12_plus,
+  audience_segment,
+  SUM(customer_count) AS customers
+FROM LACA_CUSTOMER_SEGMENTATION_FINAL
+GROUP BY ref_date, r12_active, active_churn_r7_r12, rnt_flag, lapsed_r12_plus, audience_segment
+ORDER BY ref_date, customers DESC;
+```
+
+**✓ Pass Criteria:** Verify logical consistency:
+- `audience_segment = 'Active R1-R12'` should have `r12_active = 'Y'`
+- `audience_segment = 'Registered Not Transacted'` should have `rnt_flag = 'Y'`
+- `audience_segment = 'Lapsed R12+'` should have `lapsed_r12_plus = 'Y'`
+
+### Validation Query 3.3: Investigate "Other" Segment
+```sql
+SELECT
+  ref_date,
+  r12_active,
+  active_churn_r7_r12,
+  rnt_flag,
+  lapsed_r12_plus,
+  engagement_customer_count,
+  rnt_customer_count,
+  total_r12_txns,
+  total_r6_txns,
+  total_pr12_txns,
+  COUNT(*) AS row_count,
+  SUM(customer_count) AS total_customers
+FROM LACA_CUSTOMER_SEGMENTATION_FINAL
+WHERE audience_segment = 'Other'
+GROUP BY 1,2,3,4,5,6,7,8,9,10
+ORDER BY total_customers DESC
+LIMIT 20;
+```
+
+**✓ Pass Criteria:** "Other" segment should be minimal (< 5% of total customers) and primarily consist of edge cases
+
+---
+
+## 4. Active Breakdown Validation (Churn vs Active R1-R6)
+
+### Purpose
+Validate the sub-segmentation of Active R1-R12 customers into Churn R7-R12 and Active R1-R6.
+
+### Validation Query 4.1: Three-Level Active Breakdown Comparison
+```sql
+WITH source_breakdown AS (
+  SELECT
+    ref_date,
+    CASE
+      WHEN r12_active = 'Y' AND active_churn_r7_r12 = 'Y' THEN 'Churn R7-R12'
+      WHEN r12_active = 'Y' AND active_churn_r7_r12 = 'N' THEN 'Active R1-R6'
+      ELSE 'Not Active R1-R12'
+    END AS active_breakdown,
+    COUNT(DISTINCT customer_key) AS customer_count
+  FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS
+  GROUP BY ref_date, active_breakdown
+),
+agg_breakdown AS (
+  SELECT
+    ref_date,
+    CASE
+      WHEN r12_active = 'Y' AND active_churn_r7_r12 = 'Y' THEN 'Churn R7-R12'
+      WHEN r12_active = 'Y' AND active_churn_r7_r12 = 'N' THEN 'Active R1-R6'
+      ELSE 'Not Active R1-R12'
+    END AS active_breakdown,
+    SUM(customer_count) AS customer_count
+  FROM LACA_ENGAGEMENT_CUSTOMERS_AGG
+  GROUP BY ref_date, active_breakdown
+),
+final_breakdown AS (
+  SELECT
+    ref_date,
+    CASE
+      WHEN audience_segment = 'Active R1-R12' AND active_churn_r7_r12 = 'Y' THEN 'Churn R7-R12'
+      WHEN audience_segment = 'Active R1-R12' AND active_churn_r7_r12 = 'N' THEN 'Active R1-R6'
+      ELSE 'Not Active R1-R12'
+    END AS active_breakdown,
+    SUM(customer_count) AS customer_count
+  FROM LACA_CUSTOMER_SEGMENTATION_FINAL
+  WHERE rnt_flag = 'N'
+  GROUP BY ref_date, active_breakdown
+)
+SELECT
+  COALESCE(s.ref_date, a.ref_date, f.ref_date) AS ref_date,
+  COALESCE(s.active_breakdown, a.active_breakdown, f.active_breakdown) AS active_breakdown,
+  s.customer_count AS source_count,
+  a.customer_count AS agg_count,
+  f.customer_count AS final_count,
+  CASE
+    WHEN s.customer_count = a.customer_count AND a.customer_count = f.customer_count
+    THEN '✓ MATCH'
+    ELSE '✗ MISMATCH'
+  END AS validation_status
+FROM source_breakdown s
+FULL OUTER JOIN agg_breakdown a ON s.ref_date = a.ref_date AND s.active_breakdown = a.active_breakdown
+FULL OUTER JOIN final_breakdown f ON COALESCE(s.ref_date, a.ref_date) = f.ref_date 
+    AND COALESCE(s.active_breakdown, a.active_breakdown) = f.active_breakdown
+WHERE COALESCE(s.active_breakdown, a.active_breakdown, f.active_breakdown) IN ('Churn R7-R12', 'Active R1-R6')
+ORDER BY ref_date, active_breakdown;
+```
+
+**✓ Pass Criteria:** All rows should show '✓ MATCH'
+
+### Validation Query 4.2: Transaction Pattern Verification
+```sql
+SELECT
+  ref_date,
+  CASE
+    WHEN r12_active = 'Y' AND active_churn_r7_r12 = 'Y' THEN 'Churn R7-R12'
+    WHEN r12_active = 'Y' AND active_churn_r7_r12 = 'N' THEN 'Active R1-R6'
+  END AS active_breakdown,
+  AVG(r12_txns) AS avg_r12_txns,
+  AVG(r6_txns) AS avg_r6_txns,
+  COUNT(DISTINCT customer_key) AS customer_count
+FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS
+WHERE r12_active = 'Y'
+  AND ref_date = (SELECT MAX(ref_date) FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS)
+GROUP BY ref_date, active_breakdown
+ORDER BY active_breakdown;
+```
+
+**✓ Pass Criteria:** 
+- "Churn R7-R12": `avg_r6_txns` should be 0
+- "Active R1-R6": `avg_r6_txns` should be > 0
+
+---
+
+## 5. Lapsed Breakdown Validation
+
+### Purpose
+Validate the sub-segmentation of Lapsed R12+ customers by recency period (PR12, PPR12, PPPR12).
+
+### Validation Query 5.1: Lapsed Period Distribution
+```sql
+SELECT 
+  ref_date,
+  CASE 
+    WHEN total_pr12_txns > 0 THEN 'Has PR12 (13-24m)'
+    ELSE 'No PR12'
+  END AS pr12_status,
+  CASE 
+    WHEN total_ppr12_txns > 0 THEN 'Has PPR12 (25-36m)'
+    ELSE 'No PPR12'
+  END AS ppr12_status,
+  CASE 
+    WHEN total_pppr12_txns > 0 THEN 'Has PPPR12 (37-48m)'
+    ELSE 'No PPPR12'
+  END AS pppr12_status,
+  SUM(customer_count) AS customer_count,
+  ROUND(100.0 * SUM(customer_count) / SUM(SUM(customer_count)) OVER (PARTITION BY ref_date), 2) AS pct
+FROM LACA_ENGAGEMENT_CUSTOMERS_AGG
+WHERE lapsed_r12_plus = 'Y'
+  AND ref_date >= (SELECT MAX(ref_date) FROM LACA_ENGAGEMENT_CUSTOMERS_AGG)
+GROUP BY ref_date, pr12_status, ppr12_status, pppr12_status
+ORDER BY customer_count DESC;
+```
+
+**✓ Pass Criteria:** 
+- Most lapsed customers (70-90%) should have "Has PR12" (most recent lapsed period)
+- Combinations with multiple periods (e.g., Has PR12 + Has PPR12) are expected and valid
+
+### Validation Query 5.2: Level 3 Breakdown Counts
+```sql
+SELECT 
+  ref_date,
+  level3_breakdown,
+  SUM(customer_count) AS customers,
+  ROUND(100.0 * SUM(customer_count) / SUM(SUM(customer_count)) OVER (PARTITION BY ref_date), 2) AS pct
+FROM LACA_CUSTOMER_SEGMENTATION_FINAL
+WHERE level3_breakdown IS NOT NULL
+  AND level3_breakdown NOT IN ('Churn R7-12', 'Active R1-6')  -- Exclude Active breakdown
+GROUP BY ref_date, level3_breakdown
+ORDER BY ref_date, customers DESC;
+```
+
+**✓ Pass Criteria:** 
+- R13-R24 Active should have the highest percentage (60-80%)
+- Valid combinations may exist (e.g., R13-R36 Active, R13-R48 Active)
+
+---
+
+## 6. Corridor Bucketing Validation
+
+### Purpose
+Validate that corridors are correctly ranked and bucketed into Top 11 vs "Others".
+
+### Validation Query 6.1: Corridor Ranking
+```sql
+WITH corridor_ranked AS (
+    SELECT 
+        ref_date,
+        dominant_corridor_name,
+        COUNT(DISTINCT customer_key) AS cust_count,
+        DENSE_RANK() OVER(
+            PARTITION BY ref_date
+            ORDER BY COUNT(DISTINCT customer_key) DESC 
+        ) AS corridor_rank
+    FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS
+    WHERE dominant_corridor_name IS NOT NULL
+      AND ref_date = (SELECT MAX(ref_date) FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS)
+    GROUP BY ref_date, dominant_corridor_name
+)
+SELECT 
+    ref_date,
+    corridor_rank,
+    dominant_corridor_name,
+    cust_count,
+    ROUND(100.0 * cust_count / SUM(cust_count) OVER (PARTITION BY ref_date), 2) AS pct
+FROM corridor_ranked
+WHERE corridor_rank <= 15
+ORDER BY corridor_rank;
+```
+
+**✓ Pass Criteria:** 
+- Top 11 corridors should capture 70-85% of customers
+- Rank 12+ should be bucketed as "Others"
+
+### Validation Query 6.2: Corridor Bucket Distribution
+```sql
+SELECT 
+    ref_date, 
+    corridor_bucket,
+    SUM(customer_count) AS customers,
+    ROUND(100.0 * SUM(customer_count) / SUM(SUM(customer_count)) OVER (PARTITION BY ref_date), 2) AS pct
+FROM LACA_CUSTOMER_SEGMENTATION_FINAL
+WHERE rnt_flag = 'N'  -- Exclude RNT_Only
+GROUP BY ref_date, corridor_bucket
+ORDER BY ref_date, customers DESC;
+```
+
+**✓ Pass Criteria:** 
+- Should see exactly 11 named corridors plus "Others"
+- "Others" should represent 15-30% of customers
+
+---
+
+## 7. Data Quality Checks
+
+### Purpose
+Identify data quality issues and anomalies.
+
+### Validation Query 7.1: Null Value Check
+```sql
+SELECT
+  'laca_country' AS field_name,
+  COUNT(*) AS null_count,
+  ROUND(100.0 * COUNT(*) / (SELECT COUNT(*) FROM LACA_CUSTOMER_SEGMENTATION_FINAL), 2) AS null_pct
+FROM LACA_CUSTOMER_SEGMENTATION_FINAL
+WHERE laca_country IS NULL
+
+UNION ALL
+
+SELECT
+  'corridor_bucket',
+  COUNT(*),
+  ROUND(100.0 * COUNT(*) / (SELECT COUNT(*) FROM LACA_CUSTOMER_SEGMENTATION_FINAL), 2)
+FROM LACA_CUSTOMER_SEGMENTATION_FINAL
+WHERE corridor_bucket IS NULL
+
+UNION ALL
+
+SELECT
+  'channel_native',
+  COUNT(*),
+  ROUND(100.0 * COUNT(*) / (SELECT COUNT(*) FROM LACA_CUSTOMER_SEGMENTATION_FINAL), 2)
+FROM LACA_CUSTOMER_SEGMENTATION_FINAL
+WHERE channel_native IS NULL;
+```
+
+**✓ Pass Criteria:** All null percentages should be < 1%
+
+### Validation Query 7.2: Duplicate Check
+```sql
+SELECT
+  ref_date,
+  country_code,
+  customer_key,
+  COUNT(*) AS duplicate_count
+FROM LACA_CUSTOMER_SEGMENTATION_FINAL
+GROUP BY ref_date, country_code, customer_key
+HAVING COUNT(*) > 1
+LIMIT 100;
+```
+
+**✓ Pass Criteria:** This query should return 0 rows (no duplicates at customer-month level)
+
+---
+
+## 8. Final Output Validation
+
+### Purpose
+Validate the final output table is ready for Power BI consumption.
+
+### Validation Query 8.1: Monthly Summary
+```sql
+SELECT 
+  TO_CHAR(ref_date, 'Mon-YY') AS month_label,
+  customer_type,
+  level2_engagement_status,
+  SUM(customer_count) AS total_customers,
+  SUM(total_r12_txns) AS total_txns
+FROM LACA_CUSTOMER_SEGMENTATION_FINAL
+WHERE ref_date >= (SELECT DATEADD(MONTH, -6, MAX(ref_date)) FROM LACA_CUSTOMER_SEGMENTATION_FINAL)
+GROUP BY ref_date, month_label, customer_type, level2_engagement_status
+ORDER BY ref_date, total_customers DESC;
+```
+
+**✓ Pass Criteria:** 
+- Each month should have data for all customer types
+- Customer counts should be stable month-over-month (±10% variance is normal)
+
+### Validation Query 8.2: Total Customer Count Reconciliation
+```sql
+SELECT
+  ref_date,
+  SUM(customer_count) AS sum_customer_count,
+  SUM(engagement_customer_count) AS sum_engagement,
+  SUM(rnt_customer_count) AS sum_rnt,
+  SUM(total_customer_count) AS sum_total,
+  -- These should all match
+  CASE 
+    WHEN SUM(customer_count) = SUM(total_customer_count) THEN '✓ Match'
+    ELSE '✗ Mismatch'
+  END AS validation_status
+FROM LACA_CUSTOMER_SEGMENTATION_FINAL
+GROUP BY ref_date
+ORDER BY ref_date;
+```
+
+**✓ Pass Criteria:** All months should show '✓ Match'
+
+---
+
+## Summary Checklist
+
+Use this checklist to confirm all validations pass:
+
+- [ ] **Section 1:** RNT counts match between test query and table (±1%)
+- [ ] **Section 2:** R12 Active counts match across all three levels
+- [ ] **Section 2:** No RNT customers are misclassified as R12 Active
+- [ ] **Section 3:** All 5 audience segments appear with reasonable distributions
+- [ ] **Section 3:** "Other" segment is < 5% of total
+- [ ] **Section 4:** Active breakdown (Churn vs Active R1-R6) matches across levels
+- [ ] **Section 4:** Churn customers have R6=0, Active R1-R6 have R6>0
+- [ ] **Section 5:** Lapsed breakdown shows R13-R24 as majority (60-80%)
+- [ ] **Section 6:** Exactly 11 named corridors + "Others"
+- [ ] **Section 7:** No null values in key fields
+- [ ] **Section 7:** No duplicate customer-month records
+- [ ] **Section 8:** Monthly totals reconcile correctly
+
+**Overall Status:** ✅ All validations pass = Ready for production
+
+---
+
+## Notes for Manager
+
+**Data Scope:**
+- Reference period: January 2024 onwards
+- Source data: LACA region customers only
+- Rolling 12-month RNT window
+
+**Key Metrics Validated:**
+- RNT customer identification accuracy
+- Engagement segment classification
+- Corridor ranking and bucketing
+- Active vs Churn breakdown
+- Lapsed period segmentation
+
+**Confidence Level:** 
+Once all validations pass, the dataset is production-ready with high confidence in data accuracy and completeness.
