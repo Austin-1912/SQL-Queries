@@ -92,28 +92,7 @@ SELECT DISTINCT
  sms_marketable
 FROM rnt_no_txn rnt;
 
-//=====================================================================================
 
-;Select 
-
-    count(distinct CASE WHEN e.r12_txns > 0 THEN e.sndcustomer_key END)   AS r12_active,
-    
-FROM 
-    WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL e
-JOIN SUMMARY_GEN.COUNTRY_VW c
-  ON e.country_code = c.country_code
- AND c.super_region = 'LACA'
-LEFT JOIN WUDNA.CEX_SANDBOX.SK_DOMINANCY_METRICS d
-  ON e.sndcustomer_key = d.sndcustomer_key
- AND e.mth_yr = d.mth_yr 
-LEFT JOIN SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm               
-  ON e.sndcustomer_key = cm.customer_key 
-WHERE e.r48_txns > 0 and e.MTH_YR = '2025-09-01'
-;
- select 
-    count(distinct CASE WHEN r12_txns > 0 THEN customer_key END)   AS r12_active
- FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS
- where ref_date = '2025-09-01';
 -----------------------------------------------------------------------------------
 -- STEP 2: Engagement + Corridor Customers Table
 -----------------------------------------------------------------------------------
@@ -163,24 +142,7 @@ LEFT JOIN SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
 WHERE e.r48_txns > 0;
 
 
--- LEFT JOIN (
---   SELECT d.*
---   FROM WUDNA.CEX_SANDBOX.SK_DOMINANCY_METRICS d
---   JOIN SUMMARY_GEN.COUNTRY_VW snd
---     ON d.dominant_sndcountry_name = snd.country_name
---   WHERE snd.super_region = 'LACA'
--- ) d
 
---   ON e.sndcustomer_key = d.sndcustomer_key
---  AND e.mth_yr = d.mth_yr 
-
--- LEFT JOIN SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm               
---   ON e.sndcustomer_key = cm.customer_key 
-
--- WHERE e.r48_txns > 0;
-
-select DISTINCT  dominant_sndcountry_name,
-  dominant_rcvcountry_name, FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS LIMIT 100;
  -----------------------------------------------------------------------------------
 -- BACKUP: Create backup of existing aggregate table
 -----------------------------------------------------------------------------------
@@ -501,3 +463,10 @@ LEFT JOIN LACA_RNT_CUSTOMERS_AGG c
   AND NVL(a.lapsed_r12_plus, 'NA') = NVL(c.lapsed_r12_plus, 'NA')
   AND NVL(a.level3_breakdown, 'NA') = NVL(c.level3_breakdown, 'NA')  -- ADDED THIS JOIN CONDITION
 WHERE a.ref_date >= '2023-12-01';
+
+Ok so we are going to change the RNT LOGIC a bit, right now we were considering RNT customers as those who had Registered in the 
+R12 Period and transacted after the registeration up until the ref month, however now we want to change it to Registered in the R12 period
+but we will check for the customer transaction in the R48 time period(we can use R48_txns from our WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL Table 
+for that). Also in Dominant Sndcountry and Dominant Rcvcountry we are getting blanks so you could put "RNT". Also i found an issue
+in the power bi file i could see a corridor Argentina - Argentina however when we select that corridor there's no data or anything
+at all showing on the screen so why am i seeing that option?
