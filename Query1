@@ -1,979 +1,503 @@
----------------------------------------------------------------------------------------------------------------------------------------
- 
-SELECT
-  customer_key,
-  TO_CHAR(reg_month, 'Mon-YY') AS registered_month,
-  TO_CHAR(ref_date, 'Mon-YY') AS reference_month,
-  rnt_flag
-FROM LACA_RNT_CUSTOMERS
-WHERE customer_key IN (
-   '3000000000327858054',
-   '3000000000359073218',
-   '3000000000358978243',
-   '4000000000293531177',
-   '3000000000313731839',
-'3000000000339847982',
-'4000000000305351235',
-'4000000000274383526'
-  
-)
-ORDER BY customer_key, ref_date;
+ -----------------------------------------------------------------------------------
+-- STEP 1: RNT Customers Table
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_RNT_CUSTOMERS AS
+WITH params AS (
+  SELECT 12 AS rnt_window_mths
+),
+-- Generate months from Jan 2024 up to the last completed month
 
+months AS (
+  SELECT DISTINCT DATE_TRUNC('MONTH', MTH_YR) AS ref_date
+  FROM WUDNA.CEX_SANDBOX.VA_KPI_2020_2
+  WHERE MTH_YR >= TO_DATE('2024-01-01')
+    AND MTH_YR < DATE_TRUNC('MONTH', CURRENT_DATE)
+),
 
----------------------------------------------------------------------------------------------------------------------------------------
-SELECT
+-- Registered customers
+cust_reg AS (
+  SELECT
     c.customer_key,
     DATE_TRUNC('MONTH', c.first_registration_date) AS reg_month,
-    MIN(DATE(t.rcvpaying_datetime))               AS first_txn_date,
-    MAX(DATE(t.rcvpaying_datetime))               AS last_txn_date,
-    COUNT(t.sndcustomer_key)                      AS txn_count
-FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
-LEFT JOIN SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
-       ON c.customer_key = t.sndcustomer_key
-WHERE c.customer_key IN (
-   '3000000000327858054',
-   '3000000000359073218',
-   '3000000000358978243',
-   '4000000000293531177',
-   '3000000000313731839',
-'3000000000339847982',
-'4000000000305351235',
-'4000000000274383526'
-)
-GROUP BY c.customer_key, DATE_TRUNC('MONTH', c.first_registration_date)
-ORDER BY c.customer_key;
-
-
----------------------------------------------------------------------------------------------------------------------------------------
-
---GET THE DIFFERENCE CUSTOMER KEYS FOR VALIDATION
-SELECT DISTINCT c.customer_key
-FROM (
-    SELECT c.customer_key
-    FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
-    JOIN SUMMARY_GEN.COUNTRY_VW cnt
-      ON c.country_code = cnt.country_code
-    WHERE cnt.super_region = 'LACA'
-      AND DATE_TRUNC('MONTH', c.first_registration_date)
-            BETWEEN DATEADD(MONTH, -11, TO_DATE('2025-08-01'))
-                AND TO_DATE('2025-08-31')
-) c
-LEFT JOIN (
-    SELECT DISTINCT t.sndcustomer_key
-    FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
-    JOIN SUMMARY_GEN.COUNTRY_VW snd
-      ON t.sndcountry_code = snd.country_code
-    WHERE snd.super_region = 'LACA'
-      AND DATE_TRUNC('MONTH', t.rcvpaying_datetime)
-            BETWEEN DATEADD(MONTH, -11, TO_DATE('2025-08-01'))
-                AND TO_DATE('2025-08-31')
-) t
-ON c.customer_key = t.sndcustomer_key
-WHERE t.sndcustomer_key IS NULL
-
-MINUS
-
-SELECT DISTINCT customer_key
-FROM LACA_RNT_CUSTOMERS
-WHERE ref_date = TO_DATE('2025-08-01');
-
----------------------------------------------------------------------------------------------------------------------------------------
-
-    SELECT
-    -- Registered customers in LACA for the last 12 months up to Aug 2025
-    (SELECT COUNT(DISTINCT c.customer_key)
-     FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
-     JOIN SUMMARY_GEN.COUNTRY_VW cnt
-       ON c.country_code = cnt.country_code
-     WHERE cnt.super_region = 'LACA'
-       AND DATE_TRUNC('MONTH', c.first_registration_date)
-             BETWEEN DATEADD(MONTH, -11, TO_DATE('2025-08-01'))
-                 AND TO_DATE('2025-08-31')) AS registered_customers,
- 
-  
--- RNT_Test: Registered but did NOT transact in the same 12-month window
-
-(SELECT COUNT(DISTINCT c.customer_key)
-     FROM (
-         SELECT c.customer_key
-         FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
-         JOIN SUMMARY_GEN.COUNTRY_VW cnt
-           ON c.country_code = cnt.country_code
-         WHERE cnt.super_region = 'LACA'
-           AND DATE_TRUNC('MONTH', c.first_registration_date)
-                 BETWEEN DATEADD(MONTH, -11, TO_DATE('2025-08-01'))
-                     AND TO_DATE('2025-08-31')
-     ) c
-     LEFT JOIN (
-         SELECT DISTINCT t.sndcustomer_key
-         FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
-         JOIN SUMMARY_GEN.COUNTRY_VW snd
-           ON t.sndcountry_code = snd.country_code
-         WHERE snd.super_region = 'LACA'
-           AND DATE_TRUNC('MONTH', t.rcvpaying_datetime)
-                 BETWEEN DATEADD(MONTH, -11, TO_DATE('2025-08-01'))
-                     AND TO_DATE('2025-08-31')
-     ) t
-     ON c.customer_key = t.sndcustomer_key
-     WHERE t.sndcustomer_key IS NULL) AS RNT_Test,
-
-
- 
-    -- RNT_Main: from the existing RNT table for Aug 2025
-    (SELECT COUNT(DISTINCT customer_key)
-     FROM LACA_RNT_CUSTOMERS
-     WHERE ref_date = TO_DATE('2025-08-01')) AS RNT_Main;
-     //--Registered_Customers - 8915487, RNT_TEST - 6368038, RNT_Main- 6369867
-
-
-
------------------------------------------------------------------------------------
--- VALIDATION 1: R12 Active Counts from Final Table
------------------------------------------------------------------------------------
-SELECT
-  ref_date,
-  SUM(CASE WHEN r12_active = 'Y' THEN engagement_customer_count ELSE 0 END) AS r12_active_customers
-FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-GROUP BY ref_date
-ORDER BY ref_date;
- 
- 
------------------------------------------------------------------------------------
--- VALIDATION 2: R12 Active Counts from Engagement Aggregate (Pre-Final)
------------------------------------------------------------------------------------
-SELECT
-  ref_date,
-  SUM(CASE WHEN r12_active = 'Y' THEN customer_count ELSE 0 END) AS r12_active_customers
-FROM LACA_ENGAGEMENT_CUSTOMERS_AGG
-GROUP BY ref_date
-ORDER BY ref_date;
- 
- 
------------------------------------------------------------------------------------
--- VALIDATION 3: R12 Active Counts from Source Engagement Table (Most Granular)
------------------------------------------------------------------------------------
-SELECT
-  ref_date,
-  COUNT(DISTINCT CASE WHEN r12_active = 'Y' THEN customer_key END) AS r12_active_customers
-FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS
-GROUP BY ref_date
-ORDER BY ref_date;
- 
- 
------------------------------------------------------------------------------------
--- VALIDATION 4: Compare All Three Levels Side-by-Side
------------------------------------------------------------------------------------
-WITH final_counts AS (
-  SELECT
-    ref_date,
-    SUM(CASE WHEN r12_active = 'Y' THEN engagement_customer_count ELSE 0 END) AS r12_active_final
-  FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-  GROUP BY ref_date
-),
-agg_counts AS (
-  SELECT
-    ref_date,
-    SUM(CASE WHEN r12_active = 'Y' THEN customer_count ELSE 0 END) AS r12_active_agg
-  FROM LACA_ENGAGEMENT_CUSTOMERS_AGG
-  GROUP BY ref_date
-),
-source_counts AS (
-  SELECT
-    ref_date,
-    COUNT(DISTINCT CASE WHEN r12_active = 'Y' THEN customer_key END) AS r12_active_source
-  FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS
-  GROUP BY ref_date
-)
-SELECT
-  COALESCE(f.ref_date, a.ref_date, s.ref_date) AS ref_date,
-  s.r12_active_source,
-  a.r12_active_agg,
-  f.r12_active_final,
-  -- Check if all match
-  CASE
-    WHEN s.r12_active_source = a.r12_active_agg
-     AND a.r12_active_agg = f.r12_active_final
-    THEN '✓ Match'
-    ELSE '✗ Mismatch'
-  END AS validation_status
-FROM final_counts f
-FULL OUTER JOIN agg_counts a ON f.ref_date = a.ref_date
-FULL OUTER JOIN source_counts s ON f.ref_date = s.ref_date
-ORDER BY ref_date;
- 
- 
------------------------------------------------------------------------------------
--- VALIDATION 5: Detailed Breakdown by Corridor (Top 10 + Others)
------------------------------------------------------------------------------------
-SELECT
-  ref_date,
-  corridor_bucket,
-  SUM(CASE WHEN r12_active = 'Y' THEN engagement_customer_count ELSE 0 END) AS r12_active_customers
-FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-GROUP BY ref_date, corridor_bucket
-ORDER BY ref_date, r12_active_customers DESC;
-
-
--- VALIDATION 5B: Top 10 corridors only (no Others, no RNT_Only)
-SELECT
-  ref_date,
-  corridor_bucket,
-  SUM(CASE WHEN r12_active = 'Y' THEN engagement_customer_count ELSE 0 END) AS r12_active_customers
-FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-WHERE rnt_flag = 'N'
-  AND corridor_bucket <> 'Others'
-GROUP BY ref_date, corridor_bucket
-ORDER BY ref_date, r12_active_customers DESC;
-
- 
- 
------------------------------------------------------------------------------------
--- VALIDATION 6: Check for RNT Customers Misclassified as R12 Active
------------------------------------------------------------------------------------
-SELECT
-  ref_date,
-  COUNT(*) AS issue_count
-FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-WHERE rnt_flag = 'Y' AND r12_active = 'Y'  -- This should be 0
-GROUP BY ref_date
-HAVING COUNT(*) > 0;
-
-
------------------------------------------------------------------------------------
--- COMPREHENSIVE VALIDATION
------------------------------------------------------------------------------------
-WITH source_detail AS (
-  SELECT
-    ref_date,
-    country_code,
-    r12_active,
-    active_churn_r7_r12,
-    lapsed_r12_plus,
-    COUNT(DISTINCT customer_key) as customer_count
-  FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS
-  GROUP BY ref_date, country_code, r12_active, active_churn_r7_r12, lapsed_r12_plus
-),
-agg_detail AS (
-  SELECT
-    ref_date,
-    country_code,
-    r12_active,
-    active_churn_r7_r12,
-    lapsed_r12_plus,
-    SUM(customer_count) as customer_count
-  FROM LACA_ENGAGEMENT_CUSTOMERS_AGG
-  GROUP BY ref_date, country_code, r12_active, active_churn_r7_r12, lapsed_r12_plus
-),
-final_detail AS (
-  SELECT
-    ref_date,
-    country_code,
-    r12_active,
-    active_churn_r7_r12,
-    lapsed_r12_plus,
-    SUM(engagement_customer_count) as customer_count  -- FIX: Use engagement_customer_count instead of customer_count
-  FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-  WHERE rnt_flag = 'N'  -- Only engagement customers, not RNT
-  GROUP BY ref_date, country_code, r12_active, active_churn_r7_r12, lapsed_r12_plus
-)
-SELECT
-  COALESCE(s.ref_date, a.ref_date, f.ref_date) as ref_date,
-  COALESCE(s.country_code, a.country_code, f.country_code) as country_code,
-  COALESCE(s.r12_active, a.r12_active, f.r12_active) as r12_active,
-  COALESCE(s.active_churn_r7_r12, a.active_churn_r7_r12, f.active_churn_r7_r12) as active_churn_r7_r12,
-  COALESCE(s.lapsed_r12_plus, a.lapsed_r12_plus, f.lapsed_r12_plus) as lapsed_r12_plus,
-  s.customer_count as source_count,
-  a.customer_count as agg_count,
-  f.customer_count as final_count,
-  CASE
-    WHEN s.customer_count = a.customer_count AND a.customer_count = f.customer_count THEN '✓ MATCH'
-    ELSE '✗ MISMATCH'
-  END as status
-FROM source_detail s
-FULL OUTER JOIN agg_detail a
-  ON s.ref_date = a.ref_date
-  AND s.country_code = a.country_code
-  AND s.r12_active = a.r12_active
-  AND s.active_churn_r7_r12 = a.active_churn_r7_r12
-  AND s.lapsed_r12_plus = a.lapsed_r12_plus
-FULL OUTER JOIN final_detail f
-  ON COALESCE(s.ref_date, a.ref_date) = f.ref_date
-  AND COALESCE(s.country_code, a.country_code) = f.country_code
-  AND COALESCE(s.r12_active, a.r12_active) = f.r12_active
-  AND COALESCE(s.active_churn_r7_r12, a.active_churn_r7_r12) = f.active_churn_r7_r12
-  AND COALESCE(s.lapsed_r12_plus, a.lapsed_r12_plus) = f.lapsed_r12_plus
-WHERE COALESCE(s.customer_count, 0) != COALESCE(a.customer_count, 0)
-   OR COALESCE(a.customer_count, 0) != COALESCE(f.customer_count, 0)
-ORDER BY ref_date, country_code, r12_active;
-
-
--- See how many corridors are in each rank
-SELECT 
-    ref_date, 
-    corridor_bucket, 
-    COUNT(DISTINCT customer_count) AS customers,
-    SUM(total_r12_txns) AS txns
-    FROM LACA_ENGAGEMENT_CUSTOMERS_AGG
-    WHERE ref_date = (SELECT MAX(ref_date) FROM LACA_ENGAGEMENT_CUSTOMERS_AGG)
-    GROUP BY ref_date, corridor_bucket
-    ORDER BY customers DESC;
-
-    WITH corridor_ranked AS (
-        SELECT 
-            ref_date,
-            dominant_corridor_name,
-            COUNT(DISTINCT customer_key) as cust_count,
-            DENSE_RANK() OVER( PARTITION BY ref_date
-            ORDER BY COUNT(DISTINCT customer_key) DESC 
-            ) AS corridor_rank
-        FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS
-        WHERE dominant_corridor_name IS NOT NULL
-            AND ref_date = (SELECT MAX(ref_date) FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS)
-            GROUP BY ref_date, dominant_corridor_name
-    )
-SELECT * 
-FROM corridor_ranked
-where corridor_rank <= 15
-ORDER BY corridor_rank;
-
-
-SELECT ref_date, audience_segment, 
-    COUNT(DISTINCT CASE WHEN r12_active = 'Y' THEN customer_count ELSE 0 END) AS r12_active_flag,
-    COUNT(DISTINCT CASE WHEN active_churn_r7_r12 = 'Y' THEN customer_count ELSE 0 END) AS churn_flag,
-    SUM(customer_count) AS total_customers
-    FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-    GROUP BY ref_date, audience_segment
-    ORDER BY ref_date, audience_segment;
-
-
-    --Check 2
-    SELECT ref_date, r12_active, active_churn_r7_r12, rnt_flag, lapsed_r12_plus,
-    SUM(customer_count) as customers
-    FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-    WHERE audience_segment = 'Other'
-    GROUP BY ALL
-    ORDER BY customers DESC;
-
-    --Check 3
-    SELECT ref_date, 
-    SUM(CASE WHEN r12_active = 'Y' THEN customer_count ELSE 0 END) AS total_r12_active_flag,
-    SUM(CASE WHEN active_churn_r7_r12 = 'Y' THEN customer_count ELSE 0 END) AS total_churn_flag,
-    SUM(CASE WHEN r12_active = 'Y' AND active_churn_r7_r12 = 'Y' THEN customer_count ELSE 0 END) AS both_flags,
-    SUM(CASE WHEN audience_segment = 'Active R1-R12' THEN customer_count ELSE 0 END) AS segment_active_r1_r12,
-    SUM(CASE WHEN audience_segment = 'Active Churn R7-R12' THEN customer_count ELSE 0 END) AS segment_churn,
-    SUM(CASE WHEN audience_segment = 'Other' THEN customer_count ELSE 0 END) AS segment_other
-    FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-    GROUP BY ref_date
-    ORDER BY ref_date;
-
-    SELECT
-  ref_date,
-  engagement_customer_count,
-  rnt_customer_count,
-  total_r12_txns,
-  total_r6_txns,
-  total_pr12_txns,
-  total_ppr12_txns,
-  COUNT(*) AS row_count,
-  SUM(customer_count) AS total_customers
-FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-WHERE audience_segment = 'Other'
-  AND r12_active = 'N'
-  AND active_churn_r7_r12 = 'N'
-  AND rnt_flag = 'N'
-  AND lapsed_r12_plus = 'N'
-GROUP BY ref_date, engagement_customer_count, rnt_customer_count,
-         total_r12_txns, total_r6_txns, total_pr12_txns, total_ppr12_txns
-ORDER BY total_customers DESC;
-
-
-    -----------------------------------------------------------------------------------
--- VALIDATION: Active R1-R12 Breakdown (Active Churn vs Inactive R1-R6)
------------------------------------------------------------------------------------
- 
--- Part 1: Validate the breakdown at source level
-WITH source_breakdown AS (
-  SELECT
-    ref_date,
-    country_code,
+    first_registration_date,
+    c.country_code,
     CASE
-      WHEN r12_active = 'Y' AND active_churn_r7_r12 = 'Y' THEN 'Active Churn R7-R12'
-      WHEN r12_active = 'Y' AND active_churn_r7_r12 = 'N' THEN 'Inactive R1-R6'
-      ELSE 'Not Active R1-R12'
-    END AS active_breakdown,
-    r12_txns,
-    r6_txns,
-    COUNT(DISTINCT customer_key) AS customer_count
-  FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS
-  GROUP BY ref_date, country_code, r12_active, active_churn_r7_r12, r12_txns, r6_txns
+    WHEN c.email_address_on_file_flag = 'Y'
+     AND c.opt_email = 'I'
+     AND c.marketing_flag = 'Y'
+    THEN 'Y'
+    ELSE 'N'
+  END AS email_marketable,
+  CASE
+    WHEN (c.opt_sms = 'I'
+      AND c.mobile_number_on_file_flag = 'Y'
+      AND c.marketing_flag = 'Y'
+      AND c.country_code NOT IN ('US','CA'))
+    OR (c.mobile_number_on_file_flag = 'Y'
+      AND c.opt_sms = 'I'
+      AND c.double_opt_sms = 'I'
+      AND c.marketing_flag = 'Y'
+      AND c.country_code IN ('US','CA'))
+    THEN 'Y'
+    ELSE 'N'
+  END AS sms_marketable
+  FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
+  JOIN SUMMARY_GEN.COUNTRY_VW cnt
+    ON c.country_code = cnt.country_code
+  WHERE cnt.super_region = 'LACA'
+    AND c.first_registration_date IS NOT NULL
 ),
- 
--- Part 2: Validate at aggregate level
-agg_breakdown AS (
-  SELECT
-    ref_date,
-    country_code,
-    CASE
-      WHEN r12_active = 'Y' AND active_churn_r7_r12 = 'Y' THEN 'Active Churn R7-R12'
-      WHEN r12_active = 'Y' AND active_churn_r7_r12 = 'N' THEN 'Inactive R1-R6'
-      ELSE 'Not Active R1-R12'
-    END AS active_breakdown,
-    SUM(customer_count) AS customer_count
-  FROM LACA_ENGAGEMENT_CUSTOMERS_AGG
-  GROUP BY ref_date, country_code, r12_active, active_churn_r7_r12
+-- Transactions
+txns_rnt AS (
+  SELECT DISTINCT
+    t.sndcustomer_key AS customer_key,
+    MIN(rcvpaying_datetime) as first_txn_date
+  FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
+  -- JOIN SUMMARY_GEN.COUNTRY_VW snd
+  --   ON t.sndcountry_code = snd.country_code
+  -- WHERE snd.super_region = 'LACA'
+    where t.rcvpaying_datetime >= '2023-01-01'
+    Group by  all
 ),
- 
--- Part 3: Validate at final level (mimicking your Power BI measure)
-final_breakdown AS (
+-- RNT logic: registered in R12 window and no transactions in same R12 window
+
+rnt_no_txn AS (
   SELECT
-    ref_date,
-    country_code,
-    CASE
-      WHEN audience_segment = 'Active R1-R12' AND active_churn_r7_r12 = 'Y'
-        THEN 'Active Churn R7-R12'
-      WHEN audience_segment = 'Active R1-R12' AND active_churn_r7_r12 = 'N'
-        THEN 'Inactive R1-R6'
-      ELSE 'Not Active R1-R12'
-    END AS active_breakdown,
-    SUM(customer_count) AS customer_count
-  FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-  WHERE rnt_flag = 'N'  -- Only engagement customers
-  GROUP BY ref_date, country_code, audience_segment, active_churn_r7_r12
+  distinct
+    m.ref_date,
+    r.customer_key,
+    r.country_code,
+    r.reg_month,
+    email_marketable,
+ sms_marketable
+  FROM months m
+  JOIN cust_reg r
+    ON r.reg_month BETWEEN DATEADD(MONTH, - (SELECT rnt_window_mths FROM params) + 1, m.ref_date)
+                      AND m.ref_date
+  LEFT JOIN txns_rnt t
+    ON r.customer_key = t.customer_key
+   AND t.first_txn_date BETWEEN date(r.first_registration_date) AND LAST_DAY(m.ref_date)
+   --and date(r.first_registration_date) <= date(t.first_txn_date)
+  WHERE t.customer_key IS NULL --and first_txn_date <= LAST_DAY(m.ref_date)
+
 )
- 
--- Compare all three levels
-SELECT
-  COALESCE(s.ref_date, a.ref_date, f.ref_date) AS ref_date,
-  COALESCE(s.active_breakdown, a.active_breakdown, f.active_breakdown) AS active_breakdown,
-  SUM(s.customer_count) AS source_count,
-  SUM(a.customer_count) AS agg_count,
-  SUM(f.customer_count) AS final_count,
-  CASE
-    WHEN SUM(s.customer_count) = SUM(a.customer_count)
-     AND SUM(a.customer_count) = SUM(f.customer_count)
-    THEN '✓ MATCH'
-    ELSE '✗ MISMATCH'
-  END AS validation_status
-FROM source_breakdown s
-FULL OUTER JOIN agg_breakdown a
-  ON s.ref_date = a.ref_date
-  AND s.country_code = a.country_code
-  AND s.active_breakdown = a.active_breakdown
-FULL OUTER JOIN final_breakdown f
-  ON COALESCE(s.ref_date, a.ref_date) = f.ref_date
-  AND COALESCE(s.country_code, a.country_code) = f.country_code
-  AND COALESCE(s.active_breakdown, a.active_breakdown) = f.active_breakdown
-WHERE COALESCE(s.active_breakdown, a.active_breakdown, f.active_breakdown) IN ('Active Churn R7-R12', 'Inactive R1-R6')
-GROUP BY
-  COALESCE(s.ref_date, a.ref_date, f.ref_date),
-  COALESCE(s.active_breakdown, a.active_breakdown, f.active_breakdown)
-ORDER BY ref_date, active_breakdown;
- 
- 
+-- Final RNT customer table
+SELECT DISTINCT
+  rnt.ref_date,
+  rnt.customer_key,
+  rnt.country_code,
+  rnt.reg_month,
+  'Y' AS rnt_flag,
+ email_marketable,
+ sms_marketable
+FROM rnt_no_txn rnt;
+
+//=====================================================================================
+
+;Select 
+
+    count(distinct CASE WHEN e.r12_txns > 0 THEN e.sndcustomer_key END)   AS r12_active,
+    
+FROM 
+    WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL e
+JOIN SUMMARY_GEN.COUNTRY_VW c
+  ON e.country_code = c.country_code
+ AND c.super_region = 'LACA'
+LEFT JOIN WUDNA.CEX_SANDBOX.SK_DOMINANCY_METRICS d
+  ON e.sndcustomer_key = d.sndcustomer_key
+ AND e.mth_yr = d.mth_yr 
+LEFT JOIN SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm               
+  ON e.sndcustomer_key = cm.customer_key 
+WHERE e.r48_txns > 0 and e.MTH_YR = '2025-09-01'
+;
+ select 
+    count(distinct CASE WHEN r12_txns > 0 THEN customer_key END)   AS r12_active
+ FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS
+ where ref_date = '2025-09-01';
 -----------------------------------------------------------------------------------
--- DETAILED DIAGNOSTIC: Check the logic components
+-- STEP 2: Engagement + Corridor Customers Table
 -----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS AS
+
 SELECT
-  ref_date,
-  r12_active,
-  active_churn_r7_r12,
-  r12_txns,
-  r6_txns,
-  COUNT(DISTINCT customer_key) AS customer_count,
-  -- Show what the breakdown should be
+  e.sndcustomer_key                                AS customer_key,
+  e.country_code,
+  DATE_TRUNC('MONTH', e.mth_yr)                    AS ref_date,
+  DATE_TRUNC('MONTH', cm.first_registration_date)  AS reg_month,
+  e.r12_txns,
+  CASE WHEN e.r12_txns > 0 THEN 'Y' ELSE 'N' END   AS r12_active,
+  e.r6_txns,
+  CASE WHEN e.r6_txns = 0 AND e.r12_txns > 0 THEN 'Y' ELSE 'N' END AS active_churn_r7_r12,
+  e.pr12_txns,
+  e.ppr12_txns,
+  e.pppr12_txns,
+  CASE WHEN e.r12_txns = 0 AND (e.pr12_txns > 0 OR e.ppr12_txns > 0 OR e.pppr12_txns > 0) THEN 'Y' ELSE 'N' END AS lapsed_r12_plus,
+  e.email_marketable,
+  e.sms_marketable,
+  CASE WHEN e.R12_App_txns >0 THEN 'Y' ELSE 'N' END AS app_marketable_flag,
+  e.retail_digital_flag,
+  e.Web_App_Flag, 
+  e.r12_dominant_channel AS channel_dominance,
+-- Channel Native: 
   CASE
-    WHEN r12_active = 'Y' AND active_churn_r7_r12 = 'Y' THEN 'Churn R7-R12'
-    WHEN r12_active = 'Y' AND active_churn_r7_r12 = 'N' THEN 'Active R1-R6'
+    WHEN e.retail_digital_flag = 'R12_INACTIVE' THEN 'R12 Inactive'
+    WHEN e.retail_digital_flag = 'Digital_only' THEN 'Digital Only'
+    WHEN e.retail_digital_flag = 'Retail_only' THEN 'Retail Only'
+    WHEN e.retail_digital_flag = 'Retail+Digital' THEN 'Retail + Digital'
     ELSE 'Other'
-  END AS expected_breakdown
-FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS
-WHERE ref_date >= '2025-01-01'  -- Pick a recent month
-GROUP BY ref_date, r12_active, active_churn_r7_r12, r12_txns, r6_txns
-ORDER BY ref_date, r12_active DESC, active_churn_r7_r12 DESC;
- 
- 
------------------------------------------------------------------------------------
--- SUMMARY BY MONTH: What Power BI should show
------------------------------------------------------------------------------------
-SELECT
-  ref_date,
-  CASE
-    WHEN audience_segment = 'Active R1-R12' AND active_churn_r7_r12 = 'Y'
-      THEN 'Churn R7-R12'
-    WHEN audience_segment = 'Active R1-R12' AND active_churn_r7_r12 = 'N'
-      THEN 'Active R1-R6'
-  END AS active_breakdown,
-  SUM(customer_count) AS total_customers
-FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-WHERE audience_segment = 'Active R1-R12'
-  AND rnt_flag = 'N'
-GROUP BY ref_date, active_breakdown
-ORDER BY ref_date, active_breakdown;
- 
- 
------------------------------------------------------------------------------------
--- EDGE CASE CHECK: Verify mutually exclusive logic
------------------------------------------------------------------------------------
-SELECT
-  ref_date,
-  r12_active,
-  active_churn_r7_r12,
-  COUNT(DISTINCT customer_key) AS customer_count,
-  -- These should be mutually exclusive
-  COUNT(DISTINCT CASE WHEN r12_active = 'Y' AND active_churn_r7_r12 = 'Y' THEN customer_key END) AS churn_count,
-  COUNT(DISTINCT CASE WHEN r12_active = 'Y' AND active_churn_r7_r12 = 'N' THEN customer_key END) AS inactive_count,
-  -- Verify: churn_count + inactive_count should equal customer_count when r12_active = 'Y'
-  COUNT(DISTINCT CASE WHEN r12_active = 'Y' THEN customer_key END) AS total_active_r12
-FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS
-WHERE ref_date = '2025-01-01'  -- Test one month
-GROUP BY ref_date, r12_active, active_churn_r7_r12;
- 
- 
------------------------------------------------------------------------------------
--- POWER BI EXPECTED OUTPUT: This should match your visual exactly
------------------------------------------------------------------------------------
-SELECT
-  TO_CHAR(ref_date, 'Mon-YY') AS month_label,
-  CASE
-    WHEN audience_segment = 'Active R1-R12' AND active_churn_r7_r12 = 'Y'
-      THEN 'Churn R7-R12'
-    WHEN audience_segment = 'Active R1-R12' AND active_churn_r7_r12 = 'N'
-      THEN 'Active R1-R6'
-  END AS active_breakdown_measure,
-  SUM(customer_count) AS customer_count
-FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-WHERE audience_segment = 'Active R1-R12'
-GROUP BY ref_date, month_label, active_breakdown_measure
-HAVING active_breakdown_measure IS NOT NULL  -- Mimics your BLANK() in Power BI
-ORDER BY ref_date, active_breakdown_measure;
+  END AS channel_native,
+  d.dominant_corridor_name,
+  d.dominant_sndcountry_name,
+  d.dominant_rcvcountry_name,
+  d.dominant_pricing_channel,
+  'N' AS rnt_flag
+FROM WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL e
+Inner JOIN SUMMARY_GEN.COUNTRY_VW c
+  ON e.country_code = c.country_code
+ AND c.super_region = 'LACA'
+LEFT JOIN WUDNA.CEX_SANDBOX.SK_DOMINANCY_METRICS d
+  ON e.sndcustomer_key = d.sndcustomer_key
+ AND e.mth_yr = d.mth_yr 
+LEFT JOIN SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm               
+  ON e.sndcustomer_key = cm.customer_key 
+WHERE e.r48_txns > 0;
 
--- Check for duplicate customer keys in aggregate table
-SELECT
-  ref_date,
-  customer_key,
-  COUNT(*) AS row_count
-FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS
-WHERE ref_date = '2025-08-01'  -- Pick one month
-  AND r12_active = 'Y'
-GROUP BY ref_date, customer_key
-HAVING COUNT(*) > 1
-LIMIT 100;
 
--- What Power BI should show (matches your measure exactly)
-SELECT
-  ref_date,
-  TO_CHAR(ref_date, 'Mon-YY') AS month_label,
-  
-  -- Churn R7-R12
-  SUM(CASE
-    WHEN audience_segment = 'Active R1-R12'
-     AND active_churn_r7_r12 = 'Y'
-    THEN customer_count
-    ELSE 0
-  END) AS churn_r7_r12,
-  
-  -- Active R1-R6 (recent active, not churn)
-  SUM(CASE
-    WHEN audience_segment = 'Active R1-R12'
-     AND active_churn_r7_r12 = 'N'
-    THEN customer_count
-    ELSE 0
-  END) AS active_r1_r6,
-  
-  -- Total Active R1-R12 (should equal sum of above)
-  SUM(CASE
-    WHEN audience_segment = 'Active R1-R12'
-    THEN customer_count
-    ELSE 0
-  END) AS total_active_r1_r12,
-  
-  -- Validation check
-  SUM(CASE
-    WHEN audience_segment = 'Active R1-R12'
-     AND active_churn_r7_r12 = 'Y'
-    THEN customer_count
-    ELSE 0
-  END) +
-  SUM(CASE
-    WHEN audience_segment = 'Active R1-R12'
-     AND active_churn_r7_r12 = 'N'
-    THEN customer_count
-    ELSE 0
-  END) AS calculated_total
- 
-FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-WHERE rnt_flag = 'N'
-GROUP BY ref_date
-ORDER BY ref_date;
+-- LEFT JOIN (
+--   SELECT d.*
+--   FROM WUDNA.CEX_SANDBOX.SK_DOMINANCY_METRICS d
+--   JOIN SUMMARY_GEN.COUNTRY_VW snd
+--     ON d.dominant_sndcountry_name = snd.country_name
+--   WHERE snd.super_region = 'LACA'
+-- ) d
 
- --Validation for Lapsed R12 breakdown
+--   ON e.sndcustomer_key = d.sndcustomer_key
+--  AND e.mth_yr = d.mth_yr 
+
+-- LEFT JOIN SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm               
+--   ON e.sndcustomer_key = cm.customer_key 
+
+-- WHERE e.r48_txns > 0;
+
+select DISTINCT  dominant_sndcountry_name,
+  dominant_rcvcountry_name, FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS LIMIT 100;
  -----------------------------------------------------------------------------------
--- VALIDATION 1: Detailed breakdown of lapsed customers by period overlap
+-- BACKUP: Create backup of existing aggregate table
 -----------------------------------------------------------------------------------
-SELECT 
-  ref_date,
-  CASE WHEN total_pr12_txns > 0 THEN 'Y' ELSE 'N' END AS has_pr12,
-  CASE WHEN total_ppr12_txns > 0 THEN 'Y' ELSE 'N' END AS has_ppr12,
-  CASE WHEN total_pppr12_txns > 0 THEN 'Y' ELSE 'N' END AS has_pppr12,
-  SUM(customer_count) AS customer_count,
-  ROUND(100.0 * SUM(customer_count) / SUM(SUM(customer_count)) OVER (PARTITION BY ref_date), 2) AS pct_of_lapsed
-FROM LACA_ENGAGEMENT_CUSTOMERS_AGG
-WHERE lapsed_r12_plus = 'Y'
-  AND ref_date = '2025-01-01'  -- Check one month
-GROUP BY ref_date, has_pr12, has_ppr12, has_pppr12
-ORDER BY customer_count DESC;
- 
+CREATE OR REPLACE TABLE LACA_ENGAGEMENT_CUSTOMERS_AGG_BACKUP 
+CLONE LACA_ENGAGEMENT_CUSTOMERS_AGG;
  
 -----------------------------------------------------------------------------------
--- VALIDATION 2: Check PR12 definition in source KPI table
+-- STEP 3: Aggregate Engagement Customers
 -----------------------------------------------------------------------------------
-SELECT 
-  DATE_TRUNC('MONTH', mth_yr) AS ref_date,
-  r12_txns,
-  pr12_txns,
-  ppr12_txns,
-  COUNT(DISTINCT sndcustomer_key) AS customer_count
-FROM WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL
-WHERE DATE_TRUNC('MONTH', mth_yr) = '2025-01-01'
-  AND r12_txns = 0  -- Lapsed
-  AND (pr12_txns > 0 OR ppr12_txns > 0)  -- But had prior activity
-GROUP BY ref_date, r12_txns, pr12_txns, ppr12_txns
-ORDER BY customer_count DESC;
- 
- 
------------------------------------------------------------------------------------
--- VALIDATION 3: Check if PPR12 and PPPR12 customers actually have PR12 = 0
------------------------------------------------------------------------------------
-SELECT 
-  'PPR12 Only (should be 26)' AS check_type,
-  ref_date,
-  total_pr12_txns,
-  total_ppr12_txns,
-  total_pppr12_txns,
-  SUM(customer_count) AS customer_count
-FROM LACA_ENGAGEMENT_CUSTOMERS_AGG
-WHERE lapsed_r12_plus = 'Y'
-  AND total_pr12_txns = 0
-  AND total_ppr12_txns > 0
-GROUP BY ref_date, total_pr12_txns, total_ppr12_txns, total_pppr12_txns
- 
-UNION ALL
- 
-SELECT 
-  'PPPR12 Only (should be 4)' AS check_type,
-  ref_date,
-  total_pr12_txns,
-  total_ppr12_txns,
-  total_pppr12_txns,
-  SUM(customer_count) AS customer_count
-FROM LACA_ENGAGEMENT_CUSTOMERS_AGG
-WHERE lapsed_r12_plus = 'Y'
-  AND total_pr12_txns = 0
-  AND total_ppr12_txns = 0
-  AND total_pppr12_txns > 0
-GROUP BY ref_date, total_pr12_txns, total_ppr12_txns, total_pppr12_txns
-order by ref_date;
- 
- 
------------------------------------------------------------------------------------
--- VALIDATION 4: Are PPPR12 txns even being captured in Step 3?
------------------------------------------------------------------------------------
--- First check if source has pppr12_txns
-SELECT 
-  COUNT(*) AS total_rows,
-  COUNT(DISTINCT CASE WHEN pppr12_txns > 0 THEN sndcustomer_key END) AS customers_with_pppr12
-FROM WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL
-WHERE DATE_TRUNC('MONTH', mth_yr) = '2025-01-01';
- 
- 
------------------------------------------------------------------------------------
--- VALIDATION 5: Verify the 26 and 4 customers are real
------------------------------------------------------------------------------------
--- Check PPR12-only customers
-SELECT 
-  customer_key,
-  ref_date,
-  total_pr12_txns,
-  total_ppr12_txns,
-  total_pppr12_txns,
-  lapsed_r12_plus
-FROM LACA_ENGAGEMENT_CUSTOMERS_AGG
-WHERE lapsed_r12_plus = 'Y'
-  AND total_pr12_txns = 0
-  AND total_ppr12_txns > 0
-  AND ref_date = '2025-01-01'
-LIMIT 5;
- 
--- Check PPPR12-only customers
-SELECT 
-  customer_key,
-  ref_date,
-  total_pr12_txns,
-  total_ppr12_txns,
-  total_pppr12_txns,
-  lapsed_r12_plus
-FROM LACA_ENGAGEMENT_CUSTOMERS_AGG
-WHERE lapsed_r12_plus = 'Y'
-  AND total_pr12_txns = 0
-  AND total_ppr12_txns = 0
-  AND total_pppr12_txns > 0
-  AND ref_date = '2025-01-01'
-LIMIT 5;
-
------------------------------------------------------------------------------------
--- VALIDATION : YOY KPIs Validation  
------------------------------------------------------------------------------------
---### **Query 1: Total Customers - Current vs Prior Year**
- 
-
--- Total Customers Validation
-SELECT
-  'Aug 2025' AS period,
-  SUM(customer_count) AS total_customers
-FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-WHERE ref_date = '2025-08-01'
- 
-UNION ALL
- 
-SELECT
-  'Aug 2024' AS period,
-  SUM(customer_count) AS total_customers
-FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-WHERE ref_date = '2024-08-01'
- 
-UNION ALL
- 
-SELECT
-  'YOY Change' AS period,
-  (SELECT SUM(customer_count) FROM LACA_CUSTOMER_SEGMENTATION_FINAL WHERE ref_date = '2025-08-01') -
-  (SELECT SUM(customer_count) FROM LACA_CUSTOMER_SEGMENTATION_FINAL WHERE ref_date = '2024-08-01') AS total_customers
- 
-UNION ALL
- 
-SELECT
-  'YOY %' AS period,
-  ROUND(
-    ((SELECT SUM(customer_count) FROM LACA_CUSTOMER_SEGMENTATION_FINAL WHERE ref_date = '2025-08-01') -
-     (SELECT SUM(customer_count) FROM LACA_CUSTOMER_SEGMENTATION_FINAL WHERE ref_date = '2024-08-01')) * 100.0 /
-    (SELECT SUM(customer_count) FROM LACA_CUSTOMER_SEGMENTATION_FINAL WHERE ref_date = '2024-08-01'),
-  1) AS total_customers;
-
--- **Query 2: Transacted Customers**
-
--- Transacted Customers Validation
-SELECT
-  'Aug 2025' AS period,
-  SUM(customer_count) AS transacted_customers
-FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-WHERE ref_date = '2025-08-01'
-  AND customer_type = 'Transacted Customers'
- 
-UNION ALL
- 
-SELECT
-  'Aug 2024' AS period,
-  SUM(customer_count) AS transacted_customers
-FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-WHERE ref_date = '2024-08-01'
-  AND customer_type = 'Transacted Customers'
- 
-UNION ALL
- 
-SELECT
-  'YOY Change' AS period,
-  (SELECT SUM(customer_count) FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-   WHERE ref_date = '2025-08-01' AND customer_type = 'Transacted Customers') -
-  (SELECT SUM(customer_count) FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-   WHERE ref_date = '2024-08-01' AND customer_type = 'Transacted Customers') AS transacted_customers
- 
-UNION ALL
- 
-SELECT
-  'YOY %' AS period,
-  ROUND(
-    ((SELECT SUM(customer_count) FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-      WHERE ref_date = '2025-08-01' AND customer_type = 'Transacted Customers') -
-     (SELECT SUM(customer_count) FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-      WHERE ref_date = '2024-08-01' AND customer_type = 'Transacted Customers')) * 100.0 /
-    (SELECT SUM(customer_count) FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-     WHERE ref_date = '2024-08-01' AND customer_type = 'Transacted Customers'),
-  1) AS transacted_customers;
-
- 
----**Query 3: RNT Customers**
--- RNT Customers Validation
-SELECT
-  'Aug 2025' AS period,
-  SUM(customer_count) AS rnt_customers
-FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-WHERE ref_date = '2025-08-01'
-  AND customer_type = 'RNT Customers'
- 
-UNION ALL
- 
-SELECT
-  'Aug 2024' AS period,
-  SUM(customer_count) AS rnt_customers
-FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-WHERE ref_date = '2024-08-01'
-  AND customer_type = 'RNT Customers'
- 
-UNION ALL
- 
-SELECT
-  'YOY Change' AS period,
-  (SELECT SUM(customer_count) FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-   WHERE ref_date = '2025-08-01' AND customer_type = 'RNT Customers') -
-  (SELECT SUM(customer_count) FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-   WHERE ref_date = '2024-08-01' AND customer_type = 'RNT Customers') AS rnt_customers
- 
-UNION ALL
- 
-SELECT
-  'YOY %' AS period,
-  ROUND(
-    ((SELECT SUM(customer_count) FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-      WHERE ref_date = '2025-08-01' AND customer_type = 'RNT Customers') -
-     (SELECT SUM(customer_count) FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-      WHERE ref_date = '2024-08-01' AND customer_type = 'RNT Customers')) * 100.0 /
-    (SELECT SUM(customer_count) FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-     WHERE ref_date = '2024-08-01' AND customer_type = 'RNT Customers'),
-  1) AS rnt_customers;
-
- 
---- **Query 4: Active R1-R12**
-
--- Active R1-R12 Validation
-SELECT
-  'Aug 2025' AS period,
-  SUM(customer_count) AS active_r1_r12
-FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-WHERE ref_date = '2025-08-01'
-  AND level2_engagement_status = 'Active R1-R12'
- 
-UNION ALL
- 
-SELECT
-  'Aug 2024' AS period,
-  SUM(customer_count) AS active_r1_r12
-FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-WHERE ref_date = '2024-08-01'
-  AND level2_engagement_status = 'Active R1-R12'
- 
-UNION ALL
- 
-SELECT
-  'YOY Change' AS period,
-  (SELECT SUM(customer_count) FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-   WHERE ref_date = '2025-08-01' AND level2_engagement_status = 'Active R1-R12') -
-  (SELECT SUM(customer_count) FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-   WHERE ref_date = '2024-08-01' AND level2_engagement_status = 'Active R1-R12') AS active_r1_r12
- 
-UNION ALL
- 
-SELECT
-  'YOY %' AS period,
-  ROUND(
-    ((SELECT SUM(customer_count) FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-      WHERE ref_date = '2025-08-01' AND level2_engagement_status = 'Active R1-R12') -
-     (SELECT SUM(customer_count) FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-      WHERE ref_date = '2024-08-01' AND level2_engagement_status = 'Active R1-R12')) * 100.0 /
-    (SELECT SUM(customer_count) FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-     WHERE ref_date = '2024-08-01' AND level2_engagement_status = 'Active R1-R12'),
-  1) AS active_r1_r12;
-
- 
---**Combined All-in-One Validation Query**
- 
-
--- All Metrics Side-by-Side Validation
-WITH metrics AS (
+CREATE OR REPLACE TABLE LACA_ENGAGEMENT_CUSTOMERS_AGG AS
+WITH corridor_ranked AS (
   SELECT
     ref_date,
-    SUM(customer_count) AS total_customers,
-    SUM(CASE WHEN customer_type = 'Transacted Customers' THEN customer_count ELSE 0 END) AS transacted_customers,
-    SUM(CASE WHEN customer_type = 'RNT Customers' THEN customer_count ELSE 0 END) AS rnt_customers,
-    SUM(CASE WHEN level2_engagement_status = 'Active R1-R12' THEN customer_count ELSE 0 END) AS active_r1_r12
-  FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-  WHERE ref_date IN ('2024-08-01', '2025-08-01')
-  GROUP BY ref_date
+    dominant_corridor_name,
+    DENSE_RANK() OVER (
+      PARTITION BY ref_date
+      ORDER BY COUNT(DISTINCT customer_key) DESC
+    ) AS corridor_rank
+  FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS
+  GROUP BY ref_date, dominant_corridor_name
 ),
-comparison AS (
+engaged AS (
   SELECT
-    'Aug 2025' AS period,
-    total_customers,
-    transacted_customers,
-    rnt_customers,
-    active_r1_r12
-  FROM metrics
-  WHERE ref_date = '2025-08-01'
-  
-  UNION ALL
-  
-  SELECT
-    'Aug 2024' AS period,
-    total_customers,
-    transacted_customers,
-    rnt_customers,
-    active_r1_r12
-  FROM metrics
-  WHERE ref_date = '2024-08-01'
+    e.customer_key,
+    e.ref_date,
+    e.country_code,
+    e.r12_txns,
+    e.r6_txns,
+    e.pr12_txns,
+    e.ppr12_txns,
+    e.pppr12_txns,
+    e.dominant_sndcountry_name,
+    e.dominant_rcvcountry_name,
+    e.channel_dominance,
+    e.email_marketable,
+    e.sms_marketable,
+    e.retail_digital_flag,--change r12_inactive to R12 Inactive
+    e.Web_App_Flag,
+    e.channel_native,
+    e.rnt_flag,
+    e.r12_active,
+    e.active_churn_r7_r12,
+    e.lapsed_r12_plus,
+    CASE
+      WHEN cr.corridor_rank <= 11 THEN e.dominant_corridor_name
+      ELSE 'Others'
+    END AS corridor_bucket,
+    
+    -- Add Level 3 Breakdown Calculation HERE at customer level
+    CASE
+      WHEN e.r12_active = 'Y' AND e.active_churn_r7_r12 = 'Y' THEN 'Churn R7-R12'
+      WHEN e.r12_active = 'Y' AND e.active_churn_r7_r12 = 'N' THEN 'Active R1-R6'
+      
+  WHEN e.r12_txns = 0 AND e.pr12_txns > 0 THEN 'R13–R24 Active'
+  WHEN e.r12_txns = 0 AND e.pr12_txns = 0 AND e.ppr12_txns > 0 THEN 'R25–R36 Active'
+  WHEN e.r12_txns = 0 AND e.pr12_txns = 0 AND e.ppr12_txns = 0 AND e.pppr12_txns > 0 THEN 'R37–R48 Active'
+  ELSE 'Inactive or Other'
+
+    END AS level3_breakdown
+    
+  FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS e
+  LEFT JOIN corridor_ranked cr
+    ON e.ref_date = cr.ref_date
+   AND e.dominant_corridor_name = cr.dominant_corridor_name
 )
 SELECT
-  period,
-  total_customers,
-  transacted_customers,
-  rnt_customers,
-  active_r1_r12
-FROM comparison
+  ref_date,
+  country_code,
+  corridor_bucket,
+  dominant_sndcountry_name,
+  dominant_rcvcountry_name,
+  channel_dominance,
+  email_marketable,
+  sms_marketable,
+  retail_digital_flag,
+  Web_App_Flag,
+  channel_native,
+  rnt_flag,
+  r12_active,
+  active_churn_r7_r12,
+  lapsed_r12_plus,
+  level3_breakdown,  -- ADD THIS NEW DIMENSION
+  COUNT(DISTINCT customer_key) AS customer_count,  
+  COALESCE(SUM(r12_txns), 0) AS total_r12_txns,
+  COALESCE(SUM(r6_txns), 0) AS total_r6_txns,
+  COALESCE(SUM(pr12_txns), 0) AS total_pr12_txns,
+  COALESCE(SUM(ppr12_txns), 0) AS total_ppr12_txns,
+  COALESCE(SUM(pppr12_txns), 0) AS total_pppr12_txns 
+FROM engaged
+GROUP BY ALL;
  
-UNION ALL
- 
+SELECT 
+  ref_date,
+  level3_breakdown,
+  SUM(customer_count) AS customers
+FROM LACA_ENGAGEMENT_CUSTOMERS_AGG
+WHERE ref_date = '2025-09-01'
+  AND level3_breakdown IS NOT NULL
+GROUP BY ref_date, level3_breakdown
+ORDER BY customers DESC;
+-----------------------------------------------------------------------------------
+-- STEP 4: Aggregate RNT Customers
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_RNT_CUSTOMERS_AGG AS
 SELECT
-  'YOY Change' AS period,
-  MAX(CASE WHEN period = 'Aug 2025' THEN total_customers END) -
-    MAX(CASE WHEN period = 'Aug 2024' THEN total_customers END) AS total_customers,
-  MAX(CASE WHEN period = 'Aug 2025' THEN transacted_customers END) -
-    MAX(CASE WHEN period = 'Aug 2024' THEN transacted_customers END) AS transacted_customers,
-  MAX(CASE WHEN period = 'Aug 2025' THEN rnt_customers END) -
-    MAX(CASE WHEN period = 'Aug 2024' THEN rnt_customers END) AS rnt_customers,
-  MAX(CASE WHEN period = 'Aug 2025' THEN active_r1_r12 END) -
-    MAX(CASE WHEN period = 'Aug 2024' THEN active_r1_r12 END) AS active_r1_r12
-FROM comparison
+  r.ref_date,
+  r.country_code,
+  'RNT Only' AS corridor_bucket,
+  CAST(NULL AS VARCHAR) AS dominant_sndcountry_name,
+  CAST(NULL AS VARCHAR) AS dominant_rcvcountry_name,
+  'RNT' AS channel_dominance,
+  r.email_marketable,
+  r.sms_marketable,
+  'RNT' AS retail_digital_flag,
+  'RNT' AS Web_App_Flag,
+  'RNT' AS channel_native,
+  'Y' AS rnt_flag,
+  'N' AS r12_active,
+  'N' AS active_churn_r7_r12,
+  'N' AS lapsed_r12_plus,
+  'N' AS level3_breakdown,
+  COUNT(DISTINCT r.customer_key) AS customer_count,
+  0 AS total_r12_txns,
+  0 AS total_r6_txns,
+  0 AS total_pr12_txns,
+  0 AS total_ppr12_txns,
+  0 AS total_pppr12_txns
+FROM LACA_RNT_CUSTOMERS r
+GROUP BY r.ref_date,
+  r.country_code,
+  r.email_marketable,
+  r.sms_marketable;
  
-UNION ALL
- 
+ --RNT Count for the month of Sept 2025 from RNT AGG Table
+ -- select sum(customer_count) 
+ -- From LACA_RNT_CUSTOMERS_AGG
+ -- where ref_date = '2025-09-01'; --6176657 (Sept 2025)
+
+-----------------------------------------------------------------------------------
+-- STEP 5A: Dimension Base (UPDATED - ADD level3_breakdown)
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_CUSTOMER_DIMENSIONS_BACKUP 
+CLONE LACA_CUSTOMER_DIMENSIONS;
+
+CREATE OR REPLACE TABLE LACA_CUSTOMER_DIMENSIONS AS
+SELECT DISTINCT
+  ref_date, 
+  country_code, 
+  corridor_bucket, 
+  dominant_sndcountry_name,
+  dominant_rcvcountry_name,
+  channel_dominance, 
+  email_marketable, 
+  sms_marketable,
+  retail_digital_flag, 
+  Web_App_Flag, 
+  channel_native,
+  rnt_flag, 
+  r12_active, 
+  active_churn_r7_r12, 
+  lapsed_r12_plus,
+  level3_breakdown  -- ADDED THIS
+FROM LACA_ENGAGEMENT_CUSTOMERS_AGG
+
+UNION
+
+SELECT DISTINCT
+  ref_date, 
+  country_code, 
+  corridor_bucket, 
+  dominant_sndcountry_name, 
+  dominant_rcvcountry_name,
+  channel_dominance, 
+  email_marketable, 
+  sms_marketable,
+  retail_digital_flag, 
+  Web_App_Flag, 
+  channel_native,
+  rnt_flag, 
+  r12_active, 
+  active_churn_r7_r12, 
+  lapsed_r12_plus,
+  level3_breakdown 
+FROM LACA_RNT_CUSTOMERS_AGG;
+
+select sum(rnt_customer_count)
+from LACA_CUSTOMER_SEGMENTATION_FINAL
+where ref_date = '2025-09-01';
+
+-----------------------------------------------------------------------------------
+-- STEP 5B: Final Reporting Table (UPDATED - SIMPLIFIED level3_breakdown)
+-----------------------------------------------------------------------------------
+CREATE OR REPLACE TABLE LACA_CUSTOMER_SEGMENTATION_FINAL_BACKUP 
+CLONE LACA_CUSTOMER_SEGMENTATION_FINAL;
+
+CREATE OR REPLACE TABLE LACA_CUSTOMER_SEGMENTATION_FINAL AS
 SELECT
-  'YOY %' AS period,
-  ROUND(
-    (MAX(CASE WHEN period = 'Aug 2025' THEN total_customers END) -
-     MAX(CASE WHEN period = 'Aug 2024' THEN total_customers END)) * 100.0 /
-    MAX(CASE WHEN period = 'Aug 2024' THEN total_customers END), 1) AS total_customers,
-  ROUND(
-    (MAX(CASE WHEN period = 'Aug 2025' THEN transacted_customers END) -
-     MAX(CASE WHEN period = 'Aug 2024' THEN transacted_customers END)) * 100.0 /
-    MAX(CASE WHEN period = 'Aug 2024' THEN transacted_customers END), 1) AS transacted_customers,
-  ROUND(
-    (MAX(CASE WHEN period = 'Aug 2025' THEN rnt_customers END) -
-     MAX(CASE WHEN period = 'Aug 2024' THEN rnt_customers END)) * 100.0 /
-    MAX(CASE WHEN period = 'Aug 2024' THEN rnt_customers END), 1) AS rnt_customers,
-  ROUND(
-    (MAX(CASE WHEN period = 'Aug 2025' THEN active_r1_r12 END) -
-     MAX(CASE WHEN period = 'Aug 2024' THEN active_r1_r12 END)) * 100.0 /
-    MAX(CASE WHEN period = 'Aug 2024' THEN active_r1_r12 END), 1) AS active_r1_r12
-FROM comparison
- 
-ORDER BY
-  CASE period
-    WHEN 'Aug 2024' THEN 1
-    WHEN 'Aug 2025' THEN 2
-    WHEN 'YOY Change' THEN 3
-    WHEN 'YOY %' THEN 4
-  END;
- 
+  a.ref_date,
+  a.country_code,
+  cv.COUNTRY_NAME AS laca_country,
+  a.corridor_bucket,
+  a.dominant_sndcountry_name,
+  a.dominant_rcvcountry_name,
+  a.channel_dominance,
+  a.email_marketable,
+  a.sms_marketable,
+  a.retail_digital_flag,
+  a.Web_App_Flag,
+  a.channel_native,
+  a.rnt_flag,
+  a.r12_active,
+  a.active_churn_r7_r12,
+  a.lapsed_r12_plus,
+  
+  COALESCE(b.customer_count, 0) AS engagement_customer_count,
+  COALESCE(b.total_r12_txns, 0) AS total_r12_txns,
+  COALESCE(b.total_r6_txns, 0) AS total_r6_txns,
+  COALESCE(b.total_pr12_txns, 0) AS total_pr12_txns,
+  COALESCE(b.total_ppr12_txns, 0) AS total_ppr12_txns,
+  COALESCE(b.total_pppr12_txns, 0) AS total_pppr12_txns, 
+  
+  COALESCE(c.customer_count, 0) AS rnt_customer_count,
+  
+  CASE
+    WHEN a.rnt_flag = 'Y' THEN COALESCE(c.customer_count, 0)
+    ELSE COALESCE(b.customer_count, 0)
+  END AS customer_count,  
+  
+  COALESCE(b.customer_count, 0) + COALESCE(c.customer_count, 0) AS total_customer_count,
+  
+  YEAR(a.ref_date) AS year,
+  MONTH(a.ref_date) AS month_number,
+  TO_CHAR(a.ref_date, 'YYYY-MM') AS year_month,
+  TO_CHAR(a.ref_date, 'Mon-YY') AS month_label,
+  
+  CASE
+    WHEN a.r12_active = 'Y' THEN 'Active R1-R12'
+    WHEN a.rnt_flag = 'Y' THEN 'Registered Not Transacted'
+    WHEN a.active_churn_r7_r12 = 'Y' THEN 'Active Churn R7-R12'    
+    WHEN a.lapsed_r12_plus = 'Y' THEN 'Lapsed R12+'
+    ELSE 'Other'
+  END AS audience_segment, 
+  
+  CASE
+    WHEN a.email_marketable = 'Y' AND a.sms_marketable = 'Y' THEN 'Email + SMS Marketable'
+    WHEN a.email_marketable = 'Y' THEN 'Email Marketable'
+    WHEN a.sms_marketable = 'Y' THEN 'SMS Marketable'
+    ELSE 'Non Marketable'
+  END AS marketability_segment,
 
+  CASE
+    WHEN a.lapsed_r12_plus = 'Y' AND COALESCE(b.total_pr12_txns, 0) > 0 THEN 'PR12 Active (R13-R24)'
+    WHEN a.lapsed_r12_plus = 'Y' AND COALESCE(b.total_ppr12_txns, 0) > 0 THEN 'PPR12 Active (R25-R36)'
+    WHEN a.lapsed_r12_plus = 'Y' AND COALESCE(b.total_pppr12_txns, 0) > 0 THEN 'PPPR12 Active (R37-R48)'
+    ELSE NULL
+  END AS lapsed_breakdown,
 
+  CASE
+    WHEN a.rnt_flag = 'Y' THEN 'RNT Customers'
+    WHEN a.r12_active = 'Y' OR a.lapsed_r12_plus = 'Y' THEN 'Transacted Customers'
+    ELSE 'Other'
+  END AS customer_type,
 
+  CASE
+    WHEN a.r12_active = 'Y' THEN 'Active R1-R12'
+    WHEN a.lapsed_r12_plus = 'Y' THEN 'Lapsed R12+'
+    WHEN a.r12_active = 'N' AND a.lapsed_r12_plus = 'N' AND a.rnt_flag = 'N' THEN 'Dormant/Never Transacted'
+    ELSE NULL
+  END AS level2_engagement_status,
 
-
-     
+  -- SIMPLIFIED: Just pull from dimension table instead of recalculating
+  a.level3_breakdown,
+  
+  'LACA' AS region,
+  
+  CASE
+    WHEN a.corridor_bucket = 'RNT_Only' THEN 'RNT Only'
+    WHEN a.corridor_bucket = 'Others' THEN 'Other Corridors'
+    ELSE a.corridor_bucket
+  END AS corridor_group
+  
+FROM LACA_CUSTOMER_DIMENSIONS a
+LEFT JOIN SUMMARY_GEN.COUNTRY_VW cv
+  ON a.country_code = cv.country_code
+  AND cv.super_region = 'LACA'
+LEFT JOIN LACA_ENGAGEMENT_CUSTOMERS_AGG b
+  ON a.ref_date = b.ref_date
+  AND a.country_code = b.country_code
+  AND NVL(a.corridor_bucket, 'NA') = NVL(b.corridor_bucket, 'NA')
+  AND NVL(a.dominant_sndcountry_name, 'NA') = NVL(b.dominant_sndcountry_name, 'NA')
+  AND NVL(a.dominant_rcvcountry_name, 'NA') = NVL(b.dominant_rcvcountry_name, 'NA')
+  AND NVL(a.channel_dominance, 'NA') = NVL(b.channel_dominance, 'NA')
+  AND NVL(a.email_marketable, 'NA') = NVL(b.email_marketable, 'NA')
+  AND NVL(a.sms_marketable, 'NA') = NVL(b.sms_marketable, 'NA')
+  AND NVL(a.retail_digital_flag, 'NA') = NVL(b.retail_digital_flag, 'NA')
+  AND NVL(a.Web_App_Flag, 'NA') = NVL(b.Web_App_Flag, 'NA')
+  AND NVL(a.channel_native, 'NA') = NVL(b.channel_native, 'NA')
+  AND NVL(a.rnt_flag, 'NA') = NVL(b.rnt_flag, 'NA')
+  AND NVL(a.r12_active, 'NA') = NVL(b.r12_active, 'NA')
+  AND NVL(a.active_churn_r7_r12, 'NA') = NVL(b.active_churn_r7_r12, 'NA')
+  AND NVL(a.lapsed_r12_plus, 'NA') = NVL(b.lapsed_r12_plus, 'NA')
+  AND NVL(a.level3_breakdown, 'NA') = NVL(b.level3_breakdown, 'NA')  -- ADDED THIS JOIN CONDITION
+LEFT JOIN LACA_RNT_CUSTOMERS_AGG c
+  ON a.ref_date = c.ref_date
+  AND a.country_code = c.country_code
+  AND NVL(a.corridor_bucket, 'NA') = NVL(c.corridor_bucket, 'NA')
+  AND NVL(a.dominant_sndcountry_name, 'NA') = NVL(c.dominant_sndcountry_name, 'NA')
+  AND NVL(a.dominant_rcvcountry_name, 'NA') = NVL(c.dominant_rcvcountry_name, 'NA')
+  AND NVL(a.channel_dominance, 'NA') = NVL(c.channel_dominance, 'NA')
+  AND NVL(a.email_marketable, 'NA') = NVL(c.email_marketable, 'NA')
+  AND NVL(a.sms_marketable, 'NA') = NVL(c.sms_marketable, 'NA')
+  AND NVL(a.retail_digital_flag, 'NA') = NVL(c.retail_digital_flag, 'NA')
+  AND NVL(a.Web_App_Flag, 'NA') = NVL(c.Web_App_Flag, 'NA')
+  AND NVL(a.channel_native, 'NA') = NVL(c.channel_native, 'NA')
+  AND NVL(a.rnt_flag, 'NA') = NVL(c.rnt_flag, 'NA')
+  AND NVL(a.r12_active, 'NA') = NVL(c.r12_active, 'NA')
+  AND NVL(a.active_churn_r7_r12, 'NA') = NVL(c.active_churn_r7_r12, 'NA')
+  AND NVL(a.lapsed_r12_plus, 'NA') = NVL(c.lapsed_r12_plus, 'NA')
+  AND NVL(a.level3_breakdown, 'NA') = NVL(c.level3_breakdown, 'NA')  -- ADDED THIS JOIN CONDITION
+WHERE a.ref_date >= '2023-12-01';
