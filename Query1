@@ -1,282 +1,37 @@
-Based on your document, I'll address all three issues:
-Issue 1: Update RNT Logic to Check R48 Transactions
-Updated Step 1: RNT Customers Table
------------------------------------------------------------------------------------
--- STEP 1: RNT Customers Table (UPDATED - Check R48 transactions)
------------------------------------------------------------------------------------
-CREATE OR REPLACE TABLE LACA_RNT_CUSTOMERS AS
-WITH params AS (
-  SELECT 12 AS rnt_window_mths
-),
--- Generate months from Jan 2024 up to the last completed month
-months AS (
-  SELECT DISTINCT DATE_TRUNC('MONTH', MTH_YR) AS ref_date
-  FROM WUDNA.CEX_SANDBOX.VA_KPI_2020_2
-  WHERE MTH_YR >= TO_DATE('2024-01-01')
-    AND MTH_YR < DATE_TRUNC('MONTH', CURRENT_DATE)
-),
-
--- Registered customers
-cust_reg AS (
-  SELECT
-    c.customer_key,
-    DATE_TRUNC('MONTH', c.first_registration_date) AS reg_month,
-    first_registration_date,
-    c.country_code,
-    CASE
-      WHEN c.email_address_on_file_flag = 'Y'
-       AND c.opt_email = 'I'
-       AND c.marketing_flag = 'Y'
-      THEN 'Y'
-      ELSE 'N'
-    END AS email_marketable,
-    CASE
-      WHEN (c.opt_sms = 'I'
-        AND c.mobile_number_on_file_flag = 'Y'
-        AND c.marketing_flag = 'Y'
-        AND c.country_code NOT IN ('US','CA'))
-      OR (c.mobile_number_on_file_flag = 'Y'
-        AND c.opt_sms = 'I'
-        AND c.double_opt_sms = 'I'
-        AND c.marketing_flag = 'Y'
-        AND c.country_code IN ('US','CA'))
-      THEN 'Y'
-      ELSE 'N'
-    END AS sms_marketable
-  FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
-  JOIN SUMMARY_GEN.COUNTRY_VW cnt
-    ON c.country_code = cnt.country_code
-  WHERE cnt.super_region = 'LACA'
-    AND c.first_registration_date IS NOT NULL
-),
-
--- Get R48 transactions from engagement table
-engagement_r48 AS (
-  SELECT 
-    sndcustomer_key AS customer_key,
-    DATE_TRUNC('MONTH', mth_yr) AS ref_date,
-    r48_txns
-  FROM WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL
-  WHERE r48_txns IS NOT NULL
-),
-
--- RNT logic: registered in R12 window and NO transactions in R48 period
-rnt_no_txn AS (
-  SELECT DISTINCT
-    m.ref_date,
-    r.customer_key,
-    r.country_code,
-    r.reg_month,
-    r.email_marketable,
-    r.sms_marketable
-  FROM months m
-  JOIN cust_reg r
-    ON r.reg_month BETWEEN DATEADD(MONTH, - (SELECT rnt_window_mths FROM params) + 1, m.ref_date)
-                      AND m.ref_date
-  LEFT JOIN engagement_r48 e
-    ON r.customer_key = e.customer_key
-    AND m.ref_date = e.ref_date
-  WHERE COALESCE(e.r48_txns, 0) = 0  -- No transactions in R48 period
-)
-
--- Final RNT customer table
-SELECT DISTINCT
-  rnt.ref_date,
-  rnt.customer_key,
-  rnt.country_code,
-  rnt.reg_month,
-  'Y' AS rnt_flag,
-  rnt.email_marketable,
-  rnt.sms_marketable
-FROM rnt_no_txn rnt;
-Issue 2: Fix Blank Dominant Countries in RNT
-Updated Step 4: RNT Customers Aggregation
------------------------------------------------------------------------------------
--- STEP 4: Aggregate RNT Customers (UPDATED - Add "RNT" for dominant countries)
------------------------------------------------------------------------------------
-CREATE OR REPLACE TABLE LACA_RNT_CUSTOMERS_AGG AS
 SELECT
-  r.ref_date,
-  r.country_code,
-  'RNT Only' AS corridor_bucket,
-  'RNT' AS dominant_sndcountry_name,  -- CHANGED from NULL to 'RNT'
-  'RNT' AS dominant_rcvcountry_name,  -- CHANGED from NULL to 'RNT'
-  'RNT' AS channel_dominance,
-  r.email_marketable,
-  r.sms_marketable,
-  'RNT' AS retail_digital_flag,
-  'RNT' AS Web_App_Flag,
-  'RNT' AS channel_native,
-  'Y' AS rnt_flag,
-  'N' AS r12_active,
-  'N' AS active_churn_r7_r12,
-  'N' AS lapsed_r12_plus,
-  'RNT' AS level3_breakdown,  -- CHANGED from 'N' to 'RNT'
-  COUNT(DISTINCT r.customer_key) AS customer_count,
-  0 AS total_r12_txns,
-  0 AS total_r6_txns,
-  0 AS total_pr12_txns,
-  0 AS total_ppr12_txns,
-  0 AS total_pppr12_txns
-FROM LACA_RNT_CUSTOMERS r
-GROUP BY r.ref_date,
-  r.country_code,
-  r.email_marketable,
-  r.sms_marketable;
-Issue 3: Argentina-Argentina Corridor Showing with No Data
-This happens because the corridor exists in your dimension table but has zero customer_count after filtering.
-Diagnostic Query - Find Empty Corridors:
--- Find corridors with zero customers
-SELECT 
-  ref_date,
-  corridor_bucket,
-  corridor_group,
-  SUM(customer_count) AS total_customers,
-  COUNT(*) AS row_count
-FROM LACA_CUSTOMER_SEGMENTATION_FINAL
-WHERE corridor_group LIKE '%Argentina%'
-GROUP BY ref_date, corridor_bucket, corridor_group
-HAVING SUM(customer_count) = 0
-ORDER BY ref_date DESC;
-Root Cause:
-When you create LACA_CUSTOMER_DIMENSIONS using UNION of engagement and RNT tables, it creates all possible dimension combinations including some that may have zero customers in certain months.
-Solution: Filter Out Zero Customer Rows in Final Table
-Add this filter at the end of Step 5B:
------------------------------------------------------------------------------------
--- STEP 5B: Final Reporting Table (ADD FILTER AT THE END)
------------------------------------------------------------------------------------
-CREATE OR REPLACE TABLE LACA_CUSTOMER_SEGMENTATION_FINAL AS
-SELECT
-  a.ref_date,
-  a.country_code,
-  cv.COUNTRY_NAME AS laca_country,
-  a.corridor_bucket,
-  a.dominant_sndcountry_name,
-  a.dominant_rcvcountry_name,
-  a.channel_dominance,
-  a.email_marketable,
-  a.sms_marketable,
-  a.retail_digital_flag,
-  a.Web_App_Flag,
-  a.channel_native,
-  a.rnt_flag,
-  a.r12_active,
-  a.active_churn_r7_r12,
-  a.lapsed_r12_plus,
-  
-  COALESCE(b.customer_count, 0) AS engagement_customer_count,
-  COALESCE(b.total_r12_txns, 0) AS total_r12_txns,
-  COALESCE(b.total_r6_txns, 0) AS total_r6_txns,
-  COALESCE(b.total_pr12_txns, 0) AS total_pr12_txns,
-  COALESCE(b.total_ppr12_txns, 0) AS total_ppr12_txns,
-  COALESCE(b.total_pppr12_txns, 0) AS total_pppr12_txns, 
-  
-  COALESCE(c.customer_count, 0) AS rnt_customer_count,
-  
-  CASE
-    WHEN a.rnt_flag = 'Y' THEN COALESCE(c.customer_count, 0)
-    ELSE COALESCE(b.customer_count, 0)
-  END AS customer_count,  
-  
-  COALESCE(b.customer_count, 0) + COALESCE(c.customer_count, 0) AS total_customer_count,
-  
-  YEAR(a.ref_date) AS year,
-  MONTH(a.ref_date) AS month_number,
-  TO_CHAR(a.ref_date, 'YYYY-MM') AS year_month,
-  TO_CHAR(a.ref_date, 'Mon-YY') AS month_label,
-  
-  CASE
-    WHEN a.r12_active = 'Y' THEN 'Active R1-R12'
-    WHEN a.rnt_flag = 'Y' THEN 'Registered Not Transacted'
-    WHEN a.active_churn_r7_r12 = 'Y' THEN 'Active Churn R7-R12'    
-    WHEN a.lapsed_r12_plus = 'Y' THEN 'Lapsed R12+'
-    ELSE 'Other'
-  END AS audience_segment, 
-  
-  CASE
-    WHEN a.email_marketable = 'Y' AND a.sms_marketable = 'Y' THEN 'Email + SMS Marketable'
-    WHEN a.email_marketable = 'Y' THEN 'Email Marketable'
-    WHEN a.sms_marketable = 'Y' THEN 'SMS Marketable'
-    ELSE 'Non Marketable'
-  END AS marketability_segment,
+    e.customer_key,
+    e.ref_date,
+    e.country_code,
+    e.r12_txns,
+    e.r6_txns,
+    e.pr12_txns,
+    e.ppr12_txns,
+    e.pppr12_txns,
+    e.dominant_sndcountry_name,
+    e.dominant_rcvcountry_name,
+    e.channel_dominance,
+    e.email_marketable,
+    e.sms_marketable,
+    e.retail_digital_flag,--change r12_inactive to R12 Inactive
+    e.Web_App_Flag,
+    e.channel_native,
+    e.rnt_flag,
+    e.r12_active,
+    e.active_churn_r7_r12,
+    e.lapsed_r12_plus,
 
-  CASE
-    WHEN a.lapsed_r12_plus = 'Y' AND COALESCE(b.total_pr12_txns, 0) > 0 THEN 'PR12 Active (R13-R24)'
-    WHEN a.lapsed_r12_plus = 'Y' AND COALESCE(b.total_ppr12_txns, 0) > 0 THEN 'PPR12 Active (R25-R36)'
-    WHEN a.lapsed_r12_plus = 'Y' AND COALESCE(b.total_pppr12_txns, 0) > 0 THEN 'PPPR12 Active (R37-R48)'
-    ELSE NULL
-  END AS lapsed_breakdown,
+    
+    -- Add Level 3 Breakdown Calculation HERE at customer level
+    CASE
+      WHEN e.r12_active = 'Y' AND e.active_churn_r7_r12 = 'Y' THEN 'Churn R7-R12'
+      WHEN e.r12_active = 'Y' AND e.active_churn_r7_r12 = 'N' THEN 'Active R1-R6'
+      
+  WHEN e.r12_txns = 0 AND e.pr12_txns > 0 THEN 'R13–R24 Active'
+  WHEN e.r12_txns = 0 AND e.pr12_txns = 0 AND e.ppr12_txns > 0 THEN 'R25–R36 Active'
+  WHEN e.r12_txns = 0 AND e.pr12_txns = 0 AND e.ppr12_txns = 0 AND e.pppr12_txns > 0 THEN 'R37–R48 Active'
+  ELSE 'Inactive or Other'
 
-  CASE
-    WHEN a.rnt_flag = 'Y' THEN 'RNT Customers'
-    WHEN a.r12_active = 'Y' OR a.lapsed_r12_plus = 'Y' THEN 'Transacted Customers'
-    ELSE 'Other'
-  END AS customer_type,
-
-  CASE
-    WHEN a.r12_active = 'Y' THEN 'Active R1-R12'
-    WHEN a.lapsed_r12_plus = 'Y' THEN 'Lapsed R12+'
-    WHEN a.r12_active = 'N' AND a.lapsed_r12_plus = 'N' AND a.rnt_flag = 'N' THEN 'Dormant/Never Transacted'
-    ELSE NULL
-  END AS level2_engagement_status,
-
-  a.level3_breakdown,
-  
-  'LACA' AS region,
-  
-  CASE
-    WHEN a.corridor_bucket = 'RNT Only' THEN 'RNT Only'
-    WHEN a.corridor_bucket = 'Others' THEN 'Other Corridors'
-    ELSE a.corridor_bucket
-  END AS corridor_group
-  
-FROM LACA_CUSTOMER_DIMENSIONS a
-LEFT JOIN SUMMARY_GEN.COUNTRY_VW cv
-  ON a.country_code = cv.country_code
-  AND cv.super_region = 'LACA'
-LEFT JOIN LACA_ENGAGEMENT_CUSTOMERS_AGG b
-  ON a.ref_date = b.ref_date
-  AND a.country_code = b.country_code
-  AND NVL(a.corridor_bucket, 'NA') = NVL(b.corridor_bucket, 'NA')
-  AND NVL(a.dominant_sndcountry_name, 'NA') = NVL(b.dominant_sndcountry_name, 'NA')
-  AND NVL(a.dominant_rcvcountry_name, 'NA') = NVL(b.dominant_rcvcountry_name, 'NA')
-  AND NVL(a.channel_dominance, 'NA') = NVL(b.channel_dominance, 'NA')
-  AND NVL(a.email_marketable, 'NA') = NVL(b.email_marketable, 'NA')
-  AND NVL(a.sms_marketable, 'NA') = NVL(b.sms_marketable, 'NA')
-  AND NVL(a.retail_digital_flag, 'NA') = NVL(b.retail_digital_flag, 'NA')
-  AND NVL(a.Web_App_Flag, 'NA') = NVL(b.Web_App_Flag, 'NA')
-  AND NVL(a.channel_native, 'NA') = NVL(b.channel_native, 'NA')
-  AND NVL(a.rnt_flag, 'NA') = NVL(b.rnt_flag, 'NA')
-  AND NVL(a.r12_active, 'NA') = NVL(b.r12_active, 'NA')
-  AND NVL(a.active_churn_r7_r12, 'NA') = NVL(b.active_churn_r7_r12, 'NA')
-  AND NVL(a.lapsed_r12_plus, 'NA') = NVL(b.lapsed_r12_plus, 'NA')
-  AND NVL(a.level3_breakdown, 'NA') = NVL(b.level3_breakdown, 'NA')
-LEFT JOIN LACA_RNT_CUSTOMERS_AGG c
-  ON a.ref_date = c.ref_date
-  AND a.country_code = c.country_code
-  AND NVL(a.corridor_bucket, 'NA') = NVL(c.corridor_bucket, 'NA')
-  AND NVL(a.dominant_sndcountry_name, 'NA') = NVL(c.dominant_sndcountry_name, 'NA')
-  AND NVL(a.dominant_rcvcountry_name, 'NA') = NVL(c.dominant_rcvcountry_name, 'NA')
-  AND NVL(a.channel_dominance, 'NA') = NVL(c.channel_dominance, 'NA')
-  AND NVL(a.email_marketable, 'NA') = NVL(c.email_marketable, 'NA')
-  AND NVL(a.sms_marketable, 'NA') = NVL(c.sms_marketable, 'NA')
-  AND NVL(a.retail_digital_flag, 'NA') = NVL(c.retail_digital_flag, 'NA')
-  AND NVL(a.Web_App_Flag, 'NA') = NVL(c.Web_App_Flag, 'NA')
-  AND NVL(a.channel_native, 'NA') = NVL(c.channel_native, 'NA')
-  AND NVL(a.rnt_flag, 'NA') = NVL(c.rnt_flag, 'NA')
-  AND NVL(a.r12_active, 'NA') = NVL(c.r12_active, 'NA')
-  AND NVL(a.active_churn_r7_r12, 'NA') = NVL(c.active_churn_r7_r12, 'NA')
-  AND NVL(a.lapsed_r12_plus, 'NA') = NVL(c.lapsed_r12_plus, 'NA')
-  AND NVL(a.level3_breakdown, 'NA') = NVL(c.level3_breakdown, 'NA')
-WHERE a.ref_date >= '2023-12-01'
-  AND (COALESCE(b.customer_count, 0) + COALESCE(c.customer_count, 0)) > 0;  -- ✅ ADD THIS FILTER
-Alternative: Fix in Power BI
-In Power BI, add a visual-level filter:
-Select the visual showing Argentina-Argentina
-Go to Filters pane → Visual level filters
-Add filter: customer_count is greater than 0
-Summary of Changes:
-✅ RNT Logic: Now checks R48 transactions instead of just looking at first transaction date
-✅ Dominant Countries: Changed from NULL to "RNT" for RNT customers
-✅ Empty Corridors: Added filter to exclude rows with zero customers
-After running these updates, refresh your Power BI dataset and the Argentina-Argentina corridor should either show data or disappear from the slicer options!
+    END AS level3_breakdown
+    
+  FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS e
+where e.r12_txns > 0 and (dominant_sndcountry_name is Null or dominant_rcvcountry_name is Null);
