@@ -145,25 +145,6 @@ LEFT JOIN SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
   ON e.sndcustomer_key = cm.customer_key 
 WHERE e.r48_txns > 0;
 
-
--- LEFT JOIN (
---   SELECT d.*
---   FROM WUDNA.CEX_SANDBOX.SK_DOMINANCY_METRICS d
---   JOIN SUMMARY_GEN.COUNTRY_VW snd
---     ON d.dominant_sndcountry_name = snd.country_name
---   WHERE snd.super_region = 'LACA'
--- ) d
-
---   ON e.sndcustomer_key = d.sndcustomer_key
---  AND e.mth_yr = d.mth_yr 
-
--- LEFT JOIN SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm               
---   ON e.sndcustomer_key = cm.customer_key 
-
--- WHERE e.r48_txns > 0;
-
-select DISTINCT  dominant_sndcountry_name,
-  dominant_rcvcountry_name, FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS LIMIT 100;
  -----------------------------------------------------------------------------------
 -- BACKUP: Create backup of existing aggregate table
 -----------------------------------------------------------------------------------
@@ -266,9 +247,7 @@ SELECT
   COALESCE(SUM(pppr12_txns), 0) AS total_pppr12_txns
 FROM engaged
 GROUP BY ALL;
- 
-SELECT corridor
-  FROM LACA_ENGAGEMENT_CUSTOMERS_AGG
+
 -----------------------------------------------------------------------------------
 -- STEP 4: Aggregate RNT Customers
 -----------------------------------------------------------------------------------
@@ -304,14 +283,7 @@ GROUP BY r.ref_date,
   r.email_marketable,
   r.sms_marketable;
  
- --RNT Count for the month of Sept 2025 from RNT AGG Table
- -- select sum(customer_count) 
- -- From LACA_RNT_CUSTOMERS_AGG
- -- where ref_date = '2025-09-01'; --6176657 (Sept 2025)
 
- select *
-from LACA_CUSTOMER_DIMENSIONS 
-where r12_active = 'Y' AND dominant_sndcountry_name IS NULL;
 
 -----------------------------------------------------------------------------------
 -- STEP 5A: Dimension Base (UPDATED - ADD level3_breakdown)
@@ -364,10 +336,6 @@ select sum(rnt_customer_count)
 from LACA_CUSTOMER_SEGMENTATION_FINAL
 where ref_date = '2025-09-01';
 
-//======================================================================================
-select *
-from LACA_CUSTOMER_SEGMENTATION_FINAL 
-where r12_active = 'Y' AND dominant_sndcountry_name IS NULL;
 
 -----------------------------------------------------------------------------------
 -- STEP 5B: Final Reporting Table (UPDATED - SIMPLIFIED level3_breakdown)
