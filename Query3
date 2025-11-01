@@ -1,4 +1,4 @@
-CREATE OR REPLACE TABLE LACA_RNT_CUSTOMERS1 AS
+CREATE OR REPLACE TABLE LACA_RNT_CUSTOMERS1_TEST_AM AS
 WITH 
 -- Generate months from Jan 2024 up to the last completed month
 months AS (
@@ -45,7 +45,7 @@ cust_reg AS (
 all_txns AS (
   SELECT DISTINCT
     t.sndcustomer_key AS customer_key,
-    t.rcvpaying_datetime AS txn_date
+    DATE(t.rcvpaying_datetime) AS txn_date
   FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
   WHERE t.SEND_SUPER_REGION = 'LACA'
     AND t.rcvpaying_datetime >= '2021-01-01'
@@ -67,5 +67,5 @@ JOIN cust_reg r
 LEFT JOIN all_txns t
   ON r.customer_key = t.customer_key
  AND t.txn_date >= DATEADD(MONTH, -47, m.ref_date)  -- R48 start
- AND t.txn_date <= LAST_DAY(m.ref_date)              -- R48 end
+ AND t.txn_date <= DATEADD(DAY, 1, LAST_DAY(m.ref_date))            -- R48 end
 WHERE t.customer_key IS NULL;  -- No transactions in R48
