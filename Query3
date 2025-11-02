@@ -1,4 +1,36 @@
-CREATE OR REPLACE TABLE LACA_RNT_CUSTOMERS1_TEST_AM AS
+SELECT   COUNT(DISTINCT c.customer_key) AS rnt_customer_count
+FROM (
+    SELECT 
+    cm.customer_key,
+    cm.first_registration_date,
+    cm.country_code
+  FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
+  JOIN SUMMARY_GEN.COUNTRY_VW cnt
+    ON cm.country_code = cnt.country_code
+   AND cnt.super_region = 'LACA'
+  WHERE --UPPER(cm.country_code) = 'AR' and
+    cm.first_registration_date IS NOT NULL
+    --AND cm.first_registration_date BETWEEN '2024-10-01' AND '2025-09-30 23:59:59'
+    AND DATE(cm.first_registration_date) >= '2024-10-01' AND 
+  DATE(cm.first_registration_date) <= '2025-09-30'
+) c
+LEFT JOIN (
+  SELECT DISTINCT
+    t.sndcustomer_key
+  FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
+  -- JOIN SUMMARY_GEN.COUNTRY_VW snd
+  --   ON t.sndcountry_code = snd.country_code
+   where t.SEND_SUPER_REGION = 'LACA'
+  --AND t.rcvpaying_datetime BETWEEN '2021-10-01' AND '2025-09-30 23:59:59'
+  AND DATE(t.rcvpaying_datetime) >= '2021-10-01' AND 
+  DATE(t.rcvpaying_datetime) <= '2025-09-30'
+) t
+  ON c.customer_key = t.sndcustomer_key
+WHERE t.sndcustomer_key IS NULL ;
+
+Could you tell me what is the difference between the logic of the first query and the one given below and shouldnt they work 
+the same.
+CREATE OR REPLACE TABLE LACA_RNT_CUSTOMERS1 AS
 WITH 
 -- Generate months from Jan 2024 up to the last completed month
 months AS (
@@ -67,5 +99,46 @@ JOIN cust_reg r
 LEFT JOIN all_txns t
   ON r.customer_key = t.customer_key
  AND t.txn_date >= DATEADD(MONTH, -47, m.ref_date)  -- R48 start
- AND t.txn_date <= DATEADD(DAY, 1, LAST_DAY(m.ref_date))            -- R48 end
-WHERE t.customer_key IS NULL;  -- No transactions in R48
+ AND t.txn_date <= LAST_DAY(m.ref_date)            -- R48 end
+WHERE t.customer_key IS NULL; 
+
+Also i am running the below validations to get the customer keys which are missing from the Main RNT logic 
+but present in the validation RNT Logic.
+
+-- Get customer keys from validation logic
+SELECT DISTINCT c.customer_key
+FROM (
+    SELECT 
+      cm.customer_key,
+      cm.first_registration_date,
+      cm.country_code
+    FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
+    JOIN SUMMARY_GEN.COUNTRY_VW cnt
+      ON cm.country_code = cnt.country_code
+     AND cnt.super_region = 'LACA'
+    WHERE cm.first_registration_date IS NOT NULL
+      AND DATE(cm.first_registration_date) >= '2024-10-01'
+      AND DATE(cm.first_registration_date) <= '2025-09-30'
+) c
+LEFT JOIN (
+  SELECT DISTINCT
+    t.sndcustomer_key,
+    t.rcvpaying_datetime
+  FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
+  WHERE t.SEND_SUPER_REGION = 'LACA'
+    AND DATE(t.rcvpaying_datetime) >= '2021-10-01'
+    AND DATE(t.rcvpaying_datetime) <= '2025-09-30'
+) t
+  ON c.customer_key = t.sndcustomer_key
+WHERE t.sndcustomer_key IS NULL
+
+MINUS
+
+-- Customer keys already in the RNT table
+SELECT DISTINCT customer_key
+FROM LACA_RNT_CUSTOMERS1_TEST_AM
+WHERE ref_date = TO_DATE('2025-09-01');
+
+
+
+
