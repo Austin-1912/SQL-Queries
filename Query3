@@ -76,83 +76,6 @@ LEFT JOIN all_txns t
 WHERE t.customer_key IS NULL; --AND r.customer_key = '4000000000324395793';
 
 //================================================================
-//================================================================
-
--- CREATE OR REPLACE TABLE LACA_RNT_CUSTOMERS1_TEST_AM AS
--- WITH 
--- -- Generate months from Jan 2024 up to the last completed month
--- months AS (
---   SELECT DISTINCT DATE_TRUNC('MONTH', MTH_YR) AS ref_date
---   FROM WUDNA.CEX_SANDBOX.VA_KPI_2020_2
---   WHERE MTH_YR >= TO_DATE('2024-01-01')
---     AND MTH_YR < DATE_TRUNC('MONTH', CURRENT_DATE)
--- ),
-
--- -- Registered LACA customers with marketability flags
--- cust_reg AS (
---   SELECT
---     c.customer_key,
---     DATE_TRUNC('MONTH', c.first_registration_date) AS reg_month,
---     c.country_code,
---     CASE
---       WHEN c.email_address_on_file_flag = 'Y'
---        AND c.opt_email = 'I'
---        AND c.marketing_flag = 'Y'
---       THEN 'Y'
---       ELSE 'N'
---     END AS email_marketable,
---     CASE
---       WHEN (c.opt_sms = 'I'
---         AND c.mobile_number_on_file_flag = 'Y'
---         AND c.marketing_flag = 'Y'
---         AND c.country_code NOT IN ('US','CA'))
---       OR (c.mobile_number_on_file_flag = 'Y'
---         AND c.opt_sms = 'I'
---         AND c.double_opt_sms = 'I'
---         AND c.marketing_flag = 'Y'
---         AND c.country_code IN ('US','CA'))
---       THEN 'Y'
---       ELSE 'N'
---     END AS sms_marketable
---   FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
---   JOIN SUMMARY_GEN.COUNTRY_VW cnt
---     ON c.country_code = cnt.country_code
---    AND cnt.super_region = 'LACA'
---   WHERE c.first_registration_date IS NOT NULL
--- ),
-
--- -- All LACA transactions from 2021 onwards
--- all_txns AS (
---   SELECT DISTINCT
---     t.sndcustomer_key AS customer_key,
---     DATE(t.rcvpaying_datetime) AS txn_date
---   FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
---   WHERE t.SEND_SUPER_REGION = 'LACA'
---     AND t.rcvpaying_datetime >= '2021-01-01'
--- )
-
--- -- Final RNT: Registered in R12, No transactions in R48
--- SELECT DISTINCT
---   m.ref_date,
---   r.customer_key,
---   r.country_code,
---   r.reg_month,
---   'Y' AS rnt_flag,
---   r.email_marketable,
---   r.sms_marketable
--- FROM months m
--- JOIN cust_reg r
---   ON r.reg_month >= DATEADD(MONTH, -11, m.ref_date)  -- R12 start
---  AND r.reg_month <= m.ref_date                       -- R12 end
--- LEFT JOIN all_txns t
---   ON r.customer_key = t.customer_key
---  AND t.txn_date >= DATEADD(MONTH, -47, m.ref_date)  -- R48 start
---  AND t.txn_date <= LAST_DAY(m.ref_date)            -- R48 end
--- WHERE t.customer_key IS NULL;  -- No transactions in R48
-
-//================================================================
-select DISTINCT LAST_DAY(ref_date) from LACA_RNT_CUSTOMERS1_TEST_AM
-where ref_date = TO_DATE('2025-09-01');
 
 -----------------------------------------------------------------------------------
 -- STEP 2: Engagement + Corridor Customers Table
@@ -202,40 +125,12 @@ LEFT JOIN SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
   ON e.sndcustomer_key = cm.customer_key 
 WHERE e.r48_txns > 0;
 
- select COUNT( distinct CUSTOMER_KEY), dominant_corridor_name
- FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS
- where dominant_sndcountry_name = 'ARGENTINA' and ref_date = '2025-09-01' and r12_active = 'Y'
- group by 2 ;
--- LEFT JOIN (
---   SELECT d.*
---   FROM WUDNA.CEX_SANDBOX.SK_DOMINANCY_METRICS d
---   JOIN SUMMARY_GEN.COUNTRY_VW snd
---     ON d.dominant_sndcountry_name = snd.country_name
---   WHERE snd.super_region = 'LACA'
--- ) d
-
---   ON e.sndcustomer_key = d.sndcustomer_key
---  AND e.mth_yr = d.mth_yr 
-
--- LEFT JOIN SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm               
---   ON e.sndcustomer_key = cm.customer_key 
-
--- WHERE e.r48_txns > 0;
-
-select DISTINCT  dominant_sndcountry_name,
-  dominant_rcvcountry_name, FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS LIMIT 100;
  -----------------------------------------------------------------------------------
 -- BACKUP: Create backup of existing aggregate table
 -----------------------------------------------------------------------------------
 CREATE OR REPLACE TABLE LACA_ENGAGEMENT_CUSTOMERS_AGG_BACKUP 
 CLONE LACA_ENGAGEMENT_CUSTOMERS_AGG;
 
-
- select sum(customer_count), corridor_bucket
- FROM LACA_ENGAGEMENT_CUSTOMERS_AGG
- where dominant_sndcountry_name = 'ARGENTINA' and ref_date = '2025-09-01'
- group by 2 
- ;
 
 -----------------------------------------------------------------------------------
 -- STEP 3: Aggregate Engagement Customers
@@ -357,8 +252,7 @@ FROM engaged
 GROUP BY
  ALL;
  
-SELECT corridor
-  FROM LACA_ENGAGEMENT_CUSTOMERS_AGG;
+
 -----------------------------------------------------------------------------------
 -- STEP 4: Aggregate RNT Customers
 -----------------------------------------------------------------------------------
@@ -450,14 +344,7 @@ SELECT DISTINCT
   level3_breakdown 
 FROM LACA_RNT_CUSTOMERS_AGG;
 
-select sum(rnt_customer_count)
-from LACA_CUSTOMER_SEGMENTATION_FINAL
-where ref_date = '2025-09-01';
 
-//======================================================================================
-select *
-from LACA_CUSTOMER_SEGMENTATION_FINAL 
-where r12_active = 'Y' AND dominant_sndcountry_name IS NULL;
 
 -----------------------------------------------------------------------------------
 -- STEP 5B: Final Reporting Table (UPDATED - SIMPLIFIED level3_breakdown)
