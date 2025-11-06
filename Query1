@@ -1,17 +1,22 @@
-I have created a matrix table where in rows i have put in the parameter selection and i have put it in slicer as well
-Parameter Selection = {
-    ("Audience Segment", NAMEOF('LACA_CUSTOMER_SEGMENTATION_FINAL'[AUDIENCE_SEGMENT]), 0, "Customer Engagement Group"),
-    ("Active Breakdown", NAMEOF('LACA_CUSTOMER_SEGMENTATION_FINAL'[Active Breakdown 2]), 1, "Customer Engagement Group"),
-    ("Country", NAMEOF('LACA_CUSTOMER_SEGMENTATION_FINAL'[LACA_COUNTRY]), 2, "Geographic & Corridor Group"),
-    ("Dominant Channel", NAMEOF('LACA_CUSTOMER_SEGMENTATION_FINAL'[CHANNEL_DOMINANCE]), 6, "Channel & Marketability Group"),
-    ("Channel Native", NAMEOF('LACA_CUSTOMER_SEGMENTATION_FINAL'[CHANNEL_NATIVE]), 7, "Channel & Marketability Group"),
-    ("Marketability Segment", NAMEOF('LACA_CUSTOMER_SEGMENTATION_FINAL'[MARKETABILITY_SEGMENT]), 8, "Channel & Marketability Group"),
-    ("Corridor", NAMEOF('LACA_CUSTOMER_SEGMENTATION_FINAL'[CORRIDOR_GROUP]), 5, "Geographic & Corridor Group"),
-    
-    ("Dominant Sndcountry", NAMEOF('LACA_CUSTOMER_SEGMENTATION_FINAL'[DOMINANT_SNDCOUNTRY_NAME]),3,"Geographic & Corridor Group"),
-    ("Dominant Rcvcountry", NAMEOF('LACA_CUSTOMER_SEGMENTATION_FINAL'[DOMINANT_RCVCOUNTRY_NAME]),4, "Geographic & Corridor Group")
-}
-in columns i have month label which has Jan 2025 to Sept 2025
-in values i have sum of Total customers which is a measure : Total Customers = SUM(LACA_CUSTOMER_SEGMENTATION_FINAL[Total Customer Count])
-Now help me create a YOY in % and MOM in % which i can show along with the total customers and maybe add a slicer to switch between
-the total customer, YOY and MOM. if you need any other detail do let me know.
+Total Customers MoM % = 
+VAR CurrentMonth = SELECTEDVALUE('LACA_CUSTOMER_SEGMENTATION_FINAL'[REF_DATE].[Month])
+VAR PrevMonth =
+    EDATE(CurrentMonth, -1)
+VAR CurrentValue =
+    [Total Customers]
+VAR PrevValue =
+    CALCULATE(
+        [Total Customers],
+        FILTER(
+            ALL('LACA_CUSTOMER_SEGMENTATION_FINAL'),
+            'LACA_CUSTOMER_SEGMENTATION_FINAL'[REF_DATE].[Month] = PrevMonth
+                && SELECTEDVALUE('LACA_CUSTOMER_SEGMENTATION_FINAL'[Country_Code])
+                    = MAX('LACA_CUSTOMER_SEGMENTATION_FINAL'[Country_Code])
+        )
+    )
+RETURN
+IF(
+    NOT ISBLANK(PrevValue),
+    DIVIDE(CurrentValue - PrevValue, PrevValue),
+    BLANK()
+)
