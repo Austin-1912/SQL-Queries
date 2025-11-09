@@ -278,7 +278,7 @@ SELECT
   a.ref_date,
   a.country_code,
   cv.COUNTRY_NAME AS laca_country,
-  a.dominant_corridor_name,
+  a.dominant_corridor_name AS corridor_bucket,
   
   CASE WHEN a.lapsed_r12_plus = 'Y' AND a.dominant_sndcountry_name  IS NULL
     THEN 'Lapsed R12+'
