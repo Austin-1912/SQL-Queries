@@ -1,50 +1,54 @@
-Ah yes, you're absolutely right! Your logic is much clearer. Let me fix that:
-Your Correct Logic:
-R2_TO_R13_WEBSITE_TXNS > 0 → Customer was using Web in the past year (months 2-13)
-R2_TO_R13_APP_TXNS = 0 → Customer was NOT using App in the past year (months 2-13)
-R1_APP_TXNS > 0 → Customer started using App in current month (first time!)
-This correctly identifies customers who migrated from Web to App.
-Here's the corrected code:
+Perfect! I'll add the join with the dominancy metrics table and filter for India send country in the first table itself:
 -- ============================================================================
 -- STEP 1: Create Base Customer Channel Monthly Table
+-- Filtering for India as Send Country using DOMINANT_SNDCOUNTRY_NAME
 -- ============================================================================
 CREATE OR REPLACE TABLE CAR_717_Customer_Channel_Monthly AS
 SELECT
-    DATE_TRUNC('MONTH', MTH_YR) AS MTH_YR,
-    SNDCUSTOMER_KEY,
-    COUNTRY_CODE,
+    DATE_TRUNC('MONTH', CEM.MTH_YR) AS MTH_YR,
+    CEM.SNDCUSTOMER_KEY,
+    CEM.COUNTRY_CODE,
     
     -- Use New_Existing_Flag from base table
-    New_Existing_Flag AS CUSTOMER_TYPE,
+    CEM.New_Existing_Flag AS CUSTOMER_TYPE,
     
     -- Determine current channel based on R1 transactions
     CASE 
-        WHEN R1_APP_TXNS > 0 AND R1_WEBSITE_TXNS > 0 THEN 'APP+WEB'
-        WHEN R1_APP_TXNS > 0 THEN 'APP'
-        WHEN R1_WEBSITE_TXNS > 0 THEN 'WEB'
+        WHEN CEM.R1_APP_TXNS > 0 AND CEM.R1_WEBSITE_TXNS > 0 THEN 'APP+WEB'
+        WHEN CEM.R1_APP_TXNS > 0 THEN 'APP'
+        WHEN CEM.R1_WEBSITE_TXNS > 0 THEN 'WEB'
         ELSE 'OTHER'
     END AS CURRENT_CHANNEL,
     
     -- Transaction metrics by channel
-    R1_APP_TXNS,
-    R1_WEBSITE_TXNS,
-    R1_TXNS,
-    R12_TXNS,
-    R12_PRINCIPAL,
-    R12_REVENUE,
+    CEM.R1_APP_TXNS,
+    CEM.R1_WEBSITE_TXNS,
+    CEM.R1_TXNS,
+    CEM.R12_TXNS,
+    CEM.R12_PRINCIPAL,
+    CEM.R12_REVENUE,
     
     -- For migration tracking - Past 12 months (R2 to R13)
-    R2_TO_R13_WEBSITE_TXNS,
-    R2_TO_R13_APP_TXNS
+    CEM.R2_TO_R13_WEBSITE_TXNS,
+    CEM.R2_TO_R13_APP_TXNS,
     
-FROM CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL
-WHERE MTH_YR >= '2022-01-01'
-    AND MTH_YR <= '2025-10-31'
-    AND R12_TXNS > 0;
+    -- Add Dominant Send Country for validation
+    DOM.DOMINANT_SNDCOUNTRY_NAME
+    
+FROM CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL CEM
+INNER JOIN CEX_SANDBOX.SK_DOMINANCY_METRICS DOM
+    ON CEM.SNDCUSTOMER_KEY = DOM.SNDCUSTOMER_KEY
+    AND DATE_TRUNC('MONTH', CEM.MTH_YR) = DATE_TRUNC('MONTH', DOM.MTH_YR)
+    
+WHERE CEM.MTH_YR >= '2022-01-01'
+    AND CEM.MTH_YR <= '2025-10-31'
+    AND CEM.R12_TXNS > 0
+    AND DOM.DOMINANT_SNDCOUNTRY_NAME = 'IN';  -- Filter for India send country
 
 -- Validation
 SELECT
     MTH_YR,
+    DOMINANT_SNDCOUNTRY_NAME,
     CUSTOMER_TYPE,
     CURRENT_CHANNEL,
     COUNT(DISTINCT SNDCUSTOMER_KEY) AS CUSTOMERS,
@@ -52,8 +56,8 @@ SELECT
     SUM(R1_WEBSITE_TXNS) AS WEB_TXNS,
     SUM(R12_TXNS) AS TOTAL_TXNS
 FROM CAR_717_Customer_Channel_Monthly
-GROUP BY 1, 2, 3
-ORDER BY 1, 2, 3;
+GROUP BY 1, 2, 3, 4
+ORDER BY 1, 2, 3, 4;
 
 
 -- ============================================================================
@@ -74,6 +78,7 @@ SELECT
     R12_REVENUE,
     R2_TO_R13_WEBSITE_TXNS,
     R2_TO_R13_APP_TXNS,
+    DOMINANT_SNDCOUNTRY_NAME,
     
     -- Customer Segment Classification
     CASE
@@ -103,6 +108,7 @@ FROM CAR_717_Customer_Channel_Monthly;
 -- Validation - Check Migration Logic
 SELECT
     MTH_YR,
+    DOMINANT_SNDCOUNTRY_NAME,
     CUSTOMER_SEGMENT,
     COUNT(DISTINCT SNDCUSTOMER_KEY) AS CUSTOMERS,
     SUM(R1_APP_TXNS) AS R1_APP_TXNS,
@@ -110,8 +116,8 @@ SELECT
     SUM(R2_TO_R13_APP_TXNS) AS R2_TO_R13_APP_TXNS
 FROM CAR_717_Customer_Segments
 WHERE CUSTOMER_SEGMENT = 'Migrated Web to App'
-GROUP BY 1, 2
-ORDER BY 1, 2;
+GROUP BY 1, 2, 3
+ORDER BY 1, 2, 3;
 
 
 -- ============================================================================
@@ -122,6 +128,7 @@ SELECT
     CS.MTH_YR,
     CV.SUPER_REGION AS REGION,
     CV.COUNTRY_NAME,
+    CS.DOMINANT_SNDCOUNTRY_NAME,
     CS.CUSTOMER_TYPE,
     CS.CURRENT_CHANNEL,
     CS.CUSTOMER_SEGMENT,
@@ -173,12 +180,13 @@ FROM CAR_717_Customer_Segments CS
 INNER JOIN SUMMARY_GEN.COUNTRY_VW CV
     ON CV.COUNTRY_CODE = CS.COUNTRY_CODE
     AND CV.SUPER_REGION IS NOT NULL
-GROUP BY 1, 2, 3, 4, 5, 6
-ORDER BY 1, 2, 3, 4, 5, 6;
+GROUP BY 1, 2, 3, 4, 5, 6, 7
+ORDER BY 1, 2, 3, 4, 5, 6, 7;
 
 -- Validation
 SELECT
     MTH_YR,
+    DOMINANT_SNDCOUNTRY_NAME,
     CURRENT_CHANNEL,
     SUM(TOTAL_CUSTOMERS) AS TOTAL_CUSTOMERS,
     SUM(NEW_TO_APP) AS NEW_TO_APP,
@@ -190,16 +198,18 @@ SELECT
     ROUND(AVG(PPT), 2) AS AVG_PPT,
     ROUND(AVG(RPT), 2) AS AVG_RPT
 FROM CAR_717_Monthly_Report
-GROUP BY 1, 2
-ORDER BY 1, 2;
+GROUP BY 1, 2, 3
+ORDER BY 1, 2, 3;
 
 
 -- ============================================================================
 -- STEP 4: Create India-Specific Report (for App Launch Tracking)
+-- Now truly India send country specific
 -- ============================================================================
 CREATE OR REPLACE TABLE CAR_717_India_Monthly_Report AS
 SELECT
     MTH_YR,
+    DOMINANT_SNDCOUNTRY_NAME,
     CUSTOMER_TYPE,
     CURRENT_CHANNEL,
     CUSTOMER_SEGMENT,
@@ -242,33 +252,44 @@ SELECT
     END AS MOM_APP_TXNS_GROWTH_PCT
 
 FROM CAR_717_Monthly_Report
-WHERE COUNTRY_NAME = 'INDIA'
+WHERE DOMINANT_SNDCOUNTRY_NAME = 'IN'
 ORDER BY MTH_YR, CURRENT_CHANNEL;
 
 
 -- ============================================================================
--- ADDITIONAL VALIDATION - Check Migration Logic Specifically
+-- ADDITIONAL VALIDATION QUERIES
 -- ============================================================================
 
--- Detailed check of migrated customers
+-- Verify all records are India send country
+SELECT 
+    'India Send Country Check' AS CHECK_NAME,
+    DOMINANT_SNDCOUNTRY_NAME,
+    COUNT(DISTINCT SNDCUSTOMER_KEY) AS UNIQUE_CUSTOMERS,
+    COUNT(*) AS TOTAL_RECORDS
+FROM CAR_717_Customer_Channel_Monthly
+GROUP BY 1, 2;
+
+-- Check date range and volumes
+SELECT 
+    MIN(MTH_YR) AS START_DATE,
+    MAX(MTH_YR) AS END_DATE,
+    COUNT(DISTINCT MTH_YR) AS TOTAL_MONTHS,
+    COUNT(DISTINCT SNDCUSTOMER_KEY) AS UNIQUE_CUSTOMERS
+FROM CAR_717_Customer_Channel_Monthly;
+
+-- Monthly trend check
 SELECT
     MTH_YR,
-    COUNT(DISTINCT SNDCUSTOMER_KEY) AS MIGRATED_CUSTOMERS,
-    SUM(R2_TO_R13_WEBSITE_TXNS) AS TOTAL_PAST_WEB_TXNS,
-    SUM(R2_TO_R13_APP_TXNS) AS TOTAL_PAST_APP_TXNS,
-    SUM(R1_APP_TXNS) AS CURRENT_APP_TXNS,
-    SUM(R1_WEBSITE_TXNS) AS CURRENT_WEB_TXNS
-FROM CAR_717_Customer_Segments
-WHERE CUSTOMER_SEGMENT = 'Migrated Web to App'
+    COUNT(DISTINCT SNDCUSTOMER_KEY) AS CUSTOMERS,
+    SUM(R1_APP_TXNS) AS APP_TXNS,
+    SUM(R1_WEBSITE_TXNS) AS WEB_TXNS
+FROM CAR_717_Customer_Channel_Monthly
 GROUP BY 1
 ORDER BY 1;
-Key Fix:
-Changed migration logic from:
-WHEN R2_TO_R13_WEBSITE_TXNS > 0 
-     AND NVL(PREV_R1_APP_TXNS, 0) = 0 
-     AND R1_APP_TXNS > 0
-To your correct logic:
-WHEN R2_TO_R13_WEBSITE_TXNS > 0 
-     AND NVL(R2_TO_R13_APP_TXNS, 0) = 0 
-     AND R1_APP_TXNS > 0
-This now properly identifies customers who were Web-only users in the past year and just started using the App!
+Key Changes Made:
+✅ Added INNER JOIN with SK_DOMINANCY_METRICS in Step 1
+✅ Matched on both SNDCUSTOMER_KEY and MTH_YR to ensure correct monthly mapping
+✅ Filtered DOMINANT_SNDCOUNTRY_NAME = 'IN' in the WHERE clause
+✅ Included DOMINANT_SNDCOUNTRY_NAME field in all subsequent tables for validation
+✅ Added validation queries to confirm all records are India send country
+Now your data will only include customers whose dominant send country is India, filtering out transactions from other countries! 🇮🇳
