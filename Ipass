@@ -1,7 +1,12 @@
-Perfect! Let me revise the queries based on your requirements:
+Ah yes, you're absolutely right! Your logic is much clearer. Let me fix that:
+Your Correct Logic:
+R2_TO_R13_WEBSITE_TXNS > 0 → Customer was using Web in the past year (months 2-13)
+R2_TO_R13_APP_TXNS = 0 → Customer was NOT using App in the past year (months 2-13)
+R1_APP_TXNS > 0 → Customer started using App in current month (first time!)
+This correctly identifies customers who migrated from Web to App.
+Here's the corrected code:
 -- ============================================================================
 -- STEP 1: Create Base Customer Channel Monthly Table
--- Using New_Existing_Flag and specific channel transaction fields
 -- ============================================================================
 CREATE OR REPLACE TABLE CAR_717_Customer_Channel_Monthly AS
 SELECT
@@ -28,20 +33,9 @@ SELECT
     R12_PRINCIPAL,
     R12_REVENUE,
     
-    -- For migration tracking
+    -- For migration tracking - Past 12 months (R2 to R13)
     R2_TO_R13_WEBSITE_TXNS,
-    
-    -- Get previous month's App transactions
-    LAG(R1_APP_TXNS, 1) OVER (
-        PARTITION BY SNDCUSTOMER_KEY
-        ORDER BY DATE_TRUNC('MONTH', MTH_YR)
-    ) AS PREV_R1_APP_TXNS,
-    
-    -- Get previous month's Website transactions  
-    LAG(R1_WEBSITE_TXNS, 1) OVER (
-        PARTITION BY SNDCUSTOMER_KEY
-        ORDER BY DATE_TRUNC('MONTH', MTH_YR)
-    ) AS PREV_R1_WEBSITE_TXNS
+    R2_TO_R13_APP_TXNS
     
 FROM CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL
 WHERE MTH_YR >= '2022-01-01'
@@ -79,8 +73,7 @@ SELECT
     R12_PRINCIPAL,
     R12_REVENUE,
     R2_TO_R13_WEBSITE_TXNS,
-    PREV_R1_APP_TXNS,
-    PREV_R1_WEBSITE_TXNS,
+    R2_TO_R13_APP_TXNS,
     
     -- Customer Segment Classification
     CASE
@@ -91,9 +84,9 @@ SELECT
         WHEN CUSTOMER_TYPE = 'NEW' THEN 'New to Other Channel'
         
         -- Migration from Web to App
-        -- Had Website transactions in R2-R13, no App transactions in previous month, but has App transactions now
+        -- Was using ONLY Web in past 12 months (R2-R13), now started using App in current month (R1)
         WHEN R2_TO_R13_WEBSITE_TXNS > 0 
-             AND NVL(PREV_R1_APP_TXNS, 0) = 0 
+             AND NVL(R2_TO_R13_APP_TXNS, 0) = 0 
              AND R1_APP_TXNS > 0 
              THEN 'Migrated Web to App'
         
@@ -107,18 +100,18 @@ SELECT
     
 FROM CAR_717_Customer_Channel_Monthly;
 
--- Validation
+-- Validation - Check Migration Logic
 SELECT
     MTH_YR,
-    CUSTOMER_TYPE,
     CUSTOMER_SEGMENT,
     COUNT(DISTINCT SNDCUSTOMER_KEY) AS CUSTOMERS,
-    SUM(R1_APP_TXNS) AS APP_TXNS,
-    SUM(R1_WEBSITE_TXNS) AS WEB_TXNS,
-    SUM(R12_TXNS) AS TOTAL_TXNS
+    SUM(R1_APP_TXNS) AS R1_APP_TXNS,
+    SUM(R2_TO_R13_WEBSITE_TXNS) AS R2_TO_R13_WEB_TXNS,
+    SUM(R2_TO_R13_APP_TXNS) AS R2_TO_R13_APP_TXNS
 FROM CAR_717_Customer_Segments
-GROUP BY 1, 2, 3
-ORDER BY 1, 2, 3;
+WHERE CUSTOMER_SEGMENT = 'Migrated Web to App'
+GROUP BY 1, 2
+ORDER BY 1, 2;
 
 
 -- ============================================================================
@@ -254,54 +247,28 @@ ORDER BY MTH_YR, CURRENT_CHANNEL;
 
 
 -- ============================================================================
--- ADDITIONAL VALIDATION QUERIES
+-- ADDITIONAL VALIDATION - Check Migration Logic Specifically
 -- ============================================================================
 
--- Check New vs Existing breakdown by Channel
+-- Detailed check of migrated customers
 SELECT
     MTH_YR,
-    CUSTOMER_TYPE,
-    CURRENT_CHANNEL,
-    SUM(TOTAL_CUSTOMERS) AS CUSTOMERS,
-    SUM(R1_APP_TRANSACTIONS) AS APP_TXNS,
-    SUM(R1_WEB_TRANSACTIONS) AS WEB_TXNS
-FROM CAR_717_Monthly_Report
-WHERE MTH_YR >= '2024-01-01'
-GROUP BY 1, 2, 3
-ORDER BY 1, 2, 3;
-
--- Check Migration Trend
-SELECT
-    MTH_YR,
-    SUM(MIGRATED_WEB_TO_APP) AS MIGRATED_CUSTOMERS,
-    SUM(R1_APP_TRANSACTIONS) AS APP_TXNS_BY_ALL
-FROM CAR_717_Monthly_Report
-WHERE MTH_YR >= '2024-01-01'
+    COUNT(DISTINCT SNDCUSTOMER_KEY) AS MIGRATED_CUSTOMERS,
+    SUM(R2_TO_R13_WEBSITE_TXNS) AS TOTAL_PAST_WEB_TXNS,
+    SUM(R2_TO_R13_APP_TXNS) AS TOTAL_PAST_APP_TXNS,
+    SUM(R1_APP_TXNS) AS CURRENT_APP_TXNS,
+    SUM(R1_WEBSITE_TXNS) AS CURRENT_WEB_TXNS
+FROM CAR_717_Customer_Segments
+WHERE CUSTOMER_SEGMENT = 'Migrated Web to App'
 GROUP BY 1
 ORDER BY 1;
-
--- India App Adoption Summary
-SELECT
-    MTH_YR,
-    SUM(NEW_TO_APP) AS NEW_TO_APP,
-    SUM(MIGRATED_WEB_TO_APP) AS MIGRATED_TO_APP,
-    SUM(EXISTING_ON_APP) AS RETAINED_ON_APP,
-    SUM(R1_APP_TRANSACTIONS) AS TOTAL_APP_TXNS,
-    ROUND(AVG(TPC), 2) AS AVG_TPC,
-    ROUND(AVG(PPT), 2) AS AVG_PPT
-FROM CAR_717_India_Monthly_Report
-GROUP BY 1
-ORDER BY 1;
-Key Changes Made:
-Used New_Existing_Flag: Now using the existing field from the base table instead of calculating it
-Channel determination: Based on R1_APP_TXNS and R1_WEBSITE_TXNS to identify which channel customers are using
-Migration logic: Specifically identifies customers who:
-Had R2_TO_R13_WEBSITE_TXNS > 0 (used Web in past 12 months)
-Had PREV_R1_APP_TXNS = 0 (no App usage in previous month)
-Now have R1_APP_TXNS > 0 (started using App in current month)
-Separate metrics: Clear breakdown of:
-New customers by channel (App, Web, App+Web)
-Migrated customers (Web to App)
-Existing customers by channel
-Month-wise tracking: All metrics are calculated month by month
-This structure will clearly show you the App adoption journey in India!
+Key Fix:
+Changed migration logic from:
+WHEN R2_TO_R13_WEBSITE_TXNS > 0 
+     AND NVL(PREV_R1_APP_TXNS, 0) = 0 
+     AND R1_APP_TXNS > 0
+To your correct logic:
+WHEN R2_TO_R13_WEBSITE_TXNS > 0 
+     AND NVL(R2_TO_R13_APP_TXNS, 0) = 0 
+     AND R1_APP_TXNS > 0
+This now properly identifies customers who were Web-only users in the past year and just started using the App!
