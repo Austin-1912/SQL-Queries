@@ -1,6 +1,7 @@
+Perfect! Let me revise the queries based on your requirements:
 -- ============================================================================
 -- STEP 1: Create Base Customer Channel Monthly Table
--- Using base table: CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL
+-- Using New_Existing_Flag and specific channel transaction fields
 -- ============================================================================
 CREATE OR REPLACE TABLE CAR_717_Customer_Channel_Monthly AS
 SELECT
@@ -8,46 +9,59 @@ SELECT
     SNDCUSTOMER_KEY,
     COUNTRY_CODE,
     
-    -- Determine dominant channel for the customer in that month
-    R12_DOMINANT_CHANNEL AS CURRENT_CHANNEL,
+    -- Use New_Existing_Flag from base table
+    New_Existing_Flag AS CUSTOMER_TYPE,
     
-    -- Transaction metrics from R1 (current month)
+    -- Determine current channel based on R1 transactions
+    CASE 
+        WHEN R1_APP_TXNS > 0 AND R1_WEBSITE_TXNS > 0 THEN 'APP+WEB'
+        WHEN R1_APP_TXNS > 0 THEN 'APP'
+        WHEN R1_WEBSITE_TXNS > 0 THEN 'WEB'
+        ELSE 'OTHER'
+    END AS CURRENT_CHANNEL,
+    
+    -- Transaction metrics by channel
+    R1_APP_TXNS,
+    R1_WEBSITE_TXNS,
     R1_TXNS,
     R12_TXNS,
     R12_PRINCIPAL,
     R12_REVENUE,
     
-    -- Get previous month channel using LAG
-    LAG(R12_DOMINANT_CHANNEL, 1) OVER (
+    -- For migration tracking
+    R2_TO_R13_WEBSITE_TXNS,
+    
+    -- Get previous month's App transactions
+    LAG(R1_APP_TXNS, 1) OVER (
         PARTITION BY SNDCUSTOMER_KEY
         ORDER BY DATE_TRUNC('MONTH', MTH_YR)
-    ) AS PREVIOUS_CHANNEL,
+    ) AS PREV_R1_APP_TXNS,
     
-    -- Flag if this is first appearance (new customer)
-    CASE
-        WHEN LAG(SNDCUSTOMER_KEY, 1) OVER (
-            PARTITION BY SNDCUSTOMER_KEY
-            ORDER BY DATE_TRUNC('MONTH', MTH_YR)
-        ) IS NULL THEN 'Y'
-        ELSE 'N'
-    END AS NEW_CUSTOMER_FLAG
+    -- Get previous month's Website transactions  
+    LAG(R1_WEBSITE_TXNS, 1) OVER (
+        PARTITION BY SNDCUSTOMER_KEY
+        ORDER BY DATE_TRUNC('MONTH', MTH_YR)
+    ) AS PREV_R1_WEBSITE_TXNS
     
 FROM CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL
 WHERE MTH_YR >= '2022-01-01'
     AND MTH_YR <= '2025-10-31'
-    AND R12_TXNS > 0; 
- 
+    AND R12_TXNS > 0;
+
 -- Validation
 SELECT
     MTH_YR,
+    CUSTOMER_TYPE,
     CURRENT_CHANNEL,
     COUNT(DISTINCT SNDCUSTOMER_KEY) AS CUSTOMERS,
-    SUM(R12_TXNS) AS TRANSACTIONS
+    SUM(R1_APP_TXNS) AS APP_TXNS,
+    SUM(R1_WEBSITE_TXNS) AS WEB_TXNS,
+    SUM(R12_TXNS) AS TOTAL_TXNS
 FROM CAR_717_Customer_Channel_Monthly
-GROUP BY 1, 2
-ORDER BY 1, 2;
- 
- 
+GROUP BY 1, 2, 3
+ORDER BY 1, 2, 3;
+
+
 -- ============================================================================
 -- STEP 2: Create Customer Segment Classification
 -- ============================================================================
@@ -56,47 +70,57 @@ SELECT
     MTH_YR,
     SNDCUSTOMER_KEY,
     COUNTRY_CODE,
+    CUSTOMER_TYPE,
     CURRENT_CHANNEL,
-    PREVIOUS_CHANNEL,
-    NEW_CUSTOMER_FLAG,
+    R1_APP_TXNS,
+    R1_WEBSITE_TXNS,
     R1_TXNS,
     R12_TXNS,
-    R1_PRINCIPAL,
-    R1_REVENUE,
+    R12_PRINCIPAL,
+    R12_REVENUE,
+    R2_TO_R13_WEBSITE_TXNS,
+    PREV_R1_APP_TXNS,
+    PREV_R1_WEBSITE_TXNS,
     
     -- Customer Segment Classification
     CASE
-        -- New customers
-        WHEN NEW_CUSTOMER_FLAG = 'Y' AND CURRENT_CHANNEL = 'APP' THEN 'New to App'
-        WHEN NEW_CUSTOMER_FLAG = 'Y' AND CURRENT_CHANNEL = 'WEB' THEN 'New to Web'
-        WHEN NEW_CUSTOMER_FLAG = 'Y' THEN 'New to Other Channel'
+        -- New customers by channel
+        WHEN CUSTOMER_TYPE = 'NEW' AND CURRENT_CHANNEL = 'APP' THEN 'New to App'
+        WHEN CUSTOMER_TYPE = 'NEW' AND CURRENT_CHANNEL = 'WEB' THEN 'New to Web'
+        WHEN CUSTOMER_TYPE = 'NEW' AND CURRENT_CHANNEL = 'APP+WEB' THEN 'New to App+Web'
+        WHEN CUSTOMER_TYPE = 'NEW' THEN 'New to Other Channel'
         
-        -- Migration patterns
-        WHEN PREVIOUS_CHANNEL = 'WEB' AND CURRENT_CHANNEL = 'APP' THEN 'Migrated Web to App'
-        WHEN PREVIOUS_CHANNEL = 'APP' AND CURRENT_CHANNEL = 'WEB' THEN 'Migrated App to Web'
+        -- Migration from Web to App
+        -- Had Website transactions in R2-R13, no App transactions in previous month, but has App transactions now
+        WHEN R2_TO_R13_WEBSITE_TXNS > 0 
+             AND NVL(PREV_R1_APP_TXNS, 0) = 0 
+             AND R1_APP_TXNS > 0 
+             THEN 'Migrated Web to App'
         
-        -- Retained customers
-        WHEN PREVIOUS_CHANNEL = 'APP' AND CURRENT_CHANNEL = 'APP' THEN 'Retained on App'
-        WHEN PREVIOUS_CHANNEL = 'WEB' AND CURRENT_CHANNEL = 'WEB' THEN 'Retained on Web'
+        -- Existing customers retained on their channel
+        WHEN CUSTOMER_TYPE = 'EXISTING' AND CURRENT_CHANNEL = 'APP' THEN 'Retained on App'
+        WHEN CUSTOMER_TYPE = 'EXISTING' AND CURRENT_CHANNEL = 'WEB' THEN 'Retained on Web'
+        WHEN CUSTOMER_TYPE = 'EXISTING' AND CURRENT_CHANNEL = 'APP+WEB' THEN 'Retained on App+Web'
         
         ELSE 'Other'
     END AS CUSTOMER_SEGMENT
     
 FROM CAR_717_Customer_Channel_Monthly;
- 
+
 -- Validation
 SELECT
     MTH_YR,
+    CUSTOMER_TYPE,
     CUSTOMER_SEGMENT,
     COUNT(DISTINCT SNDCUSTOMER_KEY) AS CUSTOMERS,
-    SUM(R12_TXNS) AS TRANSACTIONS
+    SUM(R1_APP_TXNS) AS APP_TXNS,
+    SUM(R1_WEBSITE_TXNS) AS WEB_TXNS,
+    SUM(R12_TXNS) AS TOTAL_TXNS
 FROM CAR_717_Customer_Segments
-GROUP BY 1, 2
-ORDER BY 1, 2;
- 
- -- select country_name
- -- from SUMMARY_GEN.COUNTRY_VW 
- -- where country_name LiKE  ('IN%');
+GROUP BY 1, 2, 3
+ORDER BY 1, 2, 3;
+
+
 -- ============================================================================
 -- STEP 3: Create Final Monthly Report with All Metrics
 -- ============================================================================
@@ -105,22 +129,38 @@ SELECT
     CS.MTH_YR,
     CV.SUPER_REGION AS REGION,
     CV.COUNTRY_NAME,
+    CS.CUSTOMER_TYPE,
     CS.CURRENT_CHANNEL,
     CS.CUSTOMER_SEGMENT,
     
     -- Customer Counts
     COUNT(DISTINCT CS.SNDCUSTOMER_KEY) AS TOTAL_CUSTOMERS,
-    COUNT(DISTINCT CASE WHEN CS.NEW_CUSTOMER_FLAG = 'Y' THEN CS.SNDCUSTOMER_KEY END) AS NEW_CUSTOMERS,
+    
+    -- New Customer Counts by Channel
+    COUNT(DISTINCT CASE WHEN CS.CUSTOMER_TYPE = 'NEW' AND CS.CURRENT_CHANNEL = 'APP' THEN CS.SNDCUSTOMER_KEY END) AS NEW_TO_APP,
+    COUNT(DISTINCT CASE WHEN CS.CUSTOMER_TYPE = 'NEW' AND CS.CURRENT_CHANNEL = 'WEB' THEN CS.SNDCUSTOMER_KEY END) AS NEW_TO_WEB,
+    COUNT(DISTINCT CASE WHEN CS.CUSTOMER_TYPE = 'NEW' AND CS.CURRENT_CHANNEL = 'APP+WEB' THEN CS.SNDCUSTOMER_KEY END) AS NEW_TO_APP_WEB,
+    
+    -- Migration Count
+    COUNT(DISTINCT CASE WHEN CS.CUSTOMER_SEGMENT = 'Migrated Web to App' THEN CS.SNDCUSTOMER_KEY END) AS MIGRATED_WEB_TO_APP,
+    
+    -- Existing Customer Counts by Channel
+    COUNT(DISTINCT CASE WHEN CS.CUSTOMER_TYPE = 'EXISTING' AND CS.CURRENT_CHANNEL = 'APP' THEN CS.SNDCUSTOMER_KEY END) AS EXISTING_ON_APP,
+    COUNT(DISTINCT CASE WHEN CS.CUSTOMER_TYPE = 'EXISTING' AND CS.CURRENT_CHANNEL = 'WEB' THEN CS.SNDCUSTOMER_KEY END) AS EXISTING_ON_WEB,
+    COUNT(DISTINCT CASE WHEN CS.CUSTOMER_TYPE = 'EXISTING' AND CS.CURRENT_CHANNEL = 'APP+WEB' THEN CS.SNDCUSTOMER_KEY END) AS EXISTING_ON_APP_WEB,
     
     -- Transaction Metrics
-    SUM(CS.R12_TXNS) AS TOTAL_TRANSACTIONS,
-    SUM(CS.R12_PRINCIPAL) AS TOTAL_PRINCIPAL,
-    SUM(CS.R12_REVENUE) AS TOTAL_REVENUE,
+    SUM(CS.R1_APP_TXNS) AS R1_APP_TRANSACTIONS,
+    SUM(CS.R1_WEBSITE_TXNS) AS R1_WEB_TRANSACTIONS,
+    SUM(CS.R1_TXNS) AS R1_TOTAL_TRANSACTIONS,
+    SUM(CS.R12_TXNS) AS R12_TOTAL_TRANSACTIONS,
+    SUM(CS.R12_PRINCIPAL) AS R12_TOTAL_PRINCIPAL,
+    SUM(CS.R12_REVENUE) AS R12_TOTAL_REVENUE,
     
-    -- Calculated Metrics
+    -- Calculated Metrics (TPC, PPT, RPT)
     CASE
         WHEN COUNT(DISTINCT CS.SNDCUSTOMER_KEY) > 0
-        THEN SUM(CS.R1_TXNS) / COUNT(DISTINCT CS.SNDCUSTOMER_KEY)
+        THEN SUM(CS.R12_TXNS) / COUNT(DISTINCT CS.SNDCUSTOMER_KEY)
         ELSE 0
     END AS TPC,  -- Transactions Per Customer
     
@@ -140,51 +180,128 @@ FROM CAR_717_Customer_Segments CS
 INNER JOIN SUMMARY_GEN.COUNTRY_VW CV
     ON CV.COUNTRY_CODE = CS.COUNTRY_CODE
     AND CV.SUPER_REGION IS NOT NULL
-GROUP BY 1, 2, 3, 4, 5
-ORDER BY 1, 2, 3, 4, 5;
- 
+GROUP BY 1, 2, 3, 4, 5, 6
+ORDER BY 1, 2, 3, 4, 5, 6;
+
 -- Validation
 SELECT
     MTH_YR,
     CURRENT_CHANNEL,
-    SUM(TOTAL_CUSTOMERS) AS CUSTOMERS,
-    SUM(TOTAL_TRANSACTIONS) AS TRANSACTIONS,
+    SUM(TOTAL_CUSTOMERS) AS TOTAL_CUSTOMERS,
+    SUM(NEW_TO_APP) AS NEW_TO_APP,
+    SUM(NEW_TO_WEB) AS NEW_TO_WEB,
+    SUM(MIGRATED_WEB_TO_APP) AS MIGRATED_WEB_TO_APP,
+    SUM(R1_APP_TRANSACTIONS) AS APP_TXNS,
+    SUM(R1_WEB_TRANSACTIONS) AS WEB_TXNS,
     ROUND(AVG(TPC), 2) AS AVG_TPC,
     ROUND(AVG(PPT), 2) AS AVG_PPT,
     ROUND(AVG(RPT), 2) AS AVG_RPT
 FROM CAR_717_Monthly_Report
 GROUP BY 1, 2
 ORDER BY 1, 2;
- 
- 
+
+
 -- ============================================================================
 -- STEP 4: Create India-Specific Report (for App Launch Tracking)
 -- ============================================================================
 CREATE OR REPLACE TABLE CAR_717_India_Monthly_Report AS
 SELECT
     MTH_YR,
+    CUSTOMER_TYPE,
     CURRENT_CHANNEL,
     CUSTOMER_SEGMENT,
     TOTAL_CUSTOMERS,
-    NEW_CUSTOMERS,
-    TOTAL_TRANSACTIONS,
-    TOTAL_PRINCIPAL,
-    TOTAL_REVENUE,
+    NEW_TO_APP,
+    NEW_TO_WEB,
+    NEW_TO_APP_WEB,
+    MIGRATED_WEB_TO_APP,
+    EXISTING_ON_APP,
+    EXISTING_ON_WEB,
+    EXISTING_ON_APP_WEB,
+    R1_APP_TRANSACTIONS,
+    R1_WEB_TRANSACTIONS,
+    R12_TOTAL_TRANSACTIONS,
+    R12_TOTAL_PRINCIPAL,
+    R12_TOTAL_REVENUE,
     TPC,
     PPT,
     RPT,
     
-    -- Month-over-Month Growth
+    -- Month-over-Month Growth for Key Metrics
     LAG(TOTAL_CUSTOMERS) OVER (PARTITION BY CURRENT_CHANNEL ORDER BY MTH_YR) AS PREV_MONTH_CUSTOMERS,
-    LAG(TOTAL_TRANSACTIONS) OVER (PARTITION BY CURRENT_CHANNEL ORDER BY MTH_YR) AS PREV_MONTH_TRANSACTIONS,
+    LAG(NEW_TO_APP) OVER (PARTITION BY CURRENT_CHANNEL ORDER BY MTH_YR) AS PREV_MONTH_NEW_TO_APP,
+    LAG(MIGRATED_WEB_TO_APP) OVER (PARTITION BY CURRENT_CHANNEL ORDER BY MTH_YR) AS PREV_MONTH_MIGRATED,
+    LAG(R1_APP_TRANSACTIONS) OVER (PARTITION BY CURRENT_CHANNEL ORDER BY MTH_YR) AS PREV_MONTH_APP_TXNS,
     
-    -- CASE
-    --     WHEN LAG(TOTAL_CUSTOMERS) OVER (PARTITION BY CURRENT_CHANNEL ORDER BY MTH_YR) > 0
-    --     THEN ROUND(((TOTAL_CUSTOMERS - LAG(TOTAL_CUSTOMERS) OVER (PARTITION BY CURRENT_CHANNEL ORDER BY MTH_YR))
-    --           / LAG(TOTAL_CUSTOMERS) OVER (PARTITION BY CURRENT_CHANNEL ORDER BY MTH_YR)) * 100, 2)
-    --     ELSE 0
-    -- END AS MOM_CUSTOMER_GROWTH_PCT
- 
+    -- Growth Calculations
+    CASE
+        WHEN LAG(TOTAL_CUSTOMERS) OVER (PARTITION BY CURRENT_CHANNEL ORDER BY MTH_YR) > 0
+        THEN ROUND(((TOTAL_CUSTOMERS - LAG(TOTAL_CUSTOMERS) OVER (PARTITION BY CURRENT_CHANNEL ORDER BY MTH_YR))
+              / LAG(TOTAL_CUSTOMERS) OVER (PARTITION BY CURRENT_CHANNEL ORDER BY MTH_YR)) * 100, 2)
+        ELSE 0
+    END AS MOM_CUSTOMER_GROWTH_PCT,
+    
+    CASE
+        WHEN LAG(R1_APP_TRANSACTIONS) OVER (PARTITION BY CURRENT_CHANNEL ORDER BY MTH_YR) > 0
+        THEN ROUND(((R1_APP_TRANSACTIONS - LAG(R1_APP_TRANSACTIONS) OVER (PARTITION BY CURRENT_CHANNEL ORDER BY MTH_YR))
+              / LAG(R1_APP_TRANSACTIONS) OVER (PARTITION BY CURRENT_CHANNEL ORDER BY MTH_YR)) * 100, 2)
+        ELSE 0
+    END AS MOM_APP_TXNS_GROWTH_PCT
+
 FROM CAR_717_Monthly_Report
 WHERE COUNTRY_NAME = 'INDIA'
 ORDER BY MTH_YR, CURRENT_CHANNEL;
+
+
+-- ============================================================================
+-- ADDITIONAL VALIDATION QUERIES
+-- ============================================================================
+
+-- Check New vs Existing breakdown by Channel
+SELECT
+    MTH_YR,
+    CUSTOMER_TYPE,
+    CURRENT_CHANNEL,
+    SUM(TOTAL_CUSTOMERS) AS CUSTOMERS,
+    SUM(R1_APP_TRANSACTIONS) AS APP_TXNS,
+    SUM(R1_WEB_TRANSACTIONS) AS WEB_TXNS
+FROM CAR_717_Monthly_Report
+WHERE MTH_YR >= '2024-01-01'
+GROUP BY 1, 2, 3
+ORDER BY 1, 2, 3;
+
+-- Check Migration Trend
+SELECT
+    MTH_YR,
+    SUM(MIGRATED_WEB_TO_APP) AS MIGRATED_CUSTOMERS,
+    SUM(R1_APP_TRANSACTIONS) AS APP_TXNS_BY_ALL
+FROM CAR_717_Monthly_Report
+WHERE MTH_YR >= '2024-01-01'
+GROUP BY 1
+ORDER BY 1;
+
+-- India App Adoption Summary
+SELECT
+    MTH_YR,
+    SUM(NEW_TO_APP) AS NEW_TO_APP,
+    SUM(MIGRATED_WEB_TO_APP) AS MIGRATED_TO_APP,
+    SUM(EXISTING_ON_APP) AS RETAINED_ON_APP,
+    SUM(R1_APP_TRANSACTIONS) AS TOTAL_APP_TXNS,
+    ROUND(AVG(TPC), 2) AS AVG_TPC,
+    ROUND(AVG(PPT), 2) AS AVG_PPT
+FROM CAR_717_India_Monthly_Report
+GROUP BY 1
+ORDER BY 1;
+Key Changes Made:
+Used New_Existing_Flag: Now using the existing field from the base table instead of calculating it
+Channel determination: Based on R1_APP_TXNS and R1_WEBSITE_TXNS to identify which channel customers are using
+Migration logic: Specifically identifies customers who:
+Had R2_TO_R13_WEBSITE_TXNS > 0 (used Web in past 12 months)
+Had PREV_R1_APP_TXNS = 0 (no App usage in previous month)
+Now have R1_APP_TXNS > 0 (started using App in current month)
+Separate metrics: Clear breakdown of:
+New customers by channel (App, Web, App+Web)
+Migrated customers (Web to App)
+Existing customers by channel
+Month-wise tracking: All metrics are calculated month by month
+This structure will clearly show you the App adoption journey in India!
