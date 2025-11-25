@@ -1,5 +1,131 @@
 -- ============================================================================
--- STEP 3: Create Final Monthly Report WITHOUT calculated metrics
+-- STEP 1: Create Base Customer Channel Monthly Table
+-- Using base table: CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL
+-- ============================================================================
+CREATE OR REPLACE TABLE CAR_717_Customer_Channel_Monthly AS
+SELECT
+    DATE(CEM.MTH_YR) as MTH_YR,
+    CEM.SNDCUSTOMER_KEY,
+    CEM.COUNTRY_CODE,
+    
+    -- Use New_Existing_Flag from base table
+    CASE 
+        WHEN CEM.r2_to_r13_txns = 0 AND CEM.r1_txns > 0 THEN 'NEW'
+        WHEN CEM.r2_to_r13_txns > 0 AND CEM.r1_txns > 0 THEN 'EXISTING'
+        WHEN CEM.r2_to_r13_txns > 0 AND CEM.r1_txns = 0 THEN 'R1 INACTIVE'
+        WHEN CEM.r2_to_r13_txns = 0 AND CEM.r1_txns = 0 THEN 'R13 INACTIVE'
+        ELSE 'OTHER' 
+        END AS CUSTOMER_TYPE,
+    
+    -- Determine current channel based on R1 transactions
+    CASE 
+        WHEN CEM.R1_APP_TXNS > 0 AND CEM.R1_WEBSITE_TXNS > 0 THEN 'APP+WEB'
+        WHEN CEM.R1_APP_TXNS > 0 THEN 'APP'
+        WHEN CEM.R1_WEBSITE_TXNS > 0 THEN 'WEB'
+        ELSE 'OTHER'--Other would be R12 INACTIVE CUSTOMERS
+    END AS CURRENT_CHANNEL,
+    
+    -- Transaction metrics by channel
+    CEM.R1_APP_TXNS,
+    CEM.R1_WEBSITE_TXNS,
+    CEM.R1_TXNS,
+    CEM.R12_TXNS,
+    CEM.R12_PRINCIPAL,
+    CEM.R12_REVENUE,
+    
+    -- For migration tracking - Past 12 months (R2 to R13)
+    CEM.R2_TO_R13_WEBSITE_TXNS,
+    CEM.R2_TO_R13_APP_TXNS,
+    
+    -- Add Dominant Send Country for validation
+    DOM.DOMINANT_SNDCOUNTRY_NAME
+    
+FROM CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL CEM
+INNER JOIN CEX_SANDBOX.SK_DOMINANCY_METRICS DOM
+    ON CEM.SNDCUSTOMER_KEY = DOM.SNDCUSTOMER_KEY
+    AND CEM.MTH_YR = DOM.MTH_YR
+    
+WHERE CEM.MTH_YR >= '2022-01-01'
+    AND CEM.MTH_YR <= '2025-10-31'
+    AND CEM.R12_TXNS > 0
+    AND DOM.DOMINANT_SNDCOUNTRY_NAME = 'INDIA';  -- Filter for India send country
+
+-- Validation
+
+SELECT COUNT(distinct SNDCUSTOMER_KEY) , COUNT(SNDCUSTOMER_KEY) FROM CAR_717_Customer_Channel_Monthly  WHERE MTH_YR = '2025-01-01' AND CUSTOMER_TYPE = 'NEW' ; --1346	1346
+
+select COUNT(distinct SNDCUSTOMER_KEY) , COUNT(SNDCUSTOMER_KEY) FROM CAR_717_Customer_Channel_Monthly  WHERE MTH_YR = '2025-01-01'; jan--20951	20951 total--54961	680547
+
+ select CURRENT_CHANNEL,SNDCUSTOMER_KEY, COUNTRY_CODE, CUSTOMER_TYPE
+    FROM CAR_717_Customer_Channel_Monthly 
+        where CURRENT_CHANNEL = 'OTHER' AND country_code = 'IN';
+ 
+ select * from CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL 
+ where  SNDCUSTOMER_KEY = '3000000000286624495' order by MTH_YR DESC;
+ 
+ select * from WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW where SNDCUSTOMER_KEY = '4000000000212756147';
+-- ============================================================================
+-- STEP 2: Create Customer Segment Classification
+-- ============================================================================
+CREATE OR REPLACE TABLE CAR_717_Customer_Segments AS
+SELECT
+    MTH_YR,
+    SNDCUSTOMER_KEY,
+    COUNTRY_CODE,
+    CUSTOMER_TYPE,
+    CURRENT_CHANNEL,
+    R1_APP_TXNS,
+    R1_WEBSITE_TXNS,
+    R1_TXNS,
+    R12_TXNS,
+    R12_PRINCIPAL,
+    R12_REVENUE,
+    R2_TO_R13_WEBSITE_TXNS,
+    R2_TO_R13_APP_TXNS,
+    DOMINANT_SNDCOUNTRY_NAME,
+    
+    -- Customer Segment Classification
+    CASE
+        -- New customers by channel
+        WHEN CUSTOMER_TYPE = 'NEW' AND CURRENT_CHANNEL = 'APP' THEN 'New to App'
+        WHEN CUSTOMER_TYPE = 'NEW' AND CURRENT_CHANNEL = 'WEB' THEN 'New to Web'
+        WHEN CUSTOMER_TYPE = 'NEW' AND CURRENT_CHANNEL = 'APP+WEB' THEN 'New to App+Web'
+        WHEN CUSTOMER_TYPE = 'NEW' THEN 'New to Other Channel'
+        
+        -- Migration from Web to App
+        -- Was using ONLY Web in past 12 months (R2-R13), now started using App in current month (R1)
+        WHEN R2_TO_R13_WEBSITE_TXNS > 0 
+             AND NVL(R2_TO_R13_APP_TXNS, 0) = 0 
+             AND R1_APP_TXNS > 0 
+             THEN 'Migrated Web to App'
+        
+        -- Existing customers retained on their channel
+        WHEN CUSTOMER_TYPE = 'EXISTING' AND CURRENT_CHANNEL = 'APP' THEN 'Retained on App'
+        WHEN CUSTOMER_TYPE = 'EXISTING' AND CURRENT_CHANNEL = 'WEB' THEN 'Retained on Web'
+        WHEN CUSTOMER_TYPE = 'EXISTING' AND CURRENT_CHANNEL = 'APP+WEB' THEN 'Retained on App+Web'
+        ELSE 'Other' --R1 INACtive CUSTOMERS
+    END AS CUSTOMER_SEGMENT
+    
+FROM CAR_717_Customer_Channel_Monthly;
+
+
+-- Validation -
+
+SELECT COUNT(distinct SNDCUSTOMER_KEY) , COUNT(SNDCUSTOMER_KEY) FROM CAR_717_Customer_Segments  WHERE MTH_YR = '2025-01-01';-- 20951	20951
+select MTH_YR from CAR_717_Customer_Segments;
+select distinct SNDCUSTOMER_KEY, CUSTOMER_TYPE, CUSTOMER_SEGMENT, MTH_YR from CAR_717_Customer_Segments where CUSTOMER_SEGMENT = 'Other' 
+order by MTH_YR DESC;
+ select COUNT(distinct SNDCUSTOMER_KEY) , COUNT(SNDCUSTOMER_KEY) FROM CAR_717_Customer_Segments; --54961	680547
+ 
+select * from CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL 
+ where  SNDCUSTOMER_KEY = '3000000000163438576' order by MTH_YR DESC;
+
+ select * from WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW where SNDCUSTOMER_KEY = '3000000000163438576' ORDER BY RCVPAYING_DATETIME DESC;
+ -- select country_name
+ -- from SUMMARY_GEN.COUNTRY_VW 
+ -- where country_name LiKE  ('IN%');
+-- ============================================================================
+-- STEP 3: Create Final Monthly Report with All Metrics
 -- ============================================================================
 CREATE OR REPLACE TABLE CAR_717_Monthly_Report AS
 SELECT
@@ -25,22 +151,27 @@ SELECT
     COUNT(DISTINCT CASE WHEN CS.CUSTOMER_TYPE = 'EXISTING' AND CS.CURRENT_CHANNEL = 'WEB' THEN CS.SNDCUSTOMER_KEY END) AS EXISTING_ON_WEB,
     COUNT(DISTINCT CASE WHEN CS.CUSTOMER_TYPE = 'EXISTING' AND CS.CURRENT_CHANNEL = 'APP+WEB' THEN CS.SNDCUSTOMER_KEY END) AS EXISTING_ON_APP_WEB,
     
-    -- Transaction Metrics (RAW - no calculations)
+    -- Transaction Metrics
     SUM(CS.R1_APP_TXNS) AS R1_APP_TRANSACTIONS,
     SUM(CS.R1_WEBSITE_TXNS) AS R1_WEB_TRANSACTIONS,
     SUM(CS.R1_TXNS) AS R1_TOTAL_TRANSACTIONS,
     SUM(CS.R12_TXNS) AS R12_TOTAL_TRANSACTIONS,
     SUM(CS.R12_PRINCIPAL) AS R12_TOTAL_PRINCIPAL,
-    SUM(CS.R12_REVENUE) AS R12_TOTAL_REVENUE
+    SUM(CS.R12_REVENUE) AS R12_TOTAL_REVENUE,
+    
     
 FROM CAR_717_Customer_Segments CS
-GROUP BY 1, 2, 3, 4, 5
-ORDER BY 1, 2, 3, 4, 5;
+GROUP BY ALL
+ORDER BY ALL;
 
+-- Validation
 
+select MTH_YR from CAR_717_Monthly_Report;
+select SUM(TOTAL_CUSTOMERS) FROM CAR_717_Monthly_Report where MTH_YR =  '2025-01-01' and CUSTOMER_TYPE = 'NEW'; --1346
 -- ============================================================================
--- FINAL Pull for Excel Analysis
+-- STEP 4: Create India-Specific Report (for App Launch Tracking)
 -- ============================================================================
+//Final Pull
 SELECT
     MTH_YR,
     DOMINANT_SNDCOUNTRY_NAME,
