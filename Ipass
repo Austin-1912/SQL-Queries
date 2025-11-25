@@ -1,36 +1,31 @@
-Perfect! Let me rebuild the entire analysis using the `WUDNA_TXN_MASTER_ANALYTICS_VW` table. This will give you accurate App vs Web data from the actual transaction level.
-
-```sql
 -- ============================================================================
 -- STEP 1: Create Base Customer Channel Monthly Table
 -- Using WUDNA_TXN_MASTER_ANALYTICS_VW for actual transaction data
 -- ============================================================================
 CREATE OR REPLACE TABLE CAR_717_Customer_Channel_Monthly AS
 SELECT
-    DATE_TRUNC('MONTH', TXN.RCVPAYING_DATETIME) AS MTH_YR,
+	DATE(TXN.RCVPAYING_DATETIME) as MTH_YR,
     TXN.SNDCUSTOMER_KEY,
     TXN.SNDCOUNTRY_CODE AS COUNTRY_CODE,
-    TXN.SEND_COUNTRY_NAME AS DOMINANT_SNDCOUNTRY_NAME,
+    TXN.SEND_COUNTRY_NAME,
     
     -- Determine current channel based on PRIMARY_CHANNEL or ATTRIBUTE_CHANNEL
     CASE 
-        WHEN UPPER(TXN.PRIMARY_CHANNEL) LIKE '%APP%' OR UPPER(TXN.ATTRIBUTE_CHANNEL) LIKE '%APP%' THEN 'APP'
-        WHEN UPPER(TXN.PRIMARY_CHANNEL) LIKE '%WEB%' OR UPPER(TXN.ATTRIBUTE_CHANNEL) LIKE '%WEB%' THEN 'WEB'
-        WHEN UPPER(TXN.PRIMARY_CHANNEL) LIKE '%ONLINE%' OR UPPER(TXN.ATTRIBUTE_CHANNEL) LIKE '%ONLINE%' THEN 'WEB'
-        ELSE 'OTHER'
-    END AS CURRENT_CHANNEL,
+            WHEN TXN.pricing_channel = 'WEB' THEN 'WEB'
+            WHEN TXN.pricing_channel = 'APP' THEN 'APP'
+            ELSE 'OTHERS'
+        END AS CURRENT_CHANNEL,
     
     -- Count transactions by channel for each customer per month
-    COUNT(DISTINCT TXN.TXN_ID) AS R1_TXNS,
-    COUNT(DISTINCT CASE WHEN UPPER(TXN.PRIMARY_CHANNEL) LIKE '%APP%' OR UPPER(TXN.ATTRIBUTE_CHANNEL) LIKE '%APP%' 
-                        THEN TXN.TXN_ID END) AS R1_APP_TXNS,
-    COUNT(DISTINCT CASE WHEN UPPER(TXN.PRIMARY_CHANNEL) LIKE '%WEB%' OR UPPER(TXN.ATTRIBUTE_CHANNEL) LIKE '%WEB%' 
-                             OR UPPER(TXN.PRIMARY_CHANNEL) LIKE '%ONLINE%' OR UPPER(TXN.ATTRIBUTE_CHANNEL) LIKE '%ONLINE%'
-                        THEN TXN.TXN_ID END) AS R1_WEBSITE_TXNS,
+    COUNT(DISTINCT TXN.TXN_ID) AS R12_TXNS,
+    COUNT(DISTINCT CASE TXN.PRIMARY_CHANNEL = 'APP'
+                        THEN TXN.TXN_ID END) AS R12_APP_TXNS,
+   COUNT(DISTINCT CASE TXN.PRIMARY_CHANNEL = 'WEB'
+                        THEN TXN.TXN_ID END) AS R12_WEBSITE_TXNS,
     
     -- Transaction amounts
-    SUM(TXN.SNDPRINCIPAL_USD) AS R1_PRINCIPAL,
-    SUM(TXN.REVENUE) AS R1_REVENUE
+    SUM(TXN.SNDPRINCIPAL_USD) AS R12_PRINCIPAL,
+    SUM(TXN.REVENUE) AS R12_REVENUE
     
 FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW TXN
 WHERE TXN.RCVPAYING_DATETIME >= '2022-01-01'
@@ -44,9 +39,9 @@ SELECT
     MTH_YR,
     CURRENT_CHANNEL,
     COUNT(DISTINCT SNDCUSTOMER_KEY) AS CUSTOMERS,
-    SUM(R1_APP_TXNS) AS APP_TXNS,
-    SUM(R1_WEBSITE_TXNS) AS WEB_TXNS,
-    SUM(R1_TXNS) AS TOTAL_TXNS
+    SUM(R12_APP_TXNS) AS APP_TXNS,
+    SUM(R12_WEBSITE_TXNS) AS WEB_TXNS,
+    SUM(R12_TXNS) AS TOTAL_TXNS
 FROM CAR_717_Customer_Channel_Monthly
 GROUP BY 1, 2
 ORDER BY 1, 2;
@@ -60,47 +55,47 @@ SELECT
     MTH_YR,
     SNDCUSTOMER_KEY,
     COUNTRY_CODE,
-    DOMINANT_SNDCOUNTRY_NAME,
+	SEND_COUNTRY_NAME,
     CURRENT_CHANNEL,
-    R1_TXNS,
-    R1_APP_TXNS,
-    R1_WEBSITE_TXNS,
-    R1_PRINCIPAL,
-    R1_REVENUE,
+    R12_TXNS,
+    R12_APP_TXNS,
+    R12_WEBSITE_TXNS,
+    R12_PRINCIPAL,
+    R12_REVENUE,
     
     -- Calculate R12 metrics (rolling 12 months including current month)
-    SUM(R1_TXNS) OVER (
+    SUM(R12_TXNS) OVER (
         PARTITION BY SNDCUSTOMER_KEY 
         ORDER BY MTH_YR 
         ROWS BETWEEN 11 PRECEDING AND CURRENT ROW
     ) AS R12_TXNS,
     
-    SUM(R1_PRINCIPAL) OVER (
+    SUM(R12_PRINCIPAL) OVER (
         PARTITION BY SNDCUSTOMER_KEY 
         ORDER BY MTH_YR 
         ROWS BETWEEN 11 PRECEDING AND CURRENT ROW
     ) AS R12_PRINCIPAL,
     
-    SUM(R1_REVENUE) OVER (
+    SUM(R12_REVENUE) OVER (
         PARTITION BY SNDCUSTOMER_KEY 
         ORDER BY MTH_YR 
         ROWS BETWEEN 11 PRECEDING AND CURRENT ROW
     ) AS R12_REVENUE,
     
     -- Calculate R2_TO_R13 metrics (previous 12 months, excluding current month)
-    SUM(R1_TXNS) OVER (
+    SUM(R12_TXNS) OVER (
         PARTITION BY SNDCUSTOMER_KEY 
         ORDER BY MTH_YR 
         ROWS BETWEEN 12 PRECEDING AND 1 PRECEDING
     ) AS R2_TO_R13_TXNS,
     
-    SUM(R1_APP_TXNS) OVER (
+    SUM(R12_APP_TXNS) OVER (
         PARTITION BY SNDCUSTOMER_KEY 
         ORDER BY MTH_YR 
         ROWS BETWEEN 12 PRECEDING AND 1 PRECEDING
     ) AS R2_TO_R13_APP_TXNS,
     
-    SUM(R1_WEBSITE_TXNS) OVER (
+    SUM(R12_WEBSITE_TXNS) OVER (
         PARTITION BY SNDCUSTOMER_KEY 
         ORDER BY MTH_YR 
         ROWS BETWEEN 12 PRECEDING AND 1 PRECEDING
@@ -112,7 +107,7 @@ FROM CAR_717_Customer_Channel_Monthly;
 SELECT
     MTH_YR,
     COUNT(DISTINCT SNDCUSTOMER_KEY) AS CUSTOMERS,
-    SUM(R1_TXNS) AS R1_TXNS,
+    SUM(R12_TXNS) AS R12_TXNS,
     SUM(R12_TXNS) AS R12_TXNS,
     SUM(R2_TO_R13_TXNS) AS R2_TO_R13_TXNS
 FROM CAR_717_Customer_Channel_R12_Metrics
@@ -129,30 +124,30 @@ SELECT
     MTH_YR,
     SNDCUSTOMER_KEY,
     COUNTRY_CODE,
-    DOMINANT_SNDCOUNTRY_NAME,
+    SEND_COUNTRY_NAME,
     
     -- Determine customer type based on R2_TO_R13 activity
     CASE 
-        WHEN NVL(R2_TO_R13_TXNS, 0) = 0 AND R1_TXNS > 0 THEN 'NEW'
-        WHEN NVL(R2_TO_R13_TXNS, 0) > 0 AND R1_TXNS > 0 THEN 'EXISTING'
-        WHEN NVL(R2_TO_R13_TXNS, 0) > 0 AND R1_TXNS = 0 THEN 'R1 INACTIVE'
-        WHEN NVL(R2_TO_R13_TXNS, 0) = 0 AND R1_TXNS = 0 THEN 'R13 INACTIVE'
+        WHEN NVL(R2_TO_R13_TXNS, 0) = 0 AND R12_TXNS > 0 THEN 'NEW'
+        WHEN NVL(R2_TO_R13_TXNS, 0) > 0 AND R12_TXNS > 0 THEN 'EXISTING'
+        WHEN NVL(R2_TO_R13_TXNS, 0) > 0 AND R12_TXNS = 0 THEN 'R1 INACTIVE'
+        WHEN NVL(R2_TO_R13_TXNS, 0) = 0 AND R12_TXNS = 0 THEN 'R13 INACTIVE'
         ELSE 'OTHER' 
     END AS CUSTOMER_TYPE,
     
     -- Determine current channel based on R1 transactions
     CASE 
-        WHEN R1_APP_TXNS > 0 AND R1_WEBSITE_TXNS > 0 THEN 'APP+WEB'
-        WHEN R1_APP_TXNS > 0 THEN 'APP'
-        WHEN R1_WEBSITE_TXNS > 0 THEN 'WEB'
+        WHEN R12_APP_TXNS > 0 AND R12_WEBSITE_TXNS > 0 THEN 'APP+WEB'
+        WHEN R12_APP_TXNS > 0 THEN 'APP'
+        WHEN R12_WEBSITE_TXNS > 0 THEN 'WEB'
         ELSE 'OTHER'
     END AS CURRENT_CHANNEL,
     
-    R1_TXNS,
-    R1_APP_TXNS,
-    R1_WEBSITE_TXNS,
-    R1_PRINCIPAL,
-    R1_REVENUE,
+    R12_TXNS,
+    R12_APP_TXNS,
+    R12_WEBSITE_TXNS,
+    R12_PRINCIPAL,
+    R12_REVENUE,
     R12_TXNS,
     R12_PRINCIPAL,
     R12_REVENUE,
@@ -170,8 +165,8 @@ SELECT
     CUSTOMER_TYPE,
     CURRENT_CHANNEL,
     COUNT(DISTINCT SNDCUSTOMER_KEY) AS CUSTOMERS,
-    SUM(R1_APP_TXNS) AS APP_TXNS,
-    SUM(R1_WEBSITE_TXNS) AS WEB_TXNS
+    SUM(R12_APP_TXNS) AS APP_TXNS,
+    SUM(R12_WEBSITE_TXNS) AS WEB_TXNS
 FROM CAR_717_Customer_Channel_Final
 GROUP BY 1, 2, 3
 ORDER BY 1, 2, 3;
@@ -185,14 +180,14 @@ SELECT
     MTH_YR,
     SNDCUSTOMER_KEY,
     COUNTRY_CODE,
-    DOMINANT_SNDCOUNTRY_NAME,
+    SEND_COUNTRY_NAME,
     CUSTOMER_TYPE,
     CURRENT_CHANNEL,
-    R1_TXNS,
-    R1_APP_TXNS,
-    R1_WEBSITE_TXNS,
-    R1_PRINCIPAL,
-    R1_REVENUE,
+    R12_TXNS,
+    R12_APP_TXNS,
+    R12_WEBSITE_TXNS,
+    R12_PRINCIPAL,
+    R12_REVENUE,
     R12_TXNS,
     R12_PRINCIPAL,
     R12_REVENUE,
@@ -212,7 +207,7 @@ SELECT
         -- Was using ONLY Web in past 12 months (R2-R13), now started using App in current month (R1)
         WHEN NVL(R2_TO_R13_WEBSITE_TXNS, 0) > 0 
              AND NVL(R2_TO_R13_APP_TXNS, 0) = 0 
-             AND R1_APP_TXNS > 0 
+             AND R12_APP_TXNS > 0 
              THEN 'Migrated Web to App'
         
         -- Existing customers retained on their channel
@@ -230,7 +225,7 @@ SELECT
     MTH_YR,
     CUSTOMER_SEGMENT,
     COUNT(DISTINCT SNDCUSTOMER_KEY) AS CUSTOMERS,
-    SUM(R1_APP_TXNS) AS R1_APP_TXNS,
+    SUM(R12_APP_TXNS) AS R12_APP_TXNS,
     SUM(R2_TO_R13_WEBSITE_TXNS) AS R2_TO_R13_WEB_TXNS,
     SUM(R2_TO_R13_APP_TXNS) AS R2_TO_R13_APP_TXNS
 FROM CAR_717_Customer_Segments
@@ -245,7 +240,7 @@ ORDER BY 1, 2;
 CREATE OR REPLACE TABLE CAR_717_Monthly_Report AS
 SELECT
     CS.MTH_YR,
-    CS.DOMINANT_SNDCOUNTRY_NAME,
+    CS.SEND_COUNTRY_NAME,
     CS.CUSTOMER_TYPE,
     CS.CURRENT_CHANNEL,
     CS.CUSTOMER_SEGMENT,
@@ -267,9 +262,9 @@ SELECT
     COUNT(DISTINCT CASE WHEN CS.CUSTOMER_TYPE = 'EXISTING' AND CS.CURRENT_CHANNEL = 'APP+WEB' THEN CS.SNDCUSTOMER_KEY END) AS EXISTING_ON_APP_WEB,
     
     -- Transaction Metrics
-    SUM(CS.R1_APP_TXNS) AS R1_APP_TRANSACTIONS,
-    SUM(CS.R1_WEBSITE_TXNS) AS R1_WEB_TRANSACTIONS,
-    SUM(CS.R1_TXNS) AS R1_TOTAL_TRANSACTIONS,
+    SUM(CS.R12_APP_TXNS) AS R1_APP_TRANSACTIONS,
+    SUM(CS.R12_WEBSITE_TXNS) AS R1_WEB_TRANSACTIONS,
+    SUM(CS.R12_TXNS) AS R1_TOTAL_TRANSACTIONS,
     SUM(CS.R12_TXNS) AS R12_TOTAL_TRANSACTIONS,
     SUM(CS.R12_PRINCIPAL) AS R12_TOTAL_PRINCIPAL,
     SUM(CS.R12_REVENUE) AS R12_TOTAL_REVENUE
@@ -298,7 +293,7 @@ ORDER BY 1, 2;
 -- ============================================================================
 SELECT
     MTH_YR,
-    DOMINANT_SNDCOUNTRY_NAME,
+    SEND_COUNTRY_NAME,
     CUSTOMER_TYPE,
     CURRENT_CHANNEL,
     CUSTOMER_SEGMENT,
@@ -318,34 +313,3 @@ SELECT
     R12_TOTAL_REVENUE
 FROM CAR_717_Monthly_Report 
 ORDER BY MTH_YR, CURRENT_CHANNEL;
-
-
--- ============================================================================
--- ADDITIONAL VALIDATION: Check when App transactions actually started
--- ============================================================================
-SELECT
-    MTH_YR,
-    SUM(R1_APP_TXNS) AS APP_TXNS,
-    COUNT(DISTINCT CASE WHEN R1_APP_TXNS > 0 THEN SNDCUSTOMER_KEY END) AS APP_CUSTOMERS
-FROM CAR_717_Customer_Segments
-GROUP BY 1
-HAVING SUM(R1_APP_TXNS) > 0
-ORDER BY 1;
-```
-
-**Key Changes:**
-
-1. ✅ **Uses `WUDNA_TXN_MASTER_ANALYTICS_VW`** - Transaction-level data
-2. ✅ **Channel identification** - Uses `PRIMARY_CHANNEL` and `ATTRIBUTE_CHANNEL` fields
-3. ✅ **Actual transaction dates** - Uses `RCVPAYING_DATETIME` for accurate timing
-4. ✅ **Rolling calculations** - Uses window functions to calculate R12 and R2_TO_R13 metrics
-5. ✅ **No pre-aggregated data** - Builds everything from raw transactions
-6. ✅ **India send country** - Filters on `SEND_COUNTRY_NAME = 'INDIA'`
-
-**Important Notes:**
-
-- You may need to adjust the channel detection logic based on actual values in `PRIMARY_CHANNEL` and `ATTRIBUTE_CHANNEL` columns
-- Run the validation query at the end to see exactly when App transactions started appearing
-- The R12 calculations need 12 months of history, so data starts from 2023-01-01
-
-Would you like me to help you verify the channel field values first to make sure we're capturing App vs Web correctly?
