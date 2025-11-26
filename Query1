@@ -2,67 +2,69 @@
 -- STEP 1: Create Base Customer Channel Monthly Table
 -- Using WUDNA_TXN_MASTER_ANALYTICS_VW for actual transaction data
 -- ============================================================================
-CREATE OR REPLACE TABLE CAR_717_Customer_Channel_Monthly AS
+CREATE OR REPLACE TABLE CAR_717_Customer_Channel_Monthly1 AS
 SELECT
-    DATE(DATE_TRUNC('MONTH', TXN.RCVPAYING_DATETIME)) AS MTH_YR,
+    DATE_TRUNC('MONTH', TXN.RCVPAYING_DATETIME) AS MTH_YR,
     TXN.SNDCUSTOMER_KEY,
     TXN.SNDCOUNTRY_CODE AS COUNTRY_CODE,
     TXN.SEND_COUNTRY_NAME,
-    
-    -- Determine current channel based on PRIMARY_CHANNEL or ATTRIBUTE_CHANNEL
-    CASE 
-        WHEN TXN.PRICING_CHANNEL = 'WEB' THEN 'WEB'
-        WHEN TXN.PRICING_CHANNEL = 'APP' THEN 'APP'
-        ELSE 'OTHERS'
-    END AS CURRENT_CHANNEL,
-    
-    -- Count transactions by channel for each customer per month
+
+    -- CASE 
+    --     WHEN TXN.PRICING_CHANNEL = 'WEB' THEN 'WEB'
+    --     WHEN TXN.PRICING_CHANNEL = 'APP' THEN 'APP'
+    --     ELSE 'Others'
+    -- END AS CURRENT_CHANNEL,
+
     COUNT(DISTINCT TXN.TXN_ID) AS R1_TXNS,
-    COUNT(DISTINCT CASE WHEN TXN.PRIMARY_CHANNEL = 'APP' THEN TXN.TXN_ID END) AS R1_APP_TXNS,
-    COUNT(DISTINCT CASE WHEN TXN.PRIMARY_CHANNEL = 'WU.COM' THEN TXN.TXN_ID END) AS R1_WEBSITE_TXNS,
-    
-    -- Transaction amounts
+    COUNT(DISTINCT CASE WHEN TXN.PRICING_CHANNEL = 'APP' THEN TXN.TXN_ID END) AS R1_APP_TXNS,
+    COUNT(DISTINCT CASE WHEN TXN.PRICING_CHANNEL = 'WEB' THEN TXN.TXN_ID END) AS R1_WEBSITE_TXNS,
+
     SUM(NVL(TXN.SNDPRINCIPAL_USD, 0)) AS R1_PRINCIPAL,
     SUM(NVL(TXN.TOTAL_CHARGES_USD, 0) + NVL(TXN.NET_FOREIGN_EXCHANGE, 0)) AS R1_REVENUE
-    
+
 FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW TXN
-WHERE TXN.RCVPAYING_DATETIME >= '2022-01-01'
-    AND TXN.RCVPAYING_DATETIME <= '2025-10-31'
-    AND TXN.SEND_COUNTRY_NAME = 'INDIA'
-    AND TXN.SNDCUSTOMER_KEY IS NOT NULL
-    AND TXN.VALID_TXN_TYPE_CODE = 'Y'
-    AND TXN.REFUND_TRXN = 'N'
-    AND NVL(TXN.SNDPRINCIPAL_USD, 0) > 0
-GROUP BY 1, 2, 3, 4, 5;
+WHERE TXN.RCVPAYING_DATETIME >= '2023-01-01'
+  AND TXN.RCVPAYING_DATETIME <= '2025-10-31'
+  AND TXN.SEND_COUNTRY_NAME = 'INDIA'
+  AND TXN.SNDCUSTOMER_KEY IS NOT NULL
+  AND TXN.VALID_TXN_TYPE_CODE = 'Y'
+  AND TXN.REFUND_TRXN = 'N'
+  AND NVL(TXN.SNDPRINCIPAL_USD, 0) > 0
+GROUP BY 1, 2, 3, 4;
 
 -- Validation
 SELECT
     MTH_YR,
-    CURRENT_CHANNEL,
     COUNT(DISTINCT SNDCUSTOMER_KEY) AS CUSTOMERS,
-    SUM(R1_APP_TXNS) AS APP_TXNS,
-    SUM(R1_WEBSITE_TXNS) AS WEB_TXNS,
     SUM(R1_TXNS) AS TOTAL_TXNS
-FROM CAR_717_Customer_Channel_Monthly
-GROUP BY 1, 2
-ORDER BY 1, 2;
-
-
+FROM CAR_717_Customer_Channel_Monthly1
+where MTH_YR = '2025-01-01 00:00:00.000'
+GROUP BY 1
+ORDER BY 1;-- 3070	4961(JAN 2025)
+--Cust R1_txns
+--4266 7,776(Total)
 -- ============================================================================
 -- STEP 1B: Calculate R12 and R2_TO_R13 Metrics Using Window Functions
 -- ============================================================================
-CREATE OR REPLACE TABLE CAR_717_Customer_Channel_R12_Metrics AS
+CREATE OR REPLACE TABLE CAR_717_Customer_Channel_R12_Metrics1 AS
 SELECT
     MTH_YR,
     SNDCUSTOMER_KEY,
     COUNTRY_CODE,
     SEND_COUNTRY_NAME,
-    CURRENT_CHANNEL,
     R1_TXNS,
     R1_APP_TXNS,
     R1_WEBSITE_TXNS,
     R1_PRINCIPAL,
     R1_REVENUE,
+
+     -- Determine current channel based on R1 transactions
+    CASE 
+        WHEN R1_APP_TXNS > 0 AND R1_WEBSITE_TXNS > 0 THEN 'APP+WEB'
+        WHEN R1_APP_TXNS > 0 THEN 'APP'
+        WHEN R1_WEBSITE_TXNS > 0 THEN 'WEB'
+        ELSE 'OTHER'--Other would be R12 INACTIVE CUSTOMERS
+    END AS CURRENT_CHANNEL,
     
     -- Calculate R12 metrics (rolling 12 months including current month)
     SUM(R1_TXNS) OVER (
@@ -114,7 +116,7 @@ SELECT
         ROWS BETWEEN 12 PRECEDING AND 1 PRECEDING
     ) AS R2_TO_R13_WEBSITE_TXNS
     
-FROM CAR_717_Customer_Channel_Monthly;
+FROM CAR_717_Customer_Channel_Monthly1;
 
 -- Validation
 SELECT
@@ -123,16 +125,17 @@ SELECT
     SUM(R1_TXNS) AS R1_TXNS,
     SUM(R12_TXNS) AS R12_TXNS,
     SUM(R2_TO_R13_TXNS) AS R2_TO_R13_TXNS
-FROM CAR_717_Customer_Channel_R12_Metrics
-WHERE MTH_YR >= '2023-01-01'
+FROM CAR_717_Customer_Channel_R12_Metrics1
+WHERE MTH_YR = '2025-01-01'
 GROUP BY 1
-ORDER BY 1;
-
+ORDER BY 1;--3070	4961	23296	19018(Jan 2025)
+--Cust  R1_Txns R12_Txns R2_to_r13_txns
+--4266	7776	38375	31674
 
 -- ============================================================================
 -- STEP 2: Determine Customer Type and Apply Channel Logic
 -- ============================================================================
-CREATE OR REPLACE TABLE CAR_717_Customer_Channel_Final AS
+CREATE OR REPLACE TABLE CAR_717_Customer_Channel_Final1 AS
 SELECT
     MTH_YR,
     SNDCUSTOMER_KEY,
@@ -170,7 +173,7 @@ SELECT
     R2_TO_R13_APP_TXNS,
     R2_TO_R13_WEBSITE_TXNS
     
-FROM CAR_717_Customer_Channel_R12_Metrics
+FROM CAR_717_Customer_Channel_R12_Metrics1
 WHERE R12_TXNS > 0
     AND MTH_YR >= '2023-01-01';
 
@@ -182,15 +185,16 @@ SELECT
     COUNT(DISTINCT SNDCUSTOMER_KEY) AS CUSTOMERS,
     SUM(R1_APP_TXNS) AS APP_TXNS,
     SUM(R1_WEBSITE_TXNS) AS WEB_TXNS
-FROM CAR_717_Customer_Channel_Final
+FROM CAR_717_Customer_Channel_Final1
+WHERE MTH_YR = '2025-01-01'
 GROUP BY 1, 2, 3
-ORDER BY 1, 2, 3;
+ORDER BY 1, 2, 3;--3,070 4,961( Jan 2025)
 
 
 -- ============================================================================
 -- STEP 3: Create Customer Segment Classification
 -- ============================================================================
-CREATE OR REPLACE TABLE CAR_717_Customer_Segments AS
+CREATE OR REPLACE TABLE CAR_717_Customer_Segments1 AS
 SELECT
     MTH_YR,
     SNDCUSTOMER_KEY,
@@ -234,26 +238,27 @@ SELECT
         ELSE 'Other'
     END AS CUSTOMER_SEGMENT
     
-FROM CAR_717_Customer_Channel_Final;
+FROM CAR_717_Customer_Channel_Final1;
 
 -- Validation
 SELECT
     MTH_YR,
     CUSTOMER_SEGMENT,
+    Count(SNDCUSTOMER_KEY),
     COUNT(DISTINCT SNDCUSTOMER_KEY) AS CUSTOMERS,
     SUM(R1_APP_TXNS) AS R1_APP_TXNS,
     SUM(R2_TO_R13_WEBSITE_TXNS) AS R2_TO_R13_WEB_TXNS,
-    SUM(R2_TO_R13_APP_TXNS) AS R2_TO_R13_APP_TXNS
-FROM CAR_717_Customer_Segments
-WHERE CUSTOMER_SEGMENT = 'Migrated Web to App'
+    SUM(R2_TO_R13_APP_TXNS) AS R2_TO_R13_APP_TXNS,
+FROM CAR_717_Customer_Segments1
+WHERE MTH_YR = '2025-01-01'
 GROUP BY 1, 2
-ORDER BY 1, 2;
+ORDER BY 1, 2 ;-- 3,070 
 
 
 -- ============================================================================
 -- STEP 4: Create Final Monthly Report
 -- ============================================================================
-CREATE OR REPLACE TABLE CAR_717_Monthly_Report AS
+CREATE OR REPLACE TABLE CAR_717_Monthly_Report1 AS
 SELECT
     CS.MTH_YR,
     CS.SEND_COUNTRY_NAME,
@@ -292,7 +297,7 @@ SELECT
     SUM(CS.R12_PRINCIPAL) AS R12_TOTAL_PRINCIPAL,
     SUM(CS.R12_REVENUE) AS R12_TOTAL_REVENUE
     
-FROM CAR_717_Customer_Segments CS
+FROM CAR_717_Customer_Segments1 CS
 GROUP BY 1, 2, 3, 4, 5
 ORDER BY 1, 2, 3, 4, 5;
 
@@ -300,13 +305,14 @@ ORDER BY 1, 2, 3, 4, 5;
 SELECT
     MTH_YR,
     CURRENT_CHANNEL,
+    Count(SNDCUSTOMER_KEY),
     SUM(TOTAL_CUSTOMERS) AS TOTAL_CUSTOMERS,
     SUM(NEW_TO_APP) AS NEW_TO_APP,
     SUM(NEW_TO_WEB) AS NEW_TO_WEB,
     SUM(MIGRATED_WEB_TO_APP) AS MIGRATED_WEB_TO_APP,
     SUM(R1_APP_TRANSACTIONS) AS APP_TXNS,
     SUM(R1_WEB_TRANSACTIONS) AS WEB_TXNS
-FROM CAR_717_Monthly_Report
+FROM CAR_717_Monthly_Report1
 GROUP BY 1, 2
 ORDER BY 1, 2;
 
@@ -334,5 +340,5 @@ SELECT
     R12_TOTAL_TRANSACTIONS,
     R12_TOTAL_PRINCIPAL,
     R12_TOTAL_REVENUE
-FROM CAR_717_Monthly_Report 
+FROM CAR_717_Monthly_Report1 
 ORDER BY MTH_YR, CURRENT_CHANNEL;
