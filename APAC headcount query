@@ -1,78 +1,456 @@
---New --270k
-CREATE OR REPLACE TABLE CAR_695_INDIA_WUBD_TXN_COUNT AS
-SELECT 
-    DATE(RCVPAYING_DATETIME) AS TXN_DATE,
-    SNDCUSTOMER_KEY,
-    COUNT(TXN_ID) AS CUSTOMER_TXNS,
-    COUNT(CASE WHEN UPPER(PRICING_CHANNEL) = 'WEB' THEN TXN_ID END) AS CUSTOMER_WEB_TXNS,
-    COUNT(CASE WHEN UPPER(PRICING_CHANNEL) = 'APP' THEN TXN_ID END) AS CUSTOMER_APP_TXNS
-FROM 
-    WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW 
-WHERE
-    SNDCOUNTRY_CODE = 'IN' 
-    AND DATE(RCVPAYING_DATETIME) BETWEEN '2022-01-01' AND '2025-09-30'
-    AND UPPER(PRICING_CHANNEL) NOT IN ('POS', 'AIR', 'TMT')
-GROUP BY 
-    TXN_DATE, SNDCUSTOMER_KEY;
+Here's a complete stored procedure for your entire LACA Customer Segmentation pipeline:
+--===================================================================================
+-- STORED PROCEDURE: LACA Customer Segmentation Pipeline
+-- Description: Complete ETL process for LACA customer segmentation analysis
+-- Created: 2025
+--===================================================================================
 
+CREATE OR REPLACE PROCEDURE SP_LACA_CUSTOMER_SEGMENTATION()
+RETURNS STRING
+LANGUAGE SQL
+AS
+$$
+DECLARE
+  v_start_time TIMESTAMP;
+  v_end_time TIMESTAMP;
+  v_status STRING;
+  v_error_msg STRING;
+  v_rows_rnt INT;
+  v_rows_engagement INT;
+  v_rows_final INT;
+BEGIN
+  -- Initialize
+  v_start_time := CURRENT_TIMESTAMP();
+  v_status := 'STARTED';
+  
+  -- Log start
+  INSERT INTO LACA_ETL_LOG (run_date, step, status, message)
+  VALUES (CURRENT_TIMESTAMP(), 'START', 'INFO', 'Starting LACA Customer Segmentation ETL');
 
-SELECT
-    TXN_DATE,
-    '@' || SNDCUSTOMER_KEY AS GID,
-    CUSTOMER_TXNS,
-    CUSTOMER_WEB_TXNS,
-    CUSTOMER_APP_TXNS,
-    --channel,
-    CASE
-        WHEN CUSTOMER_TXNS >= 1 AND CUSTOMER_TXNS <= 5 THEN '1X-5X'
-        WHEN CUSTOMER_TXNS >= 6 AND CUSTOMER_TXNS <= 10 THEN '6X-10X'
-        WHEN CUSTOMER_TXNS >= 11 AND CUSTOMER_TXNS <= 15 THEN '11X-15X'
-        ELSE '15X+'
-    END AS TPC_BUCKET
-FROM CAR_695_INDIA_WUBD_TXN_COUNT
-WHERE
-    SNDCUSTOMER_KEY IS NOT NULL;
---AND CUSTOMER_WEB_TXNS>0 AND  CUSTOMER_APP_TXNS>0;
+  --===================================================================================
+  -- STEP 1: RNT Customers Table
+  --===================================================================================
+  BEGIN
+    INSERT INTO LACA_ETL_LOG VALUES (CURRENT_TIMESTAMP(), 'STEP_1', 'INFO', 'Creating RNT Customers table');
+    
+    CREATE OR REPLACE TABLE LACA_RNT_CUSTOMERS AS
+    WITH 
+    -- Generate months from Jan 2024 up to the last completed month
+    months AS (
+      SELECT DISTINCT DATE_TRUNC('MONTH', MTH_YR) AS ref_date
+      FROM WUDNA.CEX_SANDBOX.VA_KPI_2020_2
+      WHERE MTH_YR >= TO_DATE('2024-01-01')
+        AND MTH_YR < DATE_TRUNC('MONTH', CURRENT_DATE)
+    ),
 
-SELECT
-    TXN_DATE,
-    SNDCUSTOMER_KEY,
-    COUNT(*) AS ROW_COUNT
-FROM CAR_695_INDIA_WUBD_TXN_COUNT
-GROUP BY TXN_DATE, SNDCUSTOMER_KEY
-HAVING COUNT(*) > 1;
+    -- Registered LACA customers with marketability flags
+    cust_reg AS (
+      SELECT
+        c.customer_key,
+        DATE_TRUNC('MONTH', c.first_registration_date) AS reg_month,
+        c.country_code,
+        CASE
+          WHEN c.email_address_on_file_flag = 'Y'
+           AND c.opt_email = 'I'
+           AND c.marketing_flag = 'Y'
+          THEN 'Y'
+          ELSE 'N'
+        END AS email_marketable,
+        CASE
+          WHEN (c.opt_sms = 'I'
+            AND c.mobile_number_on_file_flag = 'Y'
+            AND c.marketing_flag = 'Y'
+            AND c.country_code NOT IN ('US','CA'))
+          OR (c.mobile_number_on_file_flag = 'Y'
+            AND c.opt_sms = 'I'
+            AND c.double_opt_sms = 'I'
+            AND c.marketing_flag = 'Y'
+            AND c.country_code IN ('US','CA'))
+          THEN 'Y'
+          ELSE 'N'
+        END AS sms_marketable
+      FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
+      JOIN SUMMARY_GEN.COUNTRY_VW cnt
+        ON c.country_code = cnt.country_code
+       AND cnt.super_region = 'LACA'
+      WHERE c.first_registration_date IS NOT NULL
+    ),
 
---old - 77k
+    -- All LACA transactions from 2021 onwards
+    all_txns AS (
+      SELECT DISTINCT
+        t.sndcustomer_key AS customer_key,
+        DATE(t.rcvpaying_datetime) AS txn_date
+      FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
+      WHERE t.SEND_SUPER_REGION = 'LACA'
+        AND t.rcvpaying_datetime >= '2021-01-01' 
+    )
 
-CREATE OR REPLACE TABLE CAR_695_INDIA_WUBD_TXN_COUNT AS
-SELECT 
-    DATE(DATE_TRUNC('YEAR', RCVPAYING_DATETIME)) AS YEAR,
-    SNDCUSTOMER_KEY,
-    COUNT(TXN_ID) AS CUSTOMER_TXNS,
-    COUNT(CASE WHEN UPPER(PRICING_CHANNEL) = 'WEB' THEN TXN_ID END) AS CUSTOMER_WEB_TXNS,
-    COUNT(CASE WHEN UPPER(PRICING_CHANNEL) = 'APP' THEN TXN_ID END) AS CUSTOMER_APP_TXNS
-FROM 
-    WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW 
-WHERE
-    SNDCOUNTRY_CODE = 'IN' 
-    AND RCVPAYING_DATETIME >= '2022-01-01' and DATe(RCVPAYING_DATETIME) <= '2025-09-30'
-    AND UPPER(PRICING_CHANNEL) NOT IN ('POS', 'AIR', 'TMT')
-GROUP BY 
-    ALL;
+    -- Final RNT: Registered in R12, No transactions in R48
+    SELECT DISTINCT
+      m.ref_date,
+      r.customer_key,
+      r.country_code,
+      r.reg_month,
+      'Y' AS rnt_flag,
+      r.email_marketable,
+      r.sms_marketable
+    FROM months m
+    JOIN cust_reg r
+      ON r.reg_month >= DATEADD(MONTH, -11, m.ref_date)
+     AND r.reg_month <= m.ref_date
+    LEFT JOIN all_txns t
+      ON r.customer_key = t.customer_key
+     AND t.txn_date >= DATEADD(MONTH, -47, m.ref_date)
+     AND t.txn_date <= LAST_DAY(m.ref_date)
+    WHERE t.customer_key IS NULL;
 
+    SELECT COUNT(*) INTO v_rows_rnt FROM LACA_RNT_CUSTOMERS;
+    INSERT INTO LACA_ETL_LOG VALUES (CURRENT_TIMESTAMP(), 'STEP_1', 'SUCCESS', 'RNT table created with ' || v_rows_rnt || ' rows');
+    
+  EXCEPTION
+    WHEN OTHER THEN
+      v_error_msg := SQLERRM;
+      INSERT INTO LACA_ETL_LOG VALUES (CURRENT_TIMESTAMP(), 'STEP_1', 'ERROR', v_error_msg);
+      RETURN 'FAILED at STEP 1: ' || v_error_msg;
+  END;
 
-SELECT 
-    YEAR,
-    '@' || SNDCUSTOMER_KEY AS GID,
-    CUSTOMER_TXNS,
-    CUSTOMER_WEB_TXNS,
-    CUSTOMER_APP_TXNS,
-    CASE
-        WHEN CUSTOMER_TXNS >= 1 AND CUSTOMER_TXNS <= 5 THEN '1X-5X'
-        WHEN CUSTOMER_TXNS >= 6 AND CUSTOMER_TXNS <= 10 THEN '6X-10X'
-        WHEN CUSTOMER_TXNS >= 11 AND CUSTOMER_TXNS <= 15 THEN '11X-15X'
-        ELSE '15X+'
-    END AS TPC_BUCKET
-FROM CAR_695_INDIA_WUBD_TXN_COUNT
-WHERE
-    SNDCUSTOMER_KEY IS NOT NULL;
+  --===================================================================================
+  -- STEP 2: Engagement + Corridor Customers Table
+  --===================================================================================
+  BEGIN
+    INSERT INTO LACA_ETL_LOG VALUES (CURRENT_TIMESTAMP(), 'STEP_2', 'INFO', 'Creating Engagement Corridor Customers table');
+    
+    CREATE OR REPLACE TABLE LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS AS
+    SELECT
+      e.sndcustomer_key AS customer_key,
+      e.country_code,
+      DATE_TRUNC('MONTH', e.mth_yr) AS ref_date,
+      DATE_TRUNC('MONTH', cm.first_registration_date) AS reg_month,
+      e.r12_txns,
+      CASE WHEN e.r12_txns > 0 THEN 'Y' ELSE 'N' END AS r12_active,
+      e.r6_txns,
+      CASE WHEN e.r6_txns = 0 AND e.r12_txns > 0 THEN 'Y' ELSE 'N' END AS active_churn_r7_r12,
+      e.pr12_txns,
+      e.ppr12_txns,
+      e.pppr12_txns,
+      CASE WHEN e.r12_txns = 0 AND (e.pr12_txns > 0 OR e.ppr12_txns > 0 OR e.pppr12_txns > 0) THEN 'Y' ELSE 'N' END AS lapsed_r12_plus,
+      e.email_marketable,
+      e.sms_marketable,
+      CASE WHEN e.R12_App_txns > 0 THEN 'Y' ELSE 'N' END AS app_marketable_flag,
+      e.retail_digital_flag,
+      e.Web_App_Flag, 
+      e.r12_dominant_channel AS channel_dominance,
+      CASE
+        WHEN e.retail_digital_flag = 'R12_INACTIVE' THEN 'R12 Inactive'
+        WHEN e.retail_digital_flag = 'Digital_only' THEN 'Digital Only'
+        WHEN e.retail_digital_flag = 'Retail_only' THEN 'Retail Only'
+        WHEN e.retail_digital_flag = 'Retail+Digital' THEN 'Retail + Digital'
+        ELSE 'Other'
+      END AS channel_native,
+      COALESCE(d.dominant_corridor_name, 'Unknown') AS dominant_corridor_name,
+      COALESCE(d.dominant_sndcountry_name, 'Unknown') AS dominant_sndcountry_name,
+      COALESCE(d.dominant_rcvcountry_name, 'Unknown') AS dominant_rcvcountry_name,
+      COALESCE(d.dominant_pricing_channel, 'Unknown') AS dominant_pricing_channel,
+      'N' AS rnt_flag
+    FROM WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL e
+    INNER JOIN SUMMARY_GEN.COUNTRY_VW c
+      ON e.country_code = c.country_code
+     AND c.super_region = 'LACA'
+    LEFT JOIN WUDNA.CEX_SANDBOX.SK_DOMINANCY_METRICS d
+      ON e.sndcustomer_key = d.sndcustomer_key
+     AND e.mth_yr = d.mth_yr 
+    LEFT JOIN SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm               
+      ON e.sndcustomer_key = cm.customer_key 
+    WHERE e.r48_txns > 0;
+
+    SELECT COUNT(*) INTO v_rows_engagement FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS;
+    INSERT INTO LACA_ETL_LOG VALUES (CURRENT_TIMESTAMP(), 'STEP_2', 'SUCCESS', 'Engagement table created with ' || v_rows_engagement || ' rows');
+    
+  EXCEPTION
+    WHEN OTHER THEN
+      v_error_msg := SQLERRM;
+      INSERT INTO LACA_ETL_LOG VALUES (CURRENT_TIMESTAMP(), 'STEP_2', 'ERROR', v_error_msg);
+      RETURN 'FAILED at STEP 2: ' || v_error_msg;
+  END;
+
+  --===================================================================================
+  -- STEP 3: Aggregate Engagement Customers
+  --===================================================================================
+  BEGIN
+    INSERT INTO LACA_ETL_LOG VALUES (CURRENT_TIMESTAMP(), 'STEP_3', 'INFO', 'Creating Engagement Customers Aggregation');
+    
+    CREATE OR REPLACE TABLE LACA_ENGAGEMENT_CUSTOMERS_AGG AS
+    SELECT
+      e.ref_date,
+      e.country_code,
+      e.dominant_corridor_name,
+      e.dominant_sndcountry_name,
+      e.dominant_rcvcountry_name,
+      e.channel_dominance,
+      e.email_marketable,
+      e.sms_marketable,
+      e.retail_digital_flag,
+      e.web_app_flag,
+      e.channel_native,
+      e.rnt_flag,
+      e.r12_active,
+      e.active_churn_r7_r12,
+      e.lapsed_r12_plus,
+      CASE
+        WHEN e.r12_active = 'Y' AND e.active_churn_r7_r12 = 'Y' THEN 'Churn R7-R12'
+        WHEN e.r12_active = 'Y' THEN 'Active R1-R6'
+        WHEN e.r12_txns = 0 AND e.pr12_txns > 0 THEN 'R13–R24 Active'
+        WHEN e.pr12_txns = 0 AND e.ppr12_txns > 0 THEN 'R25–R36 Active'
+        WHEN e.ppr12_txns = 0 AND e.pppr12_txns > 0 THEN 'R37–R48 Active'
+        ELSE 'Inactive or Other'
+      END AS level3_breakdown,
+      COUNT(DISTINCT e.customer_key) AS customer_count,
+      SUM(e.r12_txns) AS total_r12_txns,
+      SUM(e.r6_txns) AS total_r6_txns,
+      SUM(e.pr12_txns) AS total_pr12_txns,
+      SUM(e.ppr12_txns) AS total_ppr12_txns,
+      SUM(e.pppr12_txns) AS total_pppr12_txns
+    FROM LACA_ENGAGEMENT_CORRIDOR_CUSTOMERS e
+    GROUP BY ALL;
+
+    INSERT INTO LACA_ETL_LOG VALUES (CURRENT_TIMESTAMP(), 'STEP_3', 'SUCCESS', 'Engagement aggregation completed');
+    
+  EXCEPTION
+    WHEN OTHER THEN
+      v_error_msg := SQLERRM;
+      INSERT INTO LACA_ETL_LOG VALUES (CURRENT_TIMESTAMP(), 'STEP_3', 'ERROR', v_error_msg);
+      RETURN 'FAILED at STEP 3: ' || v_error_msg;
+  END;
+
+  --===================================================================================
+  -- STEP 4: Aggregate RNT Customers
+  --===================================================================================
+  BEGIN
+    INSERT INTO LACA_ETL_LOG VALUES (CURRENT_TIMESTAMP(), 'STEP_4', 'INFO', 'Creating RNT Customers Aggregation');
+    
+    CREATE OR REPLACE TABLE LACA_RNT_CUSTOMERS_AGG AS
+    SELECT
+      r.ref_date,
+      r.country_code,
+      'RNT Only' AS dominant_corridor_name,
+      'RNT' AS dominant_sndcountry_name,
+      'RNT' AS dominant_rcvcountry_name,
+      'RNT' AS channel_dominance,
+      r.email_marketable,
+      r.sms_marketable,
+      'RNT' AS retail_digital_flag,
+      'RNT' AS Web_App_Flag,
+      'RNT' AS channel_native,
+      'Y' AS rnt_flag,
+      'N' AS r12_active,
+      'N' AS active_churn_r7_r12,
+      'N' AS lapsed_r12_plus,
+      'RNT' AS level3_breakdown,
+      COUNT(DISTINCT r.customer_key) AS customer_count,
+      0 AS total_r12_txns,
+      0 AS total_r6_txns,
+      0 AS total_pr12_txns,
+      0 AS total_ppr12_txns,
+      0 AS total_pppr12_txns
+    FROM LACA_RNT_CUSTOMERS r
+    GROUP BY r.ref_date, r.country_code, r.email_marketable, r.sms_marketable;
+
+    INSERT INTO LACA_ETL_LOG VALUES (CURRENT_TIMESTAMP(), 'STEP_4', 'SUCCESS', 'RNT aggregation completed');
+    
+  EXCEPTION
+    WHEN OTHER THEN
+      v_error_msg := SQLERRM;
+      INSERT INTO LACA_ETL_LOG VALUES (CURRENT_TIMESTAMP(), 'STEP_4', 'ERROR', v_error_msg);
+      RETURN 'FAILED at STEP 4: ' || v_error_msg;
+  END;
+
+  --===================================================================================
+  -- STEP 5A: Dimension Base
+  --===================================================================================
+  BEGIN
+    INSERT INTO LACA_ETL_LOG VALUES (CURRENT_TIMESTAMP(), 'STEP_5A', 'INFO', 'Creating Customer Dimensions');
+    
+    CREATE OR REPLACE TABLE LACA_CUSTOMER_DIMENSIONS AS
+    SELECT DISTINCT
+      ref_date, country_code, dominant_corridor_name, dominant_sndcountry_name,
+      dominant_rcvcountry_name, channel_dominance, email_marketable, sms_marketable,
+      retail_digital_flag, Web_App_Flag, channel_native, rnt_flag, r12_active, 
+      active_churn_r7_r12, lapsed_r12_plus, level3_breakdown
+    FROM LACA_ENGAGEMENT_CUSTOMERS_AGG
+    UNION
+    SELECT DISTINCT
+      ref_date, country_code, dominant_corridor_name, dominant_sndcountry_name, 
+      dominant_rcvcountry_name, channel_dominance, email_marketable, sms_marketable,
+      retail_digital_flag, Web_App_Flag, channel_native, rnt_flag, r12_active, 
+      active_churn_r7_r12, lapsed_r12_plus, level3_breakdown
+    FROM LACA_RNT_CUSTOMERS_AGG;
+
+    INSERT INTO LACA_ETL_LOG VALUES (CURRENT_TIMESTAMP(), 'STEP_5A', 'SUCCESS', 'Customer dimensions created');
+    
+  EXCEPTION
+    WHEN OTHER THEN
+      v_error_msg := SQLERRM;
+      INSERT INTO LACA_ETL_LOG VALUES (CURRENT_TIMESTAMP(), 'STEP_5A', 'ERROR', v_error_msg);
+      RETURN 'FAILED at STEP 5A: ' || v_error_msg;
+  END;
+
+  --===================================================================================
+  -- STEP 5B: Final Reporting Table
+  --===================================================================================
+  BEGIN
+    INSERT INTO LACA_ETL_LOG VALUES (CURRENT_TIMESTAMP(), 'STEP_5B', 'INFO', 'Creating Final Segmentation table');
+    
+    CREATE OR REPLACE TABLE LACA_CUSTOMER_SEGMENTATION_FINAL AS
+    SELECT
+      a.ref_date,
+      a.country_code,
+      cv.COUNTRY_NAME AS laca_country,
+      CASE 
+        WHEN a.r12_active = 'Y' AND a.dominant_corridor_name IS NULL THEN 'Active R1-R12 (No Corridor)'
+        WHEN a.lapsed_r12_plus = 'Y' AND a.dominant_corridor_name IS NULL THEN 'Lapsed R12+'
+        ELSE COALESCE(a.dominant_corridor_name, 'Unknown')
+      END AS corridor_bucket,
+      CASE WHEN a.lapsed_r12_plus = 'Y' AND a.dominant_sndcountry_name IS NULL
+        THEN 'Lapsed R12+' ELSE a.dominant_sndcountry_name END as dominant_sndcountry_name,
+      CASE WHEN a.lapsed_r12_plus = 'Y' AND a.dominant_rcvcountry_name IS NULL
+        THEN 'Lapsed R12+' ELSE a.dominant_rcvcountry_name END as dominant_rcvcountry_name,
+      a.channel_dominance, a.email_marketable, a.sms_marketable, a.retail_digital_flag,
+      a.Web_App_Flag, a.channel_native, a.rnt_flag, a.r12_active, a.active_churn_r7_r12, a.lapsed_r12_plus,
+      COALESCE(b.customer_count, 0) AS engagement_customer_count,
+      COALESCE(b.total_r12_txns, 0) AS total_r12_txns,
+      COALESCE(b.total_r6_txns, 0) AS total_r6_txns,
+      COALESCE(b.total_pr12_txns, 0) AS total_pr12_txns,
+      COALESCE(b.total_ppr12_txns, 0) AS total_ppr12_txns,
+      COALESCE(b.total_pppr12_txns, 0) AS total_pppr12_txns,
+      COALESCE(c.customer_count, 0) AS rnt_customer_count,
+      CASE WHEN a.rnt_flag = 'Y' THEN COALESCE(c.customer_count, 0)
+        ELSE COALESCE(b.customer_count, 0) END AS customer_count,
+      COALESCE(b.customer_count, 0) + COALESCE(c.customer_count, 0) AS total_customer_count,
+      YEAR(a.ref_date) AS year,
+      MONTH(a.ref_date) AS month_number,
+      TO_CHAR(a.ref_date, 'YYYY-MM') AS year_month,
+      TO_CHAR(a.ref_date, 'Mon-YY') AS month_label,
+      CASE
+        WHEN a.r12_active = 'Y' THEN 'Active R1-R12'
+        WHEN a.rnt_flag = 'Y' THEN 'RNT'
+        WHEN a.active_churn_r7_r12 = 'Y' THEN 'Active Churn R7-R12'
+        WHEN a.lapsed_r12_plus = 'Y' THEN 'Lapsed R12+'
+        ELSE 'Other'
+      END AS audience_segment,
+      CASE
+        WHEN a.email_marketable = 'Y' AND a.sms_marketable = 'Y' THEN 'Email + SMS Marketable'
+        WHEN a.email_marketable = 'Y' THEN 'Email Marketable'
+        WHEN a.sms_marketable = 'Y' THEN 'SMS Marketable'
+        ELSE 'Non Marketable'
+      END AS marketability_segment,
+      CASE
+        WHEN a.lapsed_r12_plus = 'Y' AND COALESCE(b.total_pr12_txns, 0) > 0 THEN 'PR12 Active (R13-R24)'
+        WHEN a.lapsed_r12_plus = 'Y' AND COALESCE(b.total_ppr12_txns, 0) > 0 THEN 'PPR12 Active (R25-R36)'
+        WHEN a.lapsed_r12_plus = 'Y' AND COALESCE(b.total_pppr12_txns, 0) > 0 THEN 'PPPR12 Active (R37-R48)'
+        ELSE NULL
+      END AS lapsed_breakdown,
+      CASE
+        WHEN a.rnt_flag = 'Y' THEN 'RNT'
+        WHEN a.r12_active = 'Y' OR a.lapsed_r12_plus = 'Y' THEN 'Transacted'
+        ELSE 'Other'
+      END AS customer_type,
+      CASE
+        WHEN a.r12_active = 'Y' THEN 'Active R1-R12'
+        WHEN a.lapsed_r12_plus = 'Y' THEN 'Lapsed R12+'
+        WHEN a.r12_active = 'N' AND a.lapsed_r12_plus = 'N' AND a.rnt_flag = 'N' THEN 'Dormant/Never Transacted'
+        ELSE 'RNT'
+      END AS level2_engagement_status,
+      a.level3_breakdown,
+      'LACA' AS region,
+      CASE
+        WHEN a.r12_active = 'Y' AND a.dominant_corridor_name IS NULL THEN 'Active R1-R12 (No Corridor)'
+        WHEN a.lapsed_r12_plus = 'Y' AND a.dominant_corridor_name IS NULL THEN 'Lapsed R12+'
+        WHEN a.dominant_corridor_name = 'RNT Only' THEN 'RNT Only'
+        WHEN a.dominant_corridor_name = 'Others' THEN 'Other Corridors'
+        ELSE COALESCE(a.dominant_corridor_name, 'Unknown')
+      END AS corridor_group
+    FROM LACA_CUSTOMER_DIMENSIONS a
+    LEFT JOIN SUMMARY_GEN.COUNTRY_VW cv ON a.country_code = cv.country_code AND cv.super_region = 'LACA'
+    LEFT JOIN LACA_ENGAGEMENT_CUSTOMERS_AGG b 
+      ON a.ref_date = b.ref_date AND a.country_code = b.country_code
+      AND NVL(a.dominant_corridor_name, 'NA') = NVL(b.dominant_corridor_name, 'NA')
+      AND NVL(a.dominant_sndcountry_name, 'NA') = NVL(b.dominant_sndcountry_name, 'NA')
+      AND NVL(a.dominant_rcvcountry_name, 'NA') = NVL(b.dominant_rcvcountry_name, 'NA')
+      AND NVL(a.channel_dominance, 'NA') = NVL(b.channel_dominance, 'NA')
+      AND NVL(a.email_marketable, 'NA') = NVL(b.email_marketable, 'NA')
+      AND NVL(a.sms_marketable, 'NA') = NVL(b.sms_marketable, 'NA')
+      AND NVL(a.retail_digital_flag, 'NA') = NVL(b.retail_digital_flag, 'NA')
+      AND NVL(a.Web_App_Flag, 'NA') = NVL(b.Web_App_Flag, 'NA')
+      AND NVL(a.channel_native, 'NA') = NVL(b.channel_native, 'NA')
+      AND NVL(a.rnt_flag, 'NA') = NVL(b.rnt_flag, 'NA')
+      AND NVL(a.r12_active, 'NA') = NVL(b.r12_active, 'NA')
+      AND NVL(a.active_churn_r7_r12, 'NA') = NVL(b.active_churn_r7_r12, 'NA')
+      AND NVL(a.lapsed_r12_plus, 'NA') = NVL(b.lapsed_r12_plus, 'NA')
+      AND NVL(a.level3_breakdown, 'NA') = NVL(b.level3_breakdown, 'NA')
+    LEFT JOIN LACA_RNT_CUSTOMERS_AGG c
+      ON a.ref_date = c.ref_date AND a.country_code = c.country_code
+      AND NVL(a.dominant_corridor_name, 'NA') = NVL(c.dominant_corridor_name, 'NA')
+      AND NVL(a.dominant_sndcountry_name, 'NA') = NVL(c.dominant_sndcountry_name, 'NA')
+      AND NVL(a.dominant_rcvcountry_name, 'NA') = NVL(c.dominant_rcvcountry_name, 'NA')
+      AND NVL(a.channel_dominance, 'NA') = NVL(c.channel_dominance, 'NA')
+      AND NVL(a.email_marketable, 'NA') = NVL(c.email_marketable, 'NA')
+      AND NVL(a.sms_marketable, 'NA') = NVL(c.sms_marketable, 'NA')
+      AND NVL(a.retail_digital_flag, 'NA') = NVL(c.retail_digital_flag, 'NA')
+      AND NVL(a.Web_App_Flag, 'NA') = NVL(c.Web_App_Flag, 'NA')
+      AND NVL(a.channel_native, 'NA') = NVL(c.channel_native, 'NA')
+      AND NVL(a.rnt_flag, 'NA') = NVL(c.rnt_flag, 'NA')
+      AND NVL(a.r12_active, 'NA') = NVL(c.r12_active, 'NA')
+      AND NVL(a.active_churn_r7_r12, 'NA') = NVL(c.active_churn_r7_r12, 'NA')
+      AND NVL(a.lapsed_r12_plus, 'NA') = NVL(c.lapsed_r12_plus, 'NA')
+      AND NVL(a.level3_breakdown, 'NA') = NVL(c.level3_breakdown, 'NA')
+    WHERE a.ref_date >= '2023-12-01';
+
+    SELECT COUNT(*) INTO v_rows_final FROM LACA_CUSTOMER_SEGMENTATION_FINAL;
+    INSERT INTO LACA_ETL_LOG VALUES (CURRENT_TIMESTAMP(), 'STEP_5B', 'SUCCESS', 'Final table created with ' || v_rows_final || ' rows');
+    
+  EXCEPTION
+    WHEN OTHER THEN
+      v_error_msg := SQLERRM;
+      INSERT INTO LACA_ETL_LOG VALUES (CURRENT_TIMESTAMP(), 'STEP_5B', 'ERROR', v_error_msg);
+      RETURN 'FAILED at STEP 5B: ' || v_error_msg;
+  END;
+
+  -- Finalize
+  v_end_time := CURRENT_TIMESTAMP();
+  v_status := 'COMPLETED';
+  
+  INSERT INTO LACA_ETL_LOG VALUES (
+    CURRENT_TIMESTAMP(), 
+    'END', 
+    'SUCCESS', 
+    'ETL completed successfully. Duration: ' || DATEDIFF(SECOND, v_start_time, v_end_time) || ' seconds. Final rows: ' || v_rows_final
+  );
+  
+  RETURN 'SUCCESS: ETL completed in ' || DATEDIFF(SECOND, v_start_time, v_end_time) || ' seconds';
+  
+EXCEPTION
+  WHEN OTHER THEN
+    v_error_msg := SQLERRM;
+    INSERT INTO LACA_ETL_LOG VALUES (CURRENT_TIMESTAMP(), 'PROCEDURE', 'ERROR', 'Unexpected error: ' || v_error_msg);
+    RETURN 'FAILED: ' || v_error_msg;
+END;
+$$;
+
+--===================================================================================
+-- Create Log Table (Run this first if it doesn't exist)
+--===================================================================================
+CREATE TABLE IF NOT EXISTS LACA_ETL_LOG (
+  run_date TIMESTAMP,
+  step STRING,
+  status STRING,
+  message STRING
+);
+
+--===================================================================================
+-- Execute the Stored Procedure
+--===================================================================================
+CALL SP_LACA_CUSTOMER_SEGMENTATION();
+
+-- Check execution log
+SELECT * FROM LACA_ETL_LOG ORDER BY run_date DESC LIMIT 
