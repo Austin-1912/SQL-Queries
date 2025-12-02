@@ -1,15 +1,30 @@
-Select
-    a.MTH_YR,
-    a.SNDCUSTOMER_KEY,
-    a.COUNTRY_CODE,
-     a.SEND_COUNTRY_NAME,
-     a.R1_TXNS,
-    a.R1_APP_TXNS,
-    a.R1_WEBSITE_TXNS,
-    a.R1_PRINCIPAL,
-    a.R1_REVENUE,
-FROM CAR_717_Customer_Channel_Monthly1
-    JOIN WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW b
-    ON a.SNDCUSTOMER_KEY = b.SNDCUSTOMER_KEY
-    AND a.MTHYR = b.DATE_TRUNC('MONTH', b.RCVPAYING_DATETIME)
-    DATE_TRUNC('MONTH', b.RCVPAYING_DATETIME) <= a.MTHYR AND DATE_TRUNC('MONTH', b.RCVPAYING_DATETIME) > DATEADD(MONTH, -12, a.MTHYR)
+We completed a weekly data pull for total digital new customers in the Greater Toronto Area (GTA), Canada. This analysis was conducted to measure the impact of a large Out-Of-Home (OOH) media campaign on digital new customer acquisition.
+The campaign ran from September 30 to November 30, and we included two pre-campaign weeks for baseline comparison:
+
+
+Pre-Campaign:
+
+Week 1: September 16 – 22
+Week 2: September 23 – 29
+
+
+
+Campaign Period:
+
+Week 1: September 30 – October 6
+Week 2: October 7 – 13
+Week 3: October 14 – 20
+Week 4: October 21 – 27
+Week 5: October 28 – November 3
+Week 6: November 4 – 10
+Week 7: November 11 – 17
+Week 8: November 18 – 24
+Week 9: November 25 – December 1
+
+
+
+Additionally, we explored options to strengthen the measurement approach by considering pre-post analysis with a comparison city (such as Vancouver or Montreal) or using Rest of Canada excluding Toronto as a benchmark. This comparison helps account for seasonality and provides a clearer view of the OOH campaign’s incremental impact. we calculated the lift in absolute terms wherein we check the lift in average of pre customers and average of post customers. Another metric that the data team included was “% of new digital customers relative to the total digital customer base”. This metric provides a clear indication of growth by showing how new acquisitions compare to the overall digital customer base. The team has launched a different campaign in US but wants to have a similar analysis for US. They also want include a view of the following:
+
+New to franchise vs. new to channel customers (would like to understand any impact on R2D)
+
+Any increase in TPC from customers acquired during the promo period. However over here the campaign is launched all over US not just in one state such that we could have compared against other states. but since it is launched it across the country , we cannot compare against the other states. We are already going to do a pre vs post comparison however we cant do a comparison with other states. so what benchmark could we use ??? can you suggest me benchmarks. 
