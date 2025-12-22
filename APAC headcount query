@@ -1,3 +1,55 @@
+Context: 
+We have on‑the‑ground promoters standing in front of our retail stores to onboard users and encourage them to become digital (app) users
+
+Objective:
+Enhance the effectiveness of on‑the‑ground assisted onboarding by targeting the right segments and allocating resources to the right locations.
+
+Please refer the excel doc for more info
+MY on ground assisted onboarding insights_2025.xlsx
+
+Country
+Malaysia & Singapore (2 sets of summaries)
+
+Data Timeframe:
+2025 Jan to YTD
+
+Data Required
+1. Top 5 omni channel(Retail + Digital) user sort by corridor (eg. MY-ID, MY-BD..)
+2. Top location with retail user only (non-digital user) - based on the Top 5 omni channel corridor
+3. Nationality of the corridor customer (based on the top 5 corridors)
+
+There are summaries in the excel sheet clearly stated how we envision the final outcome
+
+1. Top 5 omni channel user sort by corridor (eg. ID, BD…)	
+Objective: Identify high potential corridor to target the right segment	
+	
+Corridor	Total Omnichannel user
+MY-ID	10000
+MY-BD	8000
+MY-XX	
+MY-XX	
+MY-XX	
+
+2. Top location with retail user (non-digital) only - based on #1, the Top 5 omni channel corridor			
+Objective: Identify HIPO segment and the location to target the right segment			
+			
+Corridor	Total Retail user	Network ID	Network Name
+Indonesia	2000	MY123	xbx
+Indonesia	1500	MY456	xsjla
+Indonesia			
+Bangladesh			
+Bangladesh			
+Bangladesh			
+
+3. Nationality of the corridor customer (based on the top 5 corridors)		
+Corridor	Total Retail User	Nationality %
+Indonesia		N% of Indonesia users
+Bangladesh		N% of Bangladesh users
+Myanmar		
+Nepal		
+
+Below is the base query i have written and using it i want you to complete the entire script to solve the above 
+requirements. i want to get the dominant corridor , dominant sndagent_number and dominant agent_naid. 
 CREATE OR REPLACE TABLE CAR_782_TXN_BASE AS
 SELECT
     DATE_TRUNC('MONTH', txn.rcvpaying_datetime) AS mth_yr,
@@ -18,3 +70,4 @@ FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW txn
 WHERE txn.rcvpaying_datetime >= '2025-01-01'
   AND txn.rcvpaying_datetime < DATE_TRUNC('DAY', CURRENT_DATE)
   AND txn.SNDCOUNTRY_CODE IN ('MY','SG');
+And i want different summaries for MY and SG
