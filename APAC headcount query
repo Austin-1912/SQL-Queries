@@ -45,4 +45,69 @@ DOMINANT_ATTRBUTE_FUNDS_OUT	VARCHAR(16777216)
 DOMINANT_COMPANY_BRAND	VARCHAR(200)
 DOMINANT_CURRENCY_PAIR	VARCHAR(7)
 DOMINANT_PRINCIPAL_BAND	VARCHAR(16777216)
-DOMINANT_PRICING_CHANNEL	VARCHAR(16777216)
+DOMINANT_PRICING_CHANNEL	VARCHAR(16777216).
+
+--cust count & txns count
+CREATE OR REPLACE TABLE CAR_711_R48_data_from_EU_to_PH_cust AS
+WITH txn_base AS (
+    SELECT
+        t.sndcustomer_key,
+        t.sndcountry_code,
+        t.rcvcountry_code,
+        t.MTCN,
+        CASE 
+            WHEN t.pricing_channel IN ('POS','AIR','TMT') THEN 'RETAIL'
+            WHEN t.pricing_channel IN ('WEB','APP') THEN 'DIGITAL'
+            ELSE 'OTHERS'
+        END AS transaction_channel,
+        DATE(t.rcvpaying_datetime) AS txn_date
+    FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
+    WHERE t.sndcountry_code IN ('GB','DE','IT','ES','FR','CH','SE','NL','NO','DK','IE','BE','FI','AT','CY','PL','RO','MT','PT','LT')
+      AND t.rcvcountry_code = 'PH'
+),
+txn_flags AS (
+    SELECT
+        sndcustomer_key,
+        MAX(CASE WHEN txn_date BETWEEN '2024-11-01' AND '2025-10-31' THEN 1 ELSE 0 END) AS r12_flag,
+        MAX(CASE WHEN txn_date BETWEEN '2023-11-01' AND '2024-10-31' THEN 1 ELSE 0 END) AS pr12_flag,
+        MAX(CASE WHEN txn_date BETWEEN '2022-11-01' AND '2023-10-31' THEN 1 ELSE 0 END) AS ppr12_flag,
+        MAX(CASE WHEN txn_date BETWEEN '2021-11-01' AND '2022-10-31' THEN 1 ELSE 0 END) AS pppr12_flag,
+        COUNT(DISTINCT CASE WHEN transaction_channel = 'RETAIL' THEN MTCN  END) AS retail_txn,
+        COUNT(DISTINCT CASE WHEN transaction_channel = 'DIGITAL' THEN MTCN END) AS digital_txn
+    FROM txn_base
+    GROUP BY sndcustomer_key
+)
+SELECT
+    f.sndcustomer_key AS customer_key,
+    c.country_code,
+    -- Segmentation based on TXN date flags
+    CASE
+        WHEN r12_flag = 1 THEN 'Active'
+        WHEN r12_flag = 0 AND pr12_flag = 1 THEN 'Churning'
+        WHEN r12_flag = 0 AND pr12_flag = 0 AND ppr12_flag = 1 THEN 'Lapsed'
+        WHEN r12_flag = 0 AND pr12_flag = 0 AND ppr12_flag = 0 AND pppr12_flag = 1 THEN 'Uber Lapsed'
+        ELSE 'Inactive'
+    END AS customer_segment,
+
+    -- Marketability Flags
+    CASE WHEN c.marketing_flag = 'Y' AND c.email_address_on_file_flag = 'Y' AND c.opt_email = 'I' THEN 'YES' ELSE 'NO' END AS email_marketable_flag,
+    CASE WHEN c.marketing_flag = 'Y' AND c.mobile_number_on_file_flag = 'Y' AND c.opt_sms = 'I' THEN 'YES' ELSE 'NO' END AS sms_marketable_flag,
+
+    -- Channel Buckets (Retail + Digital counted in both)
+    CASE WHEN digital_txn > 0 THEN 'Digital' ELSE NULL END AS digital_flag,
+    CASE WHEN retail_txn > 0 THEN 'Retail' ELSE NULL END AS retail_flag,
+
+    -- Country Group
+    CASE
+        WHEN c.country_code IN ('GB') THEN 'UK'
+        WHEN c.country_code IN ('IT') THEN 'IT'
+        WHEN c.country_code IN ('DE') THEN 'DE'
+        WHEN c.country_code IN ('FR') THEN 'FR'
+        WHEN c.country_code IN ('ES') THEN 'ES'
+        WHEN c.country_code IN ('CH') THEN 'CH'
+        ELSE 'Other'
+    END AS country_group
+FROM txn_flags f
+LEFT JOIN WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c 
+ON f.sndcustomer_key = c.customer_key; you can see over here on how Retail, digital and Omnichannel has been created ,
+you can take inspiration in order to create that.
