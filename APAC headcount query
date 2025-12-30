@@ -1,396 +1,60 @@
--- =============================================================================
--- ON-GROUND ASSISTED ONBOARDING ANALYSIS (USING DOMINANCY METRICS TABLE)
--- Objective: Identify high-potential corridors and locations for promoter allocation
--- Countries: Malaysia (MY) & Singapore (SG)
--- Period: 2025 Jan to YTD
--- =============================================================================
+ Parameters (edit as needed)
+SET start_date = DATE('2025-12-21');  -- inclusive week start
+SET end_date   = DATE('2025-12-27');  -- inclusive week end
 
--- Step 1: Create Base Transaction Table with Channel Classification
--- =============================================================================
-CREATE OR REPLACE TABLE CAR_782_TXN_BASE AS
 SELECT
-    DATE_TRUNC('MONTH', txn.rcvpaying_datetime) AS mth_yr,
-    txn.SNDCOUNTRY_CODE AS snd_country,
-    txn.RCVCOUNTRY_CODE AS rcv_country,
-    CONCAT(txn.SNDCOUNTRY_CODE, '-', txn.RCVCOUNTRY_CODE) AS corridor,
-    txn.SNDCUSTOMER_KEY AS customer_key,
-    txn.SNDPRINCIPAL_USD AS principal,
-    txn.MTCN,
-    CASE
-        WHEN UPPER(txn.pricing_channel) IN ('WEB','APP') THEN 'DIGITAL'
-        WHEN UPPER(txn.pricing_channel) IN ('POS','TMT','AIR') THEN 'RETAIL'
-        ELSE 'OTHER'
-    END AS channel_group,
-    cm.nationality
-FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW txn
+    COALESCE(c.COUNTRY_NAME, 'APAC Total') AS COUNTRY_NAME,
+
+    /* Total registrations: first registration date falls in the selected week */
+    COUNT(DISTINCT CASE
+        WHEN CAST(cm.FIRST_REGISTRATION_DATE AS DATE) >= $start_date
+         AND CAST(cm.FIRST_REGISTRATION_DATE AS DATE) <= $end_date
+        THEN cm.CUSTOMER_KEY    
+    END) AS TOTAL_REGISTRATIONS,
+
+    /* New customers: sent a TX in the week, but had NO TX in the prior 52 weeks (APAC send countries) */
+    COUNT(DISTINCT CASE
+        WHEN prior_12m.SNDCUSTOMER_KEY IS NULL
+        THEN t.SNDCUSTOMER_KEY
+    END) AS TOTAL_NEW_CUSTOMERS,
+
+    /* Total customers: distinct senders with a TX in the week */
+    COUNT(DISTINCT t.SNDCUSTOMER_KEY) AS TOTAL_CUSTOMERS,
+
+    /* Total transactions in the week */
+    COUNT(*) AS TOTAL_TRANSACTIONS,
+
+    /* Total revenue (USD) in the week */
+    COALESCE(SUM(t.REVENUE), 0) AS TOTAL_REVENUE
+
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
+JOIN WUDNA.SUMMARY_GEN.COUNTRY_VW c
+  ON t.SNDCOUNTRY_CODE = c.COUNTRY_CODE
+ AND c.SUPER_REGION = 'APAC'
+
 LEFT JOIN WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
-    ON txn.SNDCUSTOMER_KEY = cm.customer_key
-WHERE txn.rcvpaying_datetime >= '2025-01-01'
-  AND txn.rcvpaying_datetime < DATE_TRUNC('DAY', CURRENT_DATE)
-  AND txn.SNDCOUNTRY_CODE IN ('MY','SG');
+  ON cm.CUSTOMER_KEY = t.SNDCUSTOMER_KEY
 
--- Step 2: Customer Channel Behavior Classification (Using Transaction Count Logic)
--- =============================================================================
-CREATE OR REPLACE TABLE CAR_782_CUSTOMER_CLASSIFICATION AS
-WITH channel_txns AS (
-    SELECT
-        snd_country,
-        customer_key,
-        corridor,
-        COUNT(DISTINCT CASE WHEN channel_group = 'DIGITAL' THEN MTCN END) AS digital_txn,
-        COUNT(DISTINCT CASE WHEN channel_group = 'RETAIL' THEN MTCN END) AS retail_txn,
-        MODE(nationality) AS customer_nationality
-    FROM CAR_782_TXN_BASE
-    GROUP BY snd_country, customer_key, corridor
-)
-SELECT
-    ct.snd_country,
-    ct.customer_key,
-    ct.corridor,
-    ct.digital_txn,
-    ct.retail_txn,
-    ct.customer_nationality,
-    -- Channel Classification: Retail + Digital counted in both (like the reference)
-    CASE WHEN ct.digital_txn > 0 THEN 'Digital' ELSE NULL END AS digital_flag,
-    CASE WHEN ct.retail_txn > 0 THEN 'Retail' ELSE NULL END AS retail_flag,
-    -- Customer Type Classification
-    CASE 
-        WHEN ct.digital_txn > 0 AND ct.retail_txn > 0 THEN 'OMNICHANNEL'
-        WHEN ct.digital_txn > 0 AND ct.retail_txn = 0 THEN 'DIGITAL_ONLY'
-        WHEN ct.retail_txn > 0 AND ct.digital_txn = 0 THEN 'RETAIL_ONLY'
-        ELSE 'OTHER'
-    END AS customer_type,
-    -- Get dominant metrics from dominancy table
-    dm.DOMINANT_CORRIDOR,
-    dm.DOMINANT_AGENT_NUMBER,
-    dm.DOMINANT_AGENT_BUSINESS_NAME,
-    dm.DOMINANT_AGENT_NETWORK_NAME,
-    dm.DOMINANT_AGENT_CITY,
-    dm.DOMINANT_AGENT_STATE,
-    dm.DOMINANT_AGENT_REGION
-FROM channel_txns ct
-LEFT JOIN WUDNA.CEX_SANDBOX.SK_DOMINANCY_METRICS dm
-    ON ct.customer_key = dm.SNDCUSTOMER_KEY
-    AND DATE_TRUNC('MONTH', CURRENT_DATE - INTERVAL '1 MONTH') = dm.MTH_YR;
+/* Prior-52-week activity for the same senders (APAC send countries) */
+LEFT JOIN (
+    SELECT DISTINCT x.SNDCUSTOMER_KEY
+    FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW x
+    JOIN WUDNA.SUMMARY_GEN.COUNTRY_VW cv
+      ON x.SNDCOUNTRY_CODE = cv.COUNTRY_CODE
+     AND cv.SUPER_REGION = 'APAC'
+    WHERE x.RCVPAYING_DATETIME IS NOT NULL
+      -- AND NVL(x.REFUND_TRXN, 'N') <> 'Y'
+      AND CAST(x.RCVPAYING_DATETIME AS DATE) >= DATEADD('week', -52, $start_date)
+      AND CAST(x.RCVPAYING_DATETIME AS DATE) <  $start_date  -- strictly before week start
+) prior_12m
+  ON prior_12m.SNDCUSTOMER_KEY = t.SNDCUSTOMER_KEY
 
--- =============================================================================
--- REQUIREMENT 1: TOP 5 OMNICHANNEL USER CORRIDORS BY COUNTRY
--- =============================================================================
+/* Selected week filter (APAC send countries) */
+WHERE t.RCVPAYING_DATETIME IS NOT NULL
+  AND CAST(t.RCVPAYING_DATETIME AS DATE) >= $start_date
+  AND CAST(t.RCVPAYING_DATETIME AS DATE) <= $end_date
+  -- AND NVL(t.REFUND_TRXN, 'N') <> 'Y'
 
--- Malaysia (MY) - Top 5 Omnichannel Corridors
-CREATE OR REPLACE TABLE CAR_782_MY_TOP5_CORRIDORS AS
-SELECT
-    corridor,
-    COUNT(DISTINCT customer_key) AS total_omnichannel_users,
-    RANK() OVER (ORDER BY COUNT(DISTINCT customer_key) DESC) AS corridor_rank
-FROM CAR_782_CUSTOMER_CLASSIFICATION
-WHERE snd_country = 'MY'
-  AND customer_type = 'OMNICHANNEL'
-GROUP BY corridor
-ORDER BY total_omnichannel_users DESC
-LIMIT 5;
-
--- Singapore (SG) - Top 5 Omnichannel Corridors
-CREATE OR REPLACE TABLE CAR_782_SG_TOP5_CORRIDORS AS
-SELECT
-    corridor,
-    COUNT(DISTINCT customer_key) AS total_omnichannel_users,
-    RANK() OVER (ORDER BY COUNT(DISTINCT customer_key) DESC) AS corridor_rank
-FROM CAR_782_CUSTOMER_CLASSIFICATION
-WHERE snd_country = 'SG'
-  AND customer_type = 'OMNICHANNEL'
-GROUP BY corridor
-ORDER BY total_omnichannel_users DESC
-LIMIT 5;
-
--- =============================================================================
--- REQUIREMENT 2: TOP LOCATIONS WITH RETAIL-ONLY USERS (Non-Digital)
--- Based on Top 5 Omnichannel Corridors
--- =============================================================================
-
--- Malaysia (MY) - Top Locations with Retail-Only Users
-CREATE OR REPLACE TABLE CAR_782_MY_TOP_RETAIL_LOCATIONS AS
-WITH top_corridors AS (
-    SELECT corridor FROM CAR_782_MY_TOP5_CORRIDORS
-),
-retail_only_users AS (
-    SELECT 
-        cc.corridor,
-        cc.DOMINANT_AGENT_NUMBER AS network_id,
-        COALESCE(cc.DOMINANT_AGENT_NETWORK_NAME, cc.DOMINANT_AGENT_BUSINESS_NAME) AS network_name,
-        cc.DOMINANT_AGENT_CITY AS agent_city,
-        cc.DOMINANT_AGENT_STATE AS agent_state,
-        cc.DOMINANT_AGENT_REGION AS agent_region,
-        cc.customer_key
-    FROM CAR_782_CUSTOMER_CLASSIFICATION cc
-    INNER JOIN top_corridors tc ON cc.corridor = tc.corridor
-    WHERE cc.snd_country = 'MY'
-      AND cc.customer_type = 'RETAIL_ONLY'
-      AND cc.DOMINANT_AGENT_NUMBER IS NOT NULL
-)
-SELECT
-    corridor,
-    COUNT(DISTINCT customer_key) AS total_retail_users,
-    network_id,
-    network_name,
-    agent_city,
-    agent_state,
-    agent_region,
-    RANK() OVER (PARTITION BY corridor ORDER BY COUNT(DISTINCT customer_key) DESC) AS location_rank
-FROM retail_only_users
-GROUP BY corridor, network_id, network_name, agent_city, agent_state, agent_region
-QUALIFY location_rank <= 10  -- Top 10 locations per corridor
-ORDER BY corridor, total_retail_users DESC;
-
--- Singapore (SG) - Top Locations with Retail-Only Users
-CREATE OR REPLACE TABLE CAR_782_SG_TOP_RETAIL_LOCATIONS AS
-WITH top_corridors AS (
-    SELECT corridor FROM CAR_782_SG_TOP5_CORRIDORS
-),
-retail_only_users AS (
-    SELECT 
-        cc.corridor,
-        cc.DOMINANT_AGENT_NUMBER AS network_id,
-        COALESCE(cc.DOMINANT_AGENT_NETWORK_NAME, cc.DOMINANT_AGENT_BUSINESS_NAME) AS network_name,
-        cc.DOMINANT_AGENT_CITY AS agent_city,
-        cc.DOMINANT_AGENT_STATE AS agent_state,
-        cc.DOMINANT_AGENT_REGION AS agent_region,
-        cc.customer_key
-    FROM CAR_782_CUSTOMER_CLASSIFICATION cc
-    INNER JOIN top_corridors tc ON cc.corridor = tc.corridor
-    WHERE cc.snd_country = 'SG'
-      AND cc.customer_type = 'RETAIL_ONLY'
-      AND cc.DOMINANT_AGENT_NUMBER IS NOT NULL
-)
-SELECT
-    corridor,
-    COUNT(DISTINCT customer_key) AS total_retail_users,
-    network_id,
-    network_name,
-    agent_city,
-    agent_state,
-    agent_region,
-    RANK() OVER (PARTITION BY corridor ORDER BY COUNT(DISTINCT customer_key) DESC) AS location_rank
-FROM retail_only_users
-GROUP BY corridor, network_id, network_name, agent_city, agent_state, agent_region
-QUALIFY location_rank <= 10  -- Top 10 locations per corridor
-ORDER BY corridor, total_retail_users DESC;
-
--- =============================================================================
--- REQUIREMENT 3: NATIONALITY BREAKDOWN OF CORRIDOR CUSTOMERS
--- Based on Top 5 Corridors
--- =============================================================================
-
--- Malaysia (MY) - Nationality Breakdown
-CREATE OR REPLACE TABLE CAR_782_MY_NATIONALITY_BREAKDOWN AS
-WITH top_corridors AS (
-    SELECT corridor FROM CAR_782_MY_TOP5_CORRIDORS
-),
-corridor_nationality AS (
-    SELECT 
-        cc.corridor,
-        cc.customer_nationality,
-        COUNT(DISTINCT cc.customer_key) AS user_count
-    FROM CAR_782_CUSTOMER_CLASSIFICATION cc
-    INNER JOIN top_corridors tc ON cc.corridor = tc.corridor
-    WHERE cc.snd_country = 'MY'
-      AND cc.customer_type = 'RETAIL_ONLY'
-    GROUP BY cc.corridor, cc.customer_nationality
-),
-corridor_totals AS (
-    SELECT 
-        corridor,
-        SUM(user_count) AS total_retail_users
-    FROM corridor_nationality
-    GROUP BY corridor
-)
-SELECT
-    cn.corridor,
-    ct.total_retail_users,
-    cn.customer_nationality AS nationality,
-    cn.user_count AS nationality_count,
-    ROUND(cn.user_count * 100.0 / ct.total_retail_users, 2) AS nationality_percentage
-FROM corridor_nationality cn
-JOIN corridor_totals ct ON cn.corridor = ct.corridor
-WHERE cn.customer_nationality IS NOT NULL
-ORDER BY cn.corridor, cn.user_count DESC;
-
--- Singapore (SG) - Nationality Breakdown
-CREATE OR REPLACE TABLE CAR_782_SG_NATIONALITY_BREAKDOWN AS
-WITH top_corridors AS (
-    SELECT corridor FROM CAR_782_SG_TOP5_CORRIDORS
-),
-corridor_nationality AS (
-    SELECT 
-        cc.corridor,
-        cc.customer_nationality,
-        COUNT(DISTINCT cc.customer_key) AS user_count
-    FROM CAR_782_CUSTOMER_CLASSIFICATION cc
-    INNER JOIN top_corridors tc ON cc.corridor = tc.corridor
-    WHERE cc.snd_country = 'SG'
-      AND cc.customer_type = 'RETAIL_ONLY'
-    GROUP BY cc.corridor, cc.customer_nationality
-),
-corridor_totals AS (
-    SELECT 
-        corridor,
-        SUM(user_count) AS total_retail_users
-    FROM corridor_nationality
-    GROUP BY corridor
-)
-SELECT
-    cn.corridor,
-    ct.total_retail_users,
-    cn.customer_nationality AS nationality,
-    cn.user_count AS nationality_count,
-    ROUND(cn.user_count * 100.0 / ct.total_retail_users, 2) AS nationality_percentage
-FROM corridor_nationality cn
-JOIN corridor_totals ct ON cn.corridor = ct.corridor
-WHERE cn.customer_nationality IS NOT NULL
-ORDER BY cn.corridor, cn.user_count DESC;
-
--- =============================================================================
--- FINAL OUTPUT QUERIES FOR REPORTING
--- =============================================================================
-
--- MALAYSIA (MY) SUMMARY
--- ----------------------
-
--- 1. MY: Top 5 Omnichannel Corridors
-SELECT 
-    'MY - Top 5 Omnichannel Corridors' AS report_section,
-    corridor,
-    total_omnichannel_users
-FROM CAR_782_MY_TOP5_CORRIDORS
-ORDER BY total_omnichannel_users DESC;
-
--- 2. MY: Top Retail-Only Locations by Corridor
-SELECT 
-    'MY - Top Retail Locations' AS report_section,
-    corridor,
-    total_retail_users,
-    network_id,
-    network_name,
-    agent_city,
-    agent_state,
-    agent_region,
-    location_rank
-FROM CAR_782_MY_TOP_RETAIL_LOCATIONS
-ORDER BY corridor, total_retail_users DESC;
-
--- 3. MY: Nationality Breakdown by Corridor
-SELECT 
-    'MY - Nationality Breakdown' AS report_section,
-    corridor,
-    total_retail_users,
-    nationality,
-    nationality_percentage || '%' AS nationality_pct
-FROM CAR_782_MY_NATIONALITY_BREAKDOWN
-ORDER BY corridor, nationality_percentage DESC;
-
--- SINGAPORE (SG) SUMMARY
--- -----------------------
-
--- 1. SG: Top 5 Omnichannel Corridors
-SELECT 
-    'SG - Top 5 Omnichannel Corridors' AS report_section,
-    corridor,
-    total_omnichannel_users
-FROM CAR_782_SG_TOP5_CORRIDORS
-ORDER BY total_omnichannel_users DESC;
-
--- 2. SG: Top Retail-Only Locations by Corridor
-SELECT 
-    'SG - Top Retail Locations' AS report_section,
-    corridor,
-    total_retail_users,
-    network_id,
-    network_name,
-    agent_city,
-    agent_state,
-    agent_region,
-    location_rank
-FROM CAR_782_SG_TOP_RETAIL_LOCATIONS
-ORDER BY corridor, total_retail_users DESC;
-
--- 3. SG: Nationality Breakdown by Corridor
-SELECT 
-    'SG - Nationality Breakdown' AS report_section,
-    corridor,
-    total_retail_users,
-    nationality,
-    nationality_percentage || '%' AS nationality_pct
-FROM CAR_782_SG_NATIONALITY_BREAKDOWN
-ORDER BY corridor, nationality_percentage DESC;
-
--- =============================================================================
--- ADDITIONAL ANALYSIS: Detailed Location Profile for Promoter Deployment
--- =============================================================================
-
--- Malaysia (MY) - Detailed Location Profile with Additional Metrics
-CREATE OR REPLACE TABLE CAR_782_MY_LOCATION_PROFILE AS
-WITH top_corridors AS (
-    SELECT corridor FROM CAR_782_MY_TOP5_CORRIDORS
-)
-SELECT 
-    cc.DOMINANT_AGENT_NUMBER AS network_id,
-    COALESCE(cc.DOMINANT_AGENT_NETWORK_NAME, cc.DOMINANT_AGENT_BUSINESS_NAME) AS network_name,
-    cc.DOMINANT_AGENT_CITY AS city,
-    cc.DOMINANT_AGENT_STATE AS state,
-    cc.DOMINANT_AGENT_REGION AS region,
-    cc.corridor,
-    COUNT(DISTINCT CASE WHEN cc.customer_type = 'RETAIL_ONLY' THEN cc.customer_key END) AS retail_only_users,
-    COUNT(DISTINCT CASE WHEN cc.customer_type = 'OMNICHANNEL' THEN cc.customer_key END) AS omnichannel_users,
-    COUNT(DISTINCT cc.customer_key) AS total_users,
-    ROUND(COUNT(DISTINCT CASE WHEN cc.customer_type = 'RETAIL_ONLY' THEN cc.customer_key END) * 100.0 / 
-          NULLIF(COUNT(DISTINCT cc.customer_key), 0), 2) AS retail_only_percentage,
-    -- Conversion potential score (higher is better)
-    COUNT(DISTINCT CASE WHEN cc.customer_type = 'RETAIL_ONLY' THEN cc.customer_key END) AS conversion_potential_score
-FROM CAR_782_CUSTOMER_CLASSIFICATION cc
-INNER JOIN top_corridors tc ON cc.corridor = tc.corridor
-WHERE cc.snd_country = 'MY'
-  AND cc.DOMINANT_AGENT_NUMBER IS NOT NULL
-GROUP BY 
-    cc.DOMINANT_AGENT_NUMBER,
-    cc.DOMINANT_AGENT_NETWORK_NAME,
-    cc.DOMINANT_AGENT_BUSINESS_NAME,
-    cc.DOMINANT_AGENT_CITY,
-    cc.DOMINANT_AGENT_STATE,
-    cc.DOMINANT_AGENT_REGION,
-    cc.corridor
-HAVING retail_only_users > 0
-ORDER BY conversion_potential_score DESC;
-
--- Singapore (SG) - Detailed Location Profile with Additional Metrics
-CREATE OR REPLACE TABLE CAR_782_SG_LOCATION_PROFILE AS
-WITH top_corridors AS (
-    SELECT corridor FROM CAR_782_SG_TOP5_CORRIDORS
-)
-SELECT 
-    cc.DOMINANT_AGENT_NUMBER AS network_id,
-    COALESCE(cc.DOMINANT_AGENT_NETWORK_NAME, cc.DOMINANT_AGENT_BUSINESS_NAME) AS network_name,
-    cc.DOMINANT_AGENT_CITY AS city,
-    cc.DOMINANT_AGENT_STATE AS state,
-    cc.DOMINANT_AGENT_REGION AS region,
-    cc.corridor,
-    COUNT(DISTINCT CASE WHEN cc.customer_type = 'RETAIL_ONLY' THEN cc.customer_key END) AS retail_only_users,
-    COUNT(DISTINCT CASE WHEN cc.customer_type = 'OMNICHANNEL' THEN cc.customer_key END) AS omnichannel_users,
-    COUNT(DISTINCT cc.customer_key) AS total_users,
-    ROUND(COUNT(DISTINCT CASE WHEN cc.customer_type = 'RETAIL_ONLY' THEN cc.customer_key END) * 100.0 / 
-          NULLIF(COUNT(DISTINCT cc.customer_key), 0), 2) AS retail_only_percentage,
-    -- Conversion potential score (higher is better)
-    COUNT(DISTINCT CASE WHEN cc.customer_type = 'RETAIL_ONLY' THEN cc.customer_key END) AS conversion_potential_score
-FROM CAR_782_CUSTOMER_CLASSIFICATION cc
-INNER JOIN top_corridors tc ON cc.corridor = tc.corridor
-WHERE cc.snd_country = 'SG'
-  AND cc.DOMINANT_AGENT_NUMBER IS NOT NULL
-GROUP BY 
-    cc.DOMINANT_AGENT_NUMBER,
-    cc.DOMINANT_AGENT_NETWORK_NAME,
-    cc.DOMINANT_AGENT_BUSINESS_NAME,
-    cc.DOMINANT_AGENT_CITY,
-    cc.DOMINANT_AGENT_STATE,
-    cc.DOMINANT_AGENT_REGION,
-    cc.corridor
-HAVING retail_only_users > 0
-ORDER BY conversion_potential_score DESC;
+GROUP BY GROUPING SETS ((c.COUNTRY_NAME), ())
+ORDER BY CASE WHEN COALESCE(c.COUNTRY_NAME, 'APAC Total') = 'APAC Total' THEN 1 ELSE 0 END,
+         COUNTRY_NAME;
