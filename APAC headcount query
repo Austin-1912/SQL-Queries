@@ -1,60 +1,13 @@
- Parameters (edit as needed)
-SET start_date = DATE('2025-12-21');  -- inclusive week start
-SET end_date   = DATE('2025-12-27');  -- inclusive week end
+Hi Team,
 
-SELECT
-    COALESCE(c.COUNTRY_NAME, 'APAC Total') AS COUNTRY_NAME,
+May I have a query script that allow me to pull these KPIs?
+Super region: APAC
+Country: All APAC countries
+Period: 21 Dec to 27 Dec (the script should be flexible for me to edit the period range)
 
-    /* Total registrations: first registration date falls in the selected week */
-    COUNT(DISTINCT CASE
-        WHEN CAST(cm.FIRST_REGISTRATION_DATE AS DATE) >= $start_date
-         AND CAST(cm.FIRST_REGISTRATION_DATE AS DATE) <= $end_date
-        THEN cm.CUSTOMER_KEY    
-    END) AS TOTAL_REGISTRATIONS,
-
-    /* New customers: sent a TX in the week, but had NO TX in the prior 52 weeks (APAC send countries) */
-    COUNT(DISTINCT CASE
-        WHEN prior_12m.SNDCUSTOMER_KEY IS NULL
-        THEN t.SNDCUSTOMER_KEY
-    END) AS TOTAL_NEW_CUSTOMERS,
-
-    /* Total customers: distinct senders with a TX in the week */
-    COUNT(DISTINCT t.SNDCUSTOMER_KEY) AS TOTAL_CUSTOMERS,
-
-    /* Total transactions in the week */
-    COUNT(*) AS TOTAL_TRANSACTIONS,
-
-    /* Total revenue (USD) in the week */
-    COALESCE(SUM(t.REVENUE), 0) AS TOTAL_REVENUE
-
-FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
-JOIN WUDNA.SUMMARY_GEN.COUNTRY_VW c
-  ON t.SNDCOUNTRY_CODE = c.COUNTRY_CODE
- AND c.SUPER_REGION = 'APAC'
-
-LEFT JOIN WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
-  ON cm.CUSTOMER_KEY = t.SNDCUSTOMER_KEY
-
-/* Prior-52-week activity for the same senders (APAC send countries) */
-LEFT JOIN (
-    SELECT DISTINCT x.SNDCUSTOMER_KEY
-    FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW x
-    JOIN WUDNA.SUMMARY_GEN.COUNTRY_VW cv
-      ON x.SNDCOUNTRY_CODE = cv.COUNTRY_CODE
-     AND cv.SUPER_REGION = 'APAC'
-    WHERE x.RCVPAYING_DATETIME IS NOT NULL
-      -- AND NVL(x.REFUND_TRXN, 'N') <> 'Y'
-      AND CAST(x.RCVPAYING_DATETIME AS DATE) >= DATEADD('week', -52, $start_date)
-      AND CAST(x.RCVPAYING_DATETIME AS DATE) <  $start_date  -- strictly before week start
-) prior_12m
-  ON prior_12m.SNDCUSTOMER_KEY = t.SNDCUSTOMER_KEY
-
-/* Selected week filter (APAC send countries) */
-WHERE t.RCVPAYING_DATETIME IS NOT NULL
-  AND CAST(t.RCVPAYING_DATETIME AS DATE) >= $start_date
-  AND CAST(t.RCVPAYING_DATETIME AS DATE) <= $end_date
-  -- AND NVL(t.REFUND_TRXN, 'N') <> 'Y'
-
-GROUP BY GROUPING SETS ((c.COUNTRY_NAME), ())
-ORDER BY CASE WHEN COALESCE(c.COUNTRY_NAME, 'APAC Total') = 'APAC Total' THEN 1 ELSE 0 END,
-         COUNTRY_NAME;
+Metrics:
+Total registration
+Total new Customers
+Total customers
+Total transactions
+Total Revenue
