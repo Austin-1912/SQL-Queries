@@ -1,60 +1,473 @@
--- Parameters (edit as needed)
-SET start_date = DATE('2025-12-21');  -- inclusive week start
-SET end_date   = DATE('2025-12-27');  -- inclusive week end
+--APP KYC INITITATIONS
+CREATE OR REPLACE TABLE CG_PRODUCT_ANALYTICS_PH_MONITORING_TBL_2 AS 
 
 SELECT
-    COALESCE(c.COUNTRY_NAME, 'APAC Total') AS COUNTRY_NAME,
+'KYC Inititation' AS KPI,
+platform,
+DATE_TRUNC(MONTH, DATE(EVENT_TIME)) AS MTH_YR,
+COUNT(DISTINCT AMPLITUDE_ID) AS VOLUME,
+CASE WHEN EVENT_PROPERTIES:sender_country :: text = 'PH' THEN 'PHILIPPINES'
+     WHEN EVENT_PROPERTIES:sender_country :: text = 'IN' THEN 'INDIA' END SEND_COUNTRY
+FROM WUDNA.SUMMARY_GEN.EVENTS_351757_VW
+WHERE  EVENT_TYPE = 'api_initiateCustomerVerification' 
+          AND EVENT_PROPERTIES:identityVerificationStatus = 'I'
+          AND EVENT_PROPERTIES:api_response_code = 0
+          AND EVENT_PROPERTIES:sender_country in  ('PH', 'IN')
+          AND EVENT_PROPERTIES:wu_platform IN ('exp_intl_ios_app','exp_intl_android_app')
 
-    /* Total registrations: first registration date falls in the selected week */
-    COUNT(DISTINCT CASE
-        WHEN DATE(cm.FIRST_REGISTRATION_DATE) >= $start_date
-         AND DATE(cm.FIRST_REGISTRATION_DATE) <= $end_date
-        THEN cm.CUSTOMER_KEY    
-    END) AS TOTAL_REGISTRATIONS,
+AND DATE_TRUNC(MONTH,EVENT_TIME) >= '2025-08-01'
+GROUP BY ALL      
+;
+select * from CG_PRODUCT_ANALYTICS_PH_MONITORING_TBL_2;
+----------------------------------------------------------------------------------------------
+--WEB KYC INITITATIONS
+CREATE OR REPLACE TABLE CG_PRODUCT_ANALYTICS_PH_MONITORING_TBL_3 AS 
 
-    /* New customers: sent a TX in the week, but had NO TX in the prior 52 weeks (APAC send countries) */
-    COUNT(DISTINCT CASE
-        WHEN prior_12m.SNDCUSTOMER_KEY IS NULL
-        THEN t.SNDCUSTOMER_KEY
-    END) AS TOTAL_NEW_CUSTOMERS,
+SELECT
+'KYC Inititation' AS KPI,
+platform,
+DATE_TRUNC(MONTH, DATE(EVENT_TIME)) AS MTH_YR,
+COUNT(DISTINCT AMPLITUDE_ID) AS VOLUME,
+CASE WHEN EVENT_PROPERTIES:sender_country :: text = 'PH' THEN 'PHILIPPINES'
+     WHEN EVENT_PROPERTIES:sender_country :: text = 'IN' THEN 'INDIA' END SEND_COUNTRY
+FROM WUDNA.SUMMARY_GEN.EVENTS_351757_VW
+WHERE  EVENT_TYPE = 'api_initiateCustomerVerification' 
+          AND EVENT_PROPERTIES:identityVerificationStatus = 'I'
+          AND EVENT_PROPERTIES:api_response_code = 0
+          AND EVENT_PROPERTIES:sender_country in  ('PH', 'IN')
+          AND EVENT_PROPERTIES:wu_platform = 'exp_responsive_web'
 
-    /* Total customers: distinct senders with a TX in the week */
-    COUNT(DISTINCT t.SNDCUSTOMER_KEY) AS TOTAL_CUSTOMERS,
+AND DATE_TRUNC(MONTH,EVENT_TIME) >= '2025-08-01'
+GROUP BY ALL      
+;
+----------------------------------------------------------------------------------------------
 
-    /* Total transactions in the week */
-    COUNT(*) AS TOTAL_TRANSACTIONS,
+--APP KYC COMPLETIONS
+CREATE OR REPLACE TABLE CG_PRODUCT_ANALYTICS_PH_MONITORING_TBL_5 AS 
 
-    /* Total revenue (USD) in the week */
-    COALESCE(SUM(t.REVENUE), 0) AS TOTAL_REVENUE
+WITH BASE AS (
+SELECT
+EVENT_TIME,
+AMPLITUDE_ID,
+FROM WUDNA.SUMMARY_GEN.EVENTS_351757_VW
+WHERE (  EVENT_TYPE = 'api_initiateCustomerVerification' 
+          AND EVENT_PROPERTIES:identityVerificationStatus = 'I'
+          AND EVENT_PROPERTIES:api_response_code = 0
+          AND EVENT_PROPERTIES:sender_country in ('PH', 'IN')
+          AND EVENT_PROPERTIES:wu_platform IN ('exp_intl_ios_app','exp_intl_android_app')
+      ) 
+AND DATE_TRUNC(MONTH,EVENT_TIME) >= '2025-08-01'
+)
+SELECT
+'KYC Completion' AS KPI,
+platform,
+DATE_TRUNC(MONTH, DATE(A.EVENT_TIME)) AS MTH_YR,
+COUNT(DISTINCT A.AMPLITUDE_ID) AS VOLUME,
+CASE WHEN EVENT_PROPERTIES:sender_country :: text = 'PH' THEN 'PHILIPPINES'
+     WHEN EVENT_PROPERTIES:sender_country :: text = 'IN' THEN 'INDIA' END SEND_COUNTRY
+FROM WUDNA.SUMMARY_GEN.EVENTS_351757_VW A
+INNER JOIN BASE B ON A.AMPLITUDE_ID = B.AMPLITUDE_ID
+WHERE (  EVENT_TYPE = 'api_verificationStatus' 
+          AND EVENT_PROPERTIES:identityVerificationStatus = 'Y'
+          AND EVENT_PROPERTIES:api_response_code = 0
+          AND EVENT_PROPERTIES:sender_country in ('PH', 'IN')
+          AND EVENT_PROPERTIES:wu_platform IN ('exp_intl_ios_app','exp_intl_android_app')
+      )
+AND DATE_TRUNC(MONTH,A.EVENT_TIME) >= '2025-08-01'
+AND DATEDIFF(DAY, A.EVENT_TIME, B.EVENT_TIME) <= 1
+GROUP BY ALL
+;
 
-FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
-JOIN WUDNA.SUMMARY_GEN.COUNTRY_VW c
-  ON t.SNDCOUNTRY_CODE = c.COUNTRY_CODE
- AND c.SUPER_REGION = 'APAC'
+select * from CG_PRODUCT_ANALYTICS_PH_MONITORING_TBL_5;
+----------------------------------------------------------------------------------------------
+--WEB KYC COMPLETIONS
+CREATE OR REPLACE TABLE CG_PRODUCT_ANALYTICS_PH_MONITORING_TBL_6 AS 
 
-LEFT JOIN WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
-  ON cm.CUSTOMER_KEY = t.SNDCUSTOMER_KEY
+WITH BASE AS (
+SELECT
+EVENT_TIME,
+AMPLITUDE_ID,
+FROM WUDNA.SUMMARY_GEN.EVENTS_351757_VW
+WHERE 
+      (  EVENT_TYPE = 'api_initiateCustomerVerification' 
+          AND EVENT_PROPERTIES:identityVerificationStatus = 'I'
+          AND EVENT_PROPERTIES:api_response_code = 0
+          AND EVENT_PROPERTIES:sender_country in ('PH', 'IN')
+          AND EVENT_PROPERTIES:wu_platform = 'exp_responsive_web'
+      )
+AND DATE_TRUNC(MONTH,EVENT_TIME) >= '2025-08-01'
+)
+SELECT
+'KYC Completion' AS KPI,
+platform,
+DATE_TRUNC(MONTH, DATE(A.EVENT_TIME)) AS MTH_YR,
+COUNT(DISTINCT A.AMPLITUDE_ID) AS VOLUME,
+CASE WHEN EVENT_PROPERTIES:sender_country :: text = 'PH' THEN 'PHILIPPINES'
+     WHEN EVENT_PROPERTIES:sender_country :: text = 'IN' THEN 'INDIA' END SEND_COUNTRY
+FROM WUDNA.SUMMARY_GEN.EVENTS_351757_VW A
+INNER JOIN BASE B ON A.AMPLITUDE_ID = B.AMPLITUDE_ID
+WHERE (  EVENT_TYPE = 'api_verificationStatus' 
+          AND EVENT_PROPERTIES:identityVerificationStatus = 'Y'
+          AND EVENT_PROPERTIES:api_response_code = 0
+          AND EVENT_PROPERTIES:sender_country in ('PH', 'IN')
+          AND EVENT_PROPERTIES:wu_platform ='exp_responsive_web'
+      )
+AND DATE_TRUNC(MONTH,A.EVENT_TIME) >= '2025-08-01'
+AND DATEDIFF(DAY, A.EVENT_TIME, B.EVENT_TIME) <= 1
+GROUP BY ALL
+;
+----------------------------------------------------------------------------------------------
 
-/* Prior-52-week activity for the same senders (APAC send countries) */
-LEFT JOIN (
-    SELECT DISTINCT x.SNDCUSTOMER_KEY
-    FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW x
-    JOIN WUDNA.SUMMARY_GEN.COUNTRY_VW cv
-      ON x.SNDCOUNTRY_CODE = cv.COUNTRY_CODE
-     AND cv.SUPER_REGION = 'APAC'
-    WHERE x.RCVPAYING_DATETIME IS NOT NULL
-      -- AND NVL(x.REFUND_TRXN, 'N') <> 'Y'
-      AND DATE(x.RCVPAYING_DATETIME) >= DATEADD('week', -52, $start_date)
-      AND DATE(x.RCVPAYING_DATETIME) <  $start_date  -- strictly before week start
-) prior_12m
-  ON prior_12m.SNDCUSTOMER_KEY = t.SNDCUSTOMER_KEY
+--APP SUCCESSFUL LOGINS
+CREATE OR REPLACE TABLE CG_PRODUCT_ANALYTICS_PH_MONITORING_TBL_8 AS 
 
-/* Selected week filter (APAC send countries) */
-WHERE t.RCVPAYING_DATETIME IS NOT NULL
-  AND DATE(t.RCVPAYING_DATETIME) >= $start_date
-  AND DATE(t.RCVPAYING_DATETIME) <= $end_date
-  -- AND NVL(t.REFUND_TRXN, 'N') <> 'Y'
+SELECT
+'Successful Logins' AS KPI,
+platform,
+DATE_TRUNC(MONTH, DATE(EVENT_TIME)) AS MTH_YR,
+COUNT(DISTINCT AMPLITUDE_ID) AS VOLUME,
+CASE WHEN EVENT_PROPERTIES:sender_country :: text = 'PH' THEN 'PHILIPPINES'
+     WHEN EVENT_PROPERTIES:sender_country :: text = 'IN' THEN 'INDIA' END SEND_COUNTRY
+FROM WUDNA.SUMMARY_GEN.EVENTS_351757_VW
+WHERE (  EVENT_TYPE = 'api_signIn' OR EVENT_TYPE = 'api_refresh' OR EVENT_TYPE = 'api_loginWithOTP' ) 
+          AND EVENT_PROPERTIES:api_response_code IN (0,'C1133','C1139','C1142')
+          AND EVENT_PROPERTIES:sender_country in ('PH', 'IN')
+          AND EVENT_PROPERTIES:wu_platform IN ('exp_intl_ios_app','exp_intl_android_app')--,'exp_responsive_web')
 
-GROUP BY GROUPING SETS ((c.COUNTRY_NAME), ())
-ORDER BY CASE WHEN COALESCE(c.COUNTRY_NAME, 'APAC Total') = 'APAC Total' THEN 1 ELSE 0 END,
-         COUNTRY_NAME;
+AND DATE_TRUNC(MONTH,EVENT_TIME) >= '2025-08-01'
+GROUP BY ALL      
+;
+
+select EVENT_PROPERTIES:sender_country :: text from WUDNA.SUMMARY_GEN.EVENTS_351757_VW
+where EVENT_PROPERTIES:sender_country in ('PH', 'IN') limit 5000;
+----------------------------------------------------------------------------------------------
+--WEB SUCCESSFUL LOGINS
+CREATE OR REPLACE TABLE CG_PRODUCT_ANALYTICS_PH_MONITORING_TBL_9 AS 
+
+SELECT
+'Successful Logins' AS KPI,
+platform,
+DATE_TRUNC(MONTH, DATE(EVENT_TIME)) AS MTH_YR,
+COUNT(DISTINCT AMPLITUDE_ID) AS VOLUME,
+CASE WHEN EVENT_PROPERTIES:sender_country :: text = 'PH' THEN 'PHILIPPINES'
+     WHEN EVENT_PROPERTIES:sender_country :: text = 'IN' THEN 'INDIA' END SEND_COUNTRY
+FROM WUDNA.SUMMARY_GEN.EVENTS_351757_VW
+WHERE (  EVENT_TYPE = 'api_signIn' OR EVENT_TYPE = 'api_refresh' OR EVENT_TYPE = 'api_loginWithOTP' ) 
+          AND EVENT_PROPERTIES:api_response_code IN (0,'C1133','C1139','C1142')
+          AND EVENT_PROPERTIES:sender_country in ('PH', 'IN')
+          AND EVENT_PROPERTIES:wu_platform = 'exp_responsive_web'
+
+AND DATE_TRUNC(MONTH,EVENT_TIME) >= '2025-08-01'
+GROUP BY ALL      
+;
+----------------------------------------------------------------------------------------------
+--iOS DOWNLOADS
+CREATE OR REPLACE TABLE CG_PRODUCT_ANALYTICS_PH_MONITORING_TBL_10 AS 
+
+SELECT
+'Downloads' AS KPI,
+platform,
+DATE_TRUNC(MONTH, DATE(EVENT_TIME)) AS MTH_YR,
+COUNT(DISTINCT AMPLITUDE_ID) AS VOLUME,
+CASE WHEN EVENT_PROPERTIES:sender_country :: text = 'PH' THEN 'PHILIPPINES'
+     WHEN EVENT_PROPERTIES:sender_country :: text = 'IN' THEN 'INDIA' END SEND_COUNTRY
+FROM WUDNA.SUMMARY_GEN.EVENTS_351757_VW
+WHERE (  EVENT_TYPE = 'app_[installed]' 
+          AND EVENT_PROPERTIES:sender_country in ('PH', 'IN')
+          AND PLATFORM = 'iOS'
+          AND VERSION_NAME = '1.0'
+      )
+AND DATE_TRUNC(MONTH,EVENT_TIME) >= '2025-08-01'
+GROUP BY ALL      
+;
+----------------------------------------------------------------------------------------------
+--Android DOWNLOADS
+CREATE OR REPLACE TABLE CG_PRODUCT_ANALYTICS_PH_MONITORING_TBL_11 AS 
+
+SELECT
+'Downloads' AS KPI,
+platform,
+DATE_TRUNC(MONTH, DATE(EVENT_TIME)) AS MTH_YR,
+COUNT(DISTINCT AMPLITUDE_ID) AS VOLUME,
+CASE WHEN EVENT_PROPERTIES:sender_country :: text = 'PH' THEN 'PHILIPPINES'
+     WHEN EVENT_PROPERTIES:sender_country :: text = 'IN' THEN 'INDIA' END SEND_COUNTRY
+FROM WUDNA.SUMMARY_GEN.EVENTS_351757_VW
+WHERE (  EVENT_TYPE = 'app_[installed]' 
+          AND EVENT_PROPERTIES:sender_country in ('PH', 'IN')
+          AND PLATFORM = 'Android'
+          AND VERSION_NAME = '1.0'
+      )
+AND DATE_TRUNC(MONTH,EVENT_TIME) >= '2025-08-01'
+GROUP BY ALL      
+;
+----------------------------------------------------------------------------------------------
+
+--APP REQUEST MONEY
+CREATE OR REPLACE TABLE CG_PRODUCT_ANALYTICS_PH_MONITORING_TBL_13 AS 
+
+SELECT
+'Request Money Initiation' AS KPI,
+platform,
+DATE_TRUNC(MONTH, DATE(EVENT_TIME)) AS MTH_YR,
+COUNT(DISTINCT AMPLITUDE_ID) AS VOLUME,
+CASE WHEN EVENT_PROPERTIES:sender_country :: text = 'PH' THEN 'PHILIPPINES'
+     WHEN EVENT_PROPERTIES:sender_country :: text = 'IN' THEN 'INDIA' END SEND_COUNTRY
+FROM WUDNA.SUMMARY_GEN.EVENTS_351757_VW
+WHERE 
+     (   EVENT_TYPE = 'page_request-money' 
+          AND EVENT_PROPERTIES:sender_country in ('PH', 'IN')
+          AND EVENT_PROPERTIES:wu_platform IN ('exp_intl_ios_app','exp_intl_android_app')
+          AND VERSION_NAME IN ('1.0','1.1')
+      )
+AND DATE_TRUNC(MONTH,EVENT_TIME) >= '2025-08-01'
+GROUP BY ALL      
+;
+----------------------------------------------------------------------------------------------
+--WEB REQUEST MONEY
+CREATE OR REPLACE TABLE CG_PRODUCT_ANALYTICS_PH_MONITORING_TBL_14 AS 
+
+SELECT
+'Request Money Initiation' AS KPI,
+platform,
+DATE_TRUNC(MONTH, DATE(EVENT_TIME)) AS MTH_YR,
+COUNT(DISTINCT AMPLITUDE_ID) AS VOLUME,
+CASE WHEN EVENT_PROPERTIES:sender_country :: text = 'PH' THEN 'PHILIPPINES'
+     WHEN EVENT_PROPERTIES:sender_country :: text = 'IN' THEN 'INDIA' END SEND_COUNTRY
+FROM WUDNA.SUMMARY_GEN.EVENTS_351757_VW
+WHERE (  EVENT_TYPE = 'page_request-money' 
+          AND EVENT_PROPERTIES:sender_country in ('PH', 'IN')
+          AND EVENT_PROPERTIES:wu_platform = 'exp_responsive_web'
+     ) 
+AND DATE_TRUNC(MONTH,EVENT_TIME) >= '2025-08-01'
+GROUP BY ALL      
+;
+
+----------------------------------------------------------------------------------------------
+
+--APP SUCCESSFUL REQUEST MONEY
+CREATE OR REPLACE TABLE CG_PRODUCT_ANALYTICS_PH_MONITORING_TBL_16 AS 
+
+WITH BASE AS (
+SELECT
+EVENT_TIME,
+AMPLITUDE_ID,
+
+FROM WUDNA.SUMMARY_GEN.EVENTS_351757_VW
+WHERE 
+    
+     (   EVENT_TYPE = 'page_request-money' 
+          AND EVENT_PROPERTIES:sender_country in ('PH', 'IN')
+          AND EVENT_PROPERTIES:wu_platform IN ('exp_intl_ios_app','exp_intl_android_app')
+          AND VERSION_NAME IN ('1.0','1.1')
+      )
+AND DATE_TRUNC(MONTH,EVENT_TIME) >= '2025-08-01'
+)
+SELECT
+'Request Money Success'  AS KPI,
+platform,
+DATE_TRUNC(MONTH, DATE(A.EVENT_TIME)) AS MTH_YR,
+COUNT(DISTINCT A.AMPLITUDE_ID) AS VOLUME,
+CASE WHEN EVENT_PROPERTIES:sender_country :: text = 'PH' THEN 'PHILIPPINES'
+     WHEN EVENT_PROPERTIES:sender_country :: text = 'IN' THEN 'INDIA' END SEND_COUNTRY
+FROM WUDNA.SUMMARY_GEN.EVENTS_351757_VW A
+INNER JOIN BASE B ON A.AMPLITUDE_ID = B.AMPLITUDE_ID
+WHERE (  EVENT_TYPE = 'page_request-money-receipt' 
+          AND EVENT_PROPERTIES:sender_country in ('PH', 'IN')
+          AND EVENT_PROPERTIES:wu_platform IN ('exp_intl_ios_app','exp_intl_android_app')--, 'exp_responsive_web')
+     )
+AND DATE_TRUNC(MONTH,A.EVENT_TIME) >= '2025-08-01'
+AND DATEDIFF(DAY, A.EVENT_TIME, B.EVENT_TIME) <= 1
+GROUP BY ALL
+;
+----------------------------------------------------------------------------------------------
+--WEB SUCCESSFUL REQUEST MONEY
+CREATE OR REPLACE TABLE CG_PRODUCT_ANALYTICS_PH_MONITORING_TBL_17 AS 
+
+WITH BASE AS (
+SELECT
+EVENT_TIME,
+AMPLITUDE_ID,
+
+FROM WUDNA.SUMMARY_GEN.EVENTS_351757_VW
+WHERE 
+    
+      (  EVENT_TYPE = 'page_request-money' 
+          AND EVENT_PROPERTIES:sender_country in ('PH', 'IN')
+          AND EVENT_PROPERTIES:wu_platform = 'exp_responsive_web'
+     ) 
+AND DATE_TRUNC(MONTH,EVENT_TIME) >= '2025-08-01'
+)
+SELECT
+'Request Money Success'  AS KPI,
+platform,
+DATE_TRUNC(MONTH, DATE(A.EVENT_TIME)) AS MTH_YR,
+COUNT(DISTINCT A.AMPLITUDE_ID) AS VOLUME,
+CASE WHEN EVENT_PROPERTIES:sender_country :: text = 'PH' THEN 'PHILIPPINES'
+     WHEN EVENT_PROPERTIES:sender_country :: text = 'IN' THEN 'INDIA' END SEND_COUNTRY
+FROM WUDNA.SUMMARY_GEN.EVENTS_351757_VW A
+INNER JOIN BASE B ON A.AMPLITUDE_ID = B.AMPLITUDE_ID
+WHERE (  EVENT_TYPE = 'page_request-money-receipt' 
+          AND EVENT_PROPERTIES:sender_country in ('PH', 'IN')
+          AND EVENT_PROPERTIES:wu_platform = 'exp_responsive_web'
+     )
+AND DATE_TRUNC(MONTH,A.EVENT_TIME) >= '2025-08-01'
+AND DATEDIFF(DAY, A.EVENT_TIME, B.EVENT_TIME) <= 1
+GROUP BY ALL
+;
+----------------------------------------------------------------------------------------------
+
+-- APP SUCCESSFUL FULFILLMENT REQUEST MONEY
+CREATE OR REPLACE TABLE CG_PRODUCT_ANALYTICS_PH_MONITORING_TBL_19 AS 
+
+WITH BASE AS (
+SELECT
+EVENT_TIME,
+AMPLITUDE_ID,
+
+FROM WUDNA.SUMMARY_GEN.EVENTS_351757_VW
+WHERE 
+    
+      (  EVENT_TYPE = 'api_findRequestMoneyByToken' 
+          AND EVENT_PROPERTIES:api_response_code = 0
+          AND EVENT_PROPERTIES:sender_country in ('PH', 'IN')
+          AND EVENT_PROPERTIES:wu_platform IN ('exp_intl_ios_app','exp_intl_android_app')
+     ) 
+AND DATE_TRUNC(MONTH,EVENT_TIME) >= '2025-08-01'
+)
+SELECT
+'Successful Request Money Fullfilment'  AS KPI,
+platform,
+DATE_TRUNC(MONTH, DATE(A.EVENT_TIME)) AS MTH_YR,
+COUNT(DISTINCT A.AMPLITUDE_ID) AS VOLUME,
+CASE WHEN EVENT_PROPERTIES:sender_country :: text = 'PH' THEN 'PHILIPPINES'
+     WHEN EVENT_PROPERTIES:sender_country :: text = 'IN' THEN 'INDIA' END SEND_COUNTRY
+FROM WUDNA.SUMMARY_GEN.EVENTS_351757_VW A
+INNER JOIN BASE B ON A.AMPLITUDE_ID = B.AMPLITUDE_ID
+WHERE (  EVENT_TYPE = 'page_receipt' 
+          AND EVENT_PROPERTIES:sender_country in ('PH', 'IN')
+          AND EVENT_PROPERTIES:wu_platform IN ('exp_intl_ios_app','exp_intl_android_app')
+     )
+AND DATE_TRUNC(MONTH,A.EVENT_TIME) >= '2025-08-01'
+AND DATEDIFF(DAY, A.EVENT_TIME, B.EVENT_TIME) <= 1
+GROUP BY ALL
+;
+----------------------------------------------------------------------------------------------
+-- WEB SUCCESSFUL FULFILLMENT REQUEST MONEY
+CREATE OR REPLACE TABLE CG_PRODUCT_ANALYTICS_PH_MONITORING_TBL_20 AS 
+
+WITH BASE AS (
+SELECT
+EVENT_TIME,
+AMPLITUDE_ID,
+
+FROM WUDNA.SUMMARY_GEN.EVENTS_351757_VW
+WHERE 
+    
+      (  EVENT_TYPE = 'api_findRequestMoneyByToken' 
+          AND EVENT_PROPERTIES:api_response_code = 0
+          AND EVENT_PROPERTIES:sender_country in ('PH', 'IN')
+          AND EVENT_PROPERTIES:wu_platform = 'exp_responsive_web'
+     ) 
+AND DATE_TRUNC(MONTH,EVENT_TIME) >= '2025-08-01'
+)
+SELECT
+'Successful Request Money Fullfilment'  AS KPI,
+platform,
+DATE_TRUNC(MONTH, DATE(A.EVENT_TIME)) AS MTH_YR,
+COUNT(DISTINCT A.AMPLITUDE_ID) AS VOLUME,
+CASE WHEN EVENT_PROPERTIES:sender_country :: text = 'PH' THEN 'PHILIPPINES'
+     WHEN EVENT_PROPERTIES:sender_country :: text = 'IN' THEN 'INDIA' END SEND_COUNTRY
+FROM WUDNA.SUMMARY_GEN.EVENTS_351757_VW A
+INNER JOIN BASE B ON A.AMPLITUDE_ID = B.AMPLITUDE_ID
+WHERE (  EVENT_TYPE = 'page_receipt' 
+          AND EVENT_PROPERTIES:sender_country in ('PH', 'IN')
+          AND EVENT_PROPERTIES:wu_platform = 'exp_responsive_web'
+     )
+AND DATE_TRUNC(MONTH,A.EVENT_TIME) >= '2025-08-01'
+AND DATEDIFF(DAY, A.EVENT_TIME, B.EVENT_TIME) <= 1
+GROUP BY ALL
+;
+
+----------------------------------------------------------------------------------------------
+
+-- Receiver Redirects Initiation
+create table monthly_rcv_redirect_ini_table as 
+SELECT
+'Receiver Redirect Initiation' AS KPI,
+platform,
+DATE_TRUNC(MONTH, DATE(EVENT_TIME)) AS MTH_YR,
+COUNT(DISTINCT AMPLITUDE_ID) AS VOLUME,
+CASE WHEN EVENT_PROPERTIES:sender_country :: text = 'PH' THEN 'PHILIPPINES'
+     WHEN EVENT_PROPERTIES:sender_country :: text = 'IN' THEN 'INDIA' END SEND_COUNTRY
+FROM WUDNA.SUMMARY_GEN.EVENTS_351757_VW
+WHERE (  EVENT_TYPE = 'api_redirectValidate' 
+          AND EVENT_PROPERTIES:api_response_code = 0
+          AND EVENT_PROPERTIES:sender_country = 'PH'
+          AND EVENT_PROPERTIES:wu_platform IN ('exp_intl_ios_app','exp_intl_android_app','exp_responsive_web')
+     ) 
+AND DATE_TRUNC(MONTH,EVENT_TIME) >= '2025-08-01'
+GROUP BY ALL      
+;
+
+select * from monthly_rcv_redirect_ini_table ;
+ ----------------------------------------------------------------------------------------------
+--Successful Receiver Redirects
+create table monthly_rcv_redirect_suc_table as 
+WITH BASE AS (
+SELECT
+EVENT_TIME,
+AMPLITUDE_ID
+FROM WUDNA.SUMMARY_GEN.EVENTS_351757_VW
+WHERE (  EVENT_TYPE = 'api_redirectValidate' 
+          AND EVENT_PROPERTIES:api_response_code = 0
+          AND EVENT_PROPERTIES:sender_country = 'PH'
+          AND EVENT_PROPERTIES:wu_platform IN ('exp_intl_ios_app','exp_intl_android_app','exp_responsive_web')
+      ) 
+AND DATE_TRUNC(MONTH,EVENT_TIME) >= '2025-08-01'
+)
+SELECT
+'Successful Receiver Redirect' AS KPI,
+platform,
+DATE_TRUNC(MONTH, DATE(A.EVENT_TIME)) AS MTH_YR,
+COUNT(DISTINCT A.AMPLITUDE_ID) AS VOLUME,
+CASE WHEN EVENT_PROPERTIES:sender_country :: text = 'PH' THEN 'PHILIPPINES'
+     WHEN EVENT_PROPERTIES:sender_country :: text = 'IN' THEN 'INDIA' END SEND_COUNTRY
+FROM WUDNA.SUMMARY_GEN.EVENTS_351757_VW A
+INNER JOIN BASE B ON A.AMPLITUDE_ID = B.AMPLITUDE_ID
+WHERE (  EVENT_TYPE = 'page_receiver-redirect-receipt' 
+          AND EVENT_PROPERTIES:sender_country = 'PH'
+          AND EVENT_PROPERTIES:wu_platform IN ('exp_intl_ios_app','exp_intl_android_app','exp_responsive_web')
+      )
+AND DATE_TRUNC(MONTH,A.EVENT_TIME) >= '2025-08-01'
+AND DATEDIFF(DAY, A.EVENT_TIME, B.EVENT_TIME) <= 1
+GROUP BY ALL
+;
+ select * from monthly_rcv_redirect_suc_table;
+ ----------------------------------------------------------------------------------------------
+--Successful registrations
+create table monthly_regr_table as 
+SELECT
+'Successful Registrations' AS KPI,
+platform,
+DATE_TRUNC(MONTH, DATE(EVENT_TIME)) AS MTH_YR,
+COUNT(DISTINCT AMPLITUDE_ID) AS VOLUME,
+CASE WHEN EVENT_PROPERTIES:sender_country :: text = 'PH' THEN 'PHILIPPINES'
+     WHEN EVENT_PROPERTIES:sender_country :: text = 'IN' THEN 'INDIA' END SEND_COUNTRY
+FROM WUDNA.SUMMARY_GEN.EVENTS_351757_VW
+WHERE (  EVENT_TYPE = 'api_addCustomer' 
+          AND EVENT_PROPERTIES:api_response_code = 0
+          AND EVENT_PROPERTIES:sender_country = 'PH'
+          AND EVENT_PROPERTIES:wu_platform IN ('exp_intl_ios_app','exp_intl_android_app')
+          AND VERSION_NAME IN ('1.0','1.1')
+     ) 
+     OR (  EVENT_TYPE = 'api_addCustomer' 
+          AND EVENT_PROPERTIES:api_response_code = 0
+          AND EVENT_PROPERTIES:sender_country = 'PH'
+          AND EVENT_PROPERTIES:wu_platform  = 'exp_responsive_web'
+     )
+AND DATE_TRUNC(MONTH,EVENT_TIME) >= '2025-08-01'
+GROUP BY ALL      
+;
+
+select * from monthly_regr_table;
+----------------------------------------------------------------------------------------------
