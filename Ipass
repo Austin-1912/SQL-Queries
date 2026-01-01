@@ -1,30 +1,33 @@
-We completed a weekly data pull for total digital new customers in the Greater Toronto Area (GTA), Canada. This analysis was conducted to measure the impact of a large Out-Of-Home (OOH) media campaign on digital new customer acquisition.
-The campaign ran from September 30 to November 30, and we included two pre-campaign weeks for baseline comparison:
+Hi Austin/Naveen,
+
+As discussed, Please add 'USER_ID' in the amplitude dataset which required to get Customer-UMN, once added, join the account summary on USER_ID = MD5(CUSTOMER_UMN) to get UMN/GID mapping against the Amplitude-ID.
+
+Please find the code logic below: 
+1.	Replicate below code with your amplitude source table to add USER_ID in your dataset.
+
+    create or replace table SP_AMPLITUDE_NC_FUNNEL_CNTRY_EVENT_T9 as
+    select
+        a.*,
+        b.user_id 
+    from
+        SP_AMPLITUDE_NC_FUNNEL_CNTRY_EVENT_T8 A
+    LEFT JOIN
+        (select  amplitude_id, Max(user_id) as user_id from             SP_AMPLITUDE_RAW_DATA_NOV_DEC_2025 group by 1) B
+ON
+    A.amplitude_id=b.amplitude_id;
 
 
-Pre-Campaign:
+2.	Here in the below code, we have joined the account summary on USER_ID = MD5(CUSTOMER_UMN) to get UMN/GID mapping against the Amplitude-ID.
 
-Week 1: September 16 – 22
-Week 2: September 23 – 29
-
-
-
-Campaign Period:
-
-Week 1: September 30 – October 6
-Week 2: October 7 – 13
-Week 3: October 14 – 20
-Week 4: October 21 – 27
-Week 5: October 28 – November 3
-Week 6: November 4 – 10
-Week 7: November 11 – 17
-Week 8: November 18 – 24
-Week 9: November 25 – December 1
-
-
-
-Additionally, we explored options to strengthen the measurement approach by considering pre-post analysis with a comparison city (such as Vancouver or Montreal) or using Rest of Canada excluding Toronto as a benchmark. This comparison helps account for seasonality and provides a clearer view of the OOH campaign’s incremental impact. we calculated the lift in absolute terms wherein we check the lift in average of pre customers and average of post customers. Another metric that the data team included was “% of new digital customers relative to the total digital customer base”. This metric provides a clear indication of growth by showing how new acquisitions compare to the overall digital customer base. The team has launched a different campaign in US but wants to have a similar analysis for US. They also want include a view of the following:
-
-New to franchise vs. new to channel customers (would like to understand any impact on R2D)
-
-Any increase in TPC from customers acquired during the promo period. However over here the campaign is launched all over US not just in one state such that we could have compared against other states. but since it is launched it across the country , we cannot compare against the other states. We are already going to do a pre vs post comparison however we cant do a comparison with other states. so what benchmark could we use ??? can you suggest me benchmarks. 
+    create or replace table SP_AMPLITUDE_NC_FUNNEL_CNTRY_EVENT_T10 as
+    select
+        a.*,
+        b.customer_key as GID, 
+        b.customer_umn,
+   
+    from
+        SP_AMPLITUDE_NC_FUNNEL_CNTRY_EVENT_T9 A
+    LEFT JOIN
+        WUDNA.SUMMARY_GEN.WUDNA_ACCOUNT_MASTER_VW B
+    ON
+        A.USER_ID=MD5(B.CUSTOMER_UMN);
