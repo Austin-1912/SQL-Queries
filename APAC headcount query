@@ -3,7 +3,7 @@ CREATE OR REPLACE TABLE CAR_825_TXN_BASE AS
 SELECT
     SNDCUSTOMER_KEY,
     RCVCUSTOMER_KEY,
-    MTCN,
+    TXN_ID,
     SNDCOUNTRY_CODE AS snd_country,
     RCVCOUNTRY_CODE AS rcv_country,
     PAYOUT_TYPE,
@@ -11,14 +11,18 @@ SELECT
     RCVPAYING_DATETIME AS txn_dt,
     PRIMARY_CHANNEL,
     REVENUE,
+    YEAR(RCVPAYING_DATETIME) AS txn_year
 FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_VW
 WHERE
-    DATE(RCVPAYING_DATETIME) >= '2021-01-01' AND
+    DATE(RCVPAYING_DATETIME) >= '2021-01-01' AND DATE(RCVPAYING_DATETIME) <= '2025-12-31' AND 
     SUB_CHANNEL IN ('DIGITAL PARTNERS DWL')
     AND VALID_TXN_TYPE_CODE = 'Y'
     AND SNDPRINCIPAL_USD > 0
     AND REFUND_TRXN = 'N'
-    AND PRODUCT_GROUP NOT IN ('QCOL', 'QCSH');
+    AND PRODUCT_GROUP NOT IN ('QCOL', 'QCSH')
+    AND send_super_region = 'MEPA';
+
+select txn_year, count(distinct TXN_ID) from CAR_825_TXN_BASE group by 1; 
  
 -- Step 2: Create dominant corridor table per sender customer
 CREATE OR REPLACE TABLE CAR_825_DOMINANT_CORRIDOR AS
@@ -29,11 +33,11 @@ FROM (
         CONCAT(snd_country, '-', rcv_country) AS corridor,
         snd_country,
         rcv_country,
-        COUNT(DISTINCT MTCN) AS txn_count,
+        COUNT(DISTINCT TXN_ID) AS txn_count,
         SUM(SNDPRINCIPAL_USD) AS total_principal_usd,
         ROW_NUMBER() OVER (
             PARTITION BY SNDCUSTOMER_KEY
-            ORDER BY COUNT(DISTINCT MTCN) DESC, MAX(txn_dt) DESC
+            ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
         ) AS rnk
     FROM CAR_825_TXN_BASE
     GROUP BY SNDCUSTOMER_KEY, snd_country, rcv_country
@@ -47,52 +51,90 @@ FROM (
     SELECT
         SNDCUSTOMER_KEY,
         PAYOUT_TYPE,
-        COUNT(DISTINCT MTCN) AS txn_count,
+        COUNT(DISTINCT TXN_ID) AS txn_count,
         SUM(SNDPRINCIPAL_USD) AS total_principal_usd,
         ROW_NUMBER() OVER (
             PARTITION BY SNDCUSTOMER_KEY
-            ORDER BY COUNT(DISTINCT MTCN) DESC, MAX(txn_dt) DESC
+            ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
         ) AS rnk
     FROM CAR_825_TXN_BASE
     GROUP BY SNDCUSTOMER_KEY, PAYOUT_TYPE
 )
 WHERE rnk = 1;
  
--- Step 4: Create comprehensive customer summary with dominant attributes
+-- Step 4: Create customer activity by year for segmentation
+CREATE OR REPLACE TABLE CAR_825_CUSTOMER_YEAR_ACTIVITY AS
+SELECT
+    SNDCUSTOMER_KEY,
+    MAX(CASE WHEN txn_year = 2025 THEN 1 ELSE 0 END) AS has_2025_txn,
+    MAX(CASE WHEN txn_year = 2024 THEN 1 ELSE 0 END) AS has_2024_txn,
+    MAX(CASE WHEN txn_year < 2024 THEN 1 ELSE 0 END) AS has_pre2024_txn
+FROM CAR_825_TXN_BASE
+GROUP BY SNDCUSTOMER_KEY;
+ 
+-- Step 5: Create comprehensive customer summary with all attributes
 CREATE OR REPLACE TABLE CAR_825_CUSTOMER_SUMMARY AS
 SELECT
     b.SNDCUSTOMER_KEY,
-    COUNT(DISTINCT b.MTCN) AS total_transactions,
+    COUNT(DISTINCT b.TXN_ID) AS total_transactions,
     SUM(b.SNDPRINCIPAL_USD) AS total_principal_usd,
     AVG(b.SNDPRINCIPAL_USD) AS avg_principal_usd,
     SUM(b.REVENUE) AS total_revenue,
     MIN(b.txn_dt) AS first_txn_date,
     MAX(b.txn_dt) AS last_txn_date,
+    
     -- Dominant corridor info
     c.corridor AS dominant_corridor,
     c.snd_country AS dominant_snd_country,
     c.rcv_country AS dominant_rcv_country,
     c.txn_count AS corridor_txn_count,
+    
     -- Dominant payout info
     p.PAYOUT_TYPE AS dominant_payout_type,
-    p.txn_count AS payout_txn_count
+    p.txn_count AS payout_txn_count,
+    
+    -- Customer Segmentation Flag
+    CASE
+        WHEN y.has_2025_txn = 1 AND y.has_2024_txn = 0 AND y.has_pre2024_txn = 0 THEN 'New'
+        WHEN y.has_2025_txn = 1 AND y.has_2024_txn = 1 THEN 'Existing'
+        WHEN y.has_2025_txn = 1 AND y.has_2024_txn = 0 AND y.has_pre2024_txn = 1 THEN 'Winback'
+        ELSE 'Other'
+    END AS customer_segment,
+    
+    -- TPC (Transactions Per Customer)
+    COUNT(DISTINCT b.TXN_ID) AS TPC,
+    
+    -- TPC Bucket
+    CASE
+        WHEN COUNT(DISTINCT b.TXN_ID) = 1 THEN '1x'
+        WHEN COUNT(DISTINCT b.TXN_ID) = 2 THEN '2x'
+        WHEN COUNT(DISTINCT b.TXN_ID) = 3 THEN '3x'
+        WHEN COUNT(DISTINCT b.TXN_ID) >= 4 THEN '4x+'
+        ELSE 'Unknown'
+    END AS TPC_bucket,
+    
+    -- PPT (Principal Per Transaction)
+    AVG(b.SNDPRINCIPAL_USD) AS PPT,
+    
+    -- PPT Bucket
+    CASE
+        WHEN AVG(b.SNDPRINCIPAL_USD) < 100 THEN '<$100'
+        WHEN AVG(b.SNDPRINCIPAL_USD) >= 100 AND AVG(b.SNDPRINCIPAL_USD) < 500 THEN '$100-$500'
+        WHEN AVG(b.SNDPRINCIPAL_USD) >= 500 AND AVG(b.SNDPRINCIPAL_USD) < 1000 THEN '$500-$1,000'
+        WHEN AVG(b.SNDPRINCIPAL_USD) >= 1000 AND AVG(b.SNDPRINCIPAL_USD) < 2000 THEN '$1,000-$2,000'
+        WHEN AVG(b.SNDPRINCIPAL_USD) >= 2000 AND AVG(b.SNDPRINCIPAL_USD) < 5000 THEN '$2,000-$5,000'
+        WHEN AVG(b.SNDPRINCIPAL_USD) >= 5000 THEN '$5,000+'
+        ELSE 'Unknown'
+    END AS PPT_bucket
+ 
 FROM CAR_825_TXN_BASE b
 LEFT JOIN CAR_825_DOMINANT_CORRIDOR c
     ON b.SNDCUSTOMER_KEY = c.SNDCUSTOMER_KEY
 LEFT JOIN CAR_825_DOMINANT_PAYOUT p
     ON b.SNDCUSTOMER_KEY = p.SNDCUSTOMER_KEY
+LEFT JOIN CAR_825_CUSTOMER_YEAR_ACTIVITY y
+    ON b.SNDCUSTOMER_KEY = y.SNDCUSTOMER_KEY
 GROUP BY
-    b.SNDCUSTOMER_KEY,
-    c.corridor,
-    c.snd_country,
-    c.rcv_country,
-    c.txn_count,
-    p.PAYOUT_TYPE,
-    p.txn_count;
-This is a query i have written however in here i dont have the New Customer , Existing Customer and Winback Customer Flag. 
-Definitions include:
-New - Transaction Present in 2025 , Was not present before,
-Existing - Transaction Present in 2024 as well as 2025,
-Winback - Transaction Present in 2025 , not in 2024, and present before that. Need a column where the above will be given.
-Also will need to create TPC & TPC Bucket for customers like 1x , 2x, 3x, 4x+ on the number of transactions.
-As well as PPT & PPT bucket - Principal Per Transactions make  buckets like <100$ , 100-500, 500 - 1000 and soo on . i might alter the PPT bucket on the basis of PPT we are getting. 
+   ALL;
+
+ select * from CAR_825_CUSTOMER_SUMMAR
