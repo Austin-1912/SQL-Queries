@@ -1,138 +1,6 @@
-
-CREATE OR REPLACE TABLE CAR_824_TXN_BASE AS
-    SELECT
-    DATE_TRUNC('MONTH', txn.rcvpaying_datetime) AS mth_yr,
-    txn.rcvpaying_datetime                      AS txn_dt,
-    txn.SNDCOUNTRY_CODE AS snd_country,
-    txn.RCVCOUNTRY_CODE AS rcv_country,
-    -- CONCAT(txn.SNDCOUNTRY_CODE, '-', txn.RCVCOUNTRY_CODE) AS corridor,
-    txn.SNDCUSTOMER_KEY AS GID,
-    txn.MTCN,
-    CASE
-        WHEN TXN.PRICING_CHANNEL IN ('WEB', 'APP') THEN 'DIGITAL'
-        WHEN TXN.PRICING_CHANNEL IN ('POS', 'TMT', 'AIR') THEN 'RETAIL'
-        ELSE 'OTHER'
-    END AS channel_group,
-    txn.SNDPRINCIPAL_USD,
-    -- PPT Bucket
-    CASE
-        WHEN txn.SNDPRINCIPAL_USD < 100 THEN 'A.<$100'
-        WHEN txn.SNDPRINCIPAL_USD >= 100 AND txn.SNDPRINCIPAL_USD < 500 THEN 'B.$100-$500'
-        WHEN txn.SNDPRINCIPAL_USD >= 500 AND txn.SNDPRINCIPAL_USD < 1000 THEN 'C.$500-$1,000'
-        WHEN txn.SNDPRINCIPAL_USD >= 1000 AND txn.SNDPRINCIPAL_USD < 2000 THEN 'D.$1,000-$2,000'
-        WHEN txn.SNDPRINCIPAL_USD >= 2000 AND txn.SNDPRINCIPAL_USD < 5000 THEN 'E.$2,000-$5,000'
-        WHEN txn.SNDPRINCIPAL_USD >= 5000 THEN 'F.$5,000+'
-        ELSE 'Unknown'
-    END AS PPT_bucket,
-    -- txn.sndagent_number, 
-    cm.nationality,
-    txn.PAYOUT_TYPE
-FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW txn
-    JOIN WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
-        ON txn.sndcustomer_key = cm.customer_key
-WHERE txn.rcvpaying_datetime >= '2025-01-01'
-  AND txn.rcvpaying_datetime <= '2025-12-31'
-  AND txn.SNDCOUNTRY_CODE IN ('SG');
-
-select count(distinct GID), count(GID) from CAR_824_TXN_BASE;--246,937	1,940,819
-
---STEP 2: Channel transaction counts per GID
-CREATE OR REPLACE TABLE CAR_824_GID_CHANNELS AS
-SELECT
-    snd_country,
-    GID,
-    COUNT(DISTINCT CASE WHEN channel_group = 'RETAIL' THEN MTCN  END) AS retail_txn,
-    COUNT(DISTINCT CASE WHEN channel_group = 'DIGITAL' THEN MTCN END) AS digital_txn,
-    COUNT(DISTINCT MTCN) AS total_transactions
-FROM CAR_824_TXN_BASE
-GROUP BY 1,2;
-
-select  count(distinct GID), count(GID) from CAR_824_GID_CHANNELS;--246,937	246,937
-
---STEP 3: Dominant CORRIDOR per GID
-
-CREATE OR REPLACE TABLE CAR_824_GID_DOMINANT_CORRIDOR AS
-SELECT *
-FROM (
-    SELECT
-        GID,
-        CONCAT(snd_country, '-', rcv_country) AS corridor,
-        COUNT(DISTINCT MTCN)                  AS txn_count,
-        ROW_NUMBER() OVER (
-            PARTITION BY GID
-            ORDER BY COUNT(DISTINCT MTCN) DESC, MAX(txn_dt) DESC
-        ) AS rnk
-    FROM CAR_824_TXN_BASE
-    GROUP BY ALL
-)
-WHERE rnk = 1;
-
-select count(distinct GID), count(GID) from CAR_824_GID_DOMINANT_CORRIDOR;--246,937	246,937
-
-
-CREATE OR REPLACE TABLE CAR_824_DOMINANT_PAYOUT AS
-SELECT *
-FROM (
-    SELECT
-        GID,
-        PAYOUT_TYPE,
-        COUNT(DISTINCT MTCN) AS txn_count,
-        SUM(SNDPRINCIPAL_USD) AS total_principal_usd,
-        ROW_NUMBER() OVER (
-            PARTITION BY GID
-            ORDER BY COUNT(DISTINCT MTCN) DESC, MAX(txn_dt) DESC
-        ) AS rnk
-    FROM CAR_824_TXN_BASE
-    GROUP BY GID, PAYOUT_TYPE
-)
-WHERE rnk = 1;
-
-select count(distinct GID), count(GID) from CAR_824_DOMINANT_PAYOUT;--246,937	246,937
-
-CREATE OR REPLACE TABLE CAR_824_DOMINANT_PPT_BUCKET AS
-SELECT *
-FROM (
-    SELECT
-        GID,
-        PPT_bucket,
-        COUNT(DISTINCT MTCN) AS txn_count,
-        SUM(SNDPRINCIPAL_USD) AS total_principal_usd,
-        ROW_NUMBER() OVER (
-            PARTITION BY GID
-            ORDER BY COUNT(DISTINCT MTCN) DESC, MAX(txn_dt) DESC
-        ) AS rnk
-    FROM CAR_824_TXN_BASE
-    GROUP BY GID, PPT_bucket
-)
-WHERE rnk = 1;
-
-select count(distinct GID), count(GID) from CAR_824_DOMINANT_PPT_BUCKET;--246,937	246,937
-
-CREATE OR REPLACE TABLE CAR_824_NATIONALITY_COUNTS AS
-SELECT
-    corridor,
-    snd_country,
-    nationality,
-    COUNT(DISTINCT GID) AS customers
-FROM CAR_824_TXN_BASE
-WHERE customer_nationality IS NOT NULL
-GROUP BY 1,2,3;
-
--- Rank nationalities per sender country
-CREATE OR REPLACE TABLE CAR_824_NATIONALITY_RANK AS
-SELECT
-    snd_country,
-    corridor,
-    nationality,
-    customers,
-    ROW_NUMBER() OVER (
-        PARTITION BY snd_country, corridor
-        ORDER BY customers DESC, nationality ASC
-    ) AS nat_rank
-FROM CAR_824_NATIONALITY_COUNTS;
-
 CREATE OR REPLACE TABLE CAR_824_GID_ENRICHED AS 
 SELECT
+    gc.MTH_YR,
     gc.snd_country,
     dc.corridor,
     gc.GID,
@@ -140,7 +8,7 @@ SELECT
     gc.retail_txn,
     gc.total_transactions,
     dp.PAYOUT_TYPE AS dominant_payout_type,
-    PPT_bucket,
+    dpb.PPT_bucket AS PPT_bucket,
     CASE WHEN gc.digital_txn > 0 THEN 1 ELSE 0 END AS has_digital,
     CASE WHEN gc.retail_txn  > 0 THEN 1 ELSE 0 END AS has_retail,
     CASE
@@ -151,19 +19,23 @@ SELECT
     END AS customer_type,
     CASE 
         WHEN gc.total_transactions = 1 THEN 'A.1x'
-        WHEN gc.total_transactions = 2 THEN 'A.2x'
-        WHEN gc.total_transactions = 3 THEN 'A.3x'
-        WHEN gc.total_transactions >=4  THEN 'A.4x+'
+        WHEN gc.total_transactions = 2 THEN 'B.2x'
+        WHEN gc.total_transactions = 3 THEN 'C.3x'
+        WHEN gc.total_transactions >= 4 AND gc.total_transactions <= 7 THEN 'D.4x - 7x'
+        WHEN gc.total_transactions >= 8 AND gc.total_transactions <= 12 THEN 'E.8x - 12x'
+        WHEN gc.total_transactions > 12 THEN 'F.12x+'
         ELSE 'Unknown'
     END AS TPC_bucket,
     b.nationality AS customer_nationality,
     CASE
-        WHEN e.customer_nationality IS NULL THEN 'UNKNOWN'
-        WHEN nr.nat_rank <= 5 THEN e.customer_nationality
+        WHEN b.nationality IS NULL THEN 'UNKNOWN'
+        WHEN nr.nat_rank <= 5 THEN b.nationality
         ELSE 'OTHERS'
     END AS top_nationality,
-    COUNT(DISTINCT e.GID) AS customers
+    ROUND(c.IPF,2) as IPF
 FROM CAR_824_GID_CHANNELS AS gc
+LEFT JOIN WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL c
+ON gc.GID = c.SNDCUSTOMER_KEY AND gc.MTH_YR = c.MTH_YR
 LEFT JOIN CAR_824_GID_DOMINANT_CORRIDOR AS dc
     ON gc.GID = dc.gid
 LEFT JOIN CAR_824_DOMINANT_PAYOUT dp
@@ -174,20 +46,6 @@ LEFT JOIN (
     SELECT DISTINCT GID, snd_country, nationality
     FROM CAR_824_TXN_BASE
 ) b
-    ON gc.snd_country = b.snd_country AND gc.gid = b.gid;
-    
-select TPC_bucket, count(distinct gid) as customers from CAR_824_GID_ENRICHED group by 1;
-select count(distinct gid), count(gid) from CAR_824_GID_ENRICHED;--246,937	246,937
-
---final pull
-SELECT 
-    corridor,
-    customer_type,
-    customer_nationality,
-    dominant_payout_type,
-    PPT_bucket,
-    TPC_bucket,
-    COUNT(DISTINCT GID) AS customers
-FROM CAR_824_GID_ENRICHED
-where corridor = 'SG-ID'
-GROUP BY ALL;
+    ON gc.snd_country = b.snd_country AND gc.gid = b.gid
+LEFT JOIN CAR_824_NATIONALITY_RANK nr
+    ON dc.corridor = nr.corridor AND b.nationality = nr.nationality;
