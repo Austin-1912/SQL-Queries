@@ -49,3 +49,7 @@ LEFT JOIN (
     ON gc.snd_country = b.snd_country AND gc.gid = b.gid
 LEFT JOIN CAR_824_NATIONALITY_RANK nr
     ON dc.corridor = nr.corridor AND b.nationality = nr.nationality;
+
+IPF is the frequency the customer transacts in like every 7 days or 30 days and so on so i have to create a bucket 
+for the IPF as well instead of just bringing it directly. IPF contains the number of days like 7.00, 30.12 and so on.
+So create for me weekly , monthly, quarterly, half yearly and yearly. 
