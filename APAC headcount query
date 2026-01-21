@@ -42,7 +42,8 @@ SELECT
     snd_country,
     GID,
     COUNT(DISTINCT CASE WHEN channel_group = 'RETAIL' THEN MTCN  END) AS retail_txn,
-    COUNT(DISTINCT CASE WHEN channel_group = 'DIGITAL' THEN MTCN END) AS digital_txn
+    COUNT(DISTINCT CASE WHEN channel_group = 'DIGITAL' THEN MTCN END) AS digital_txn,
+    COUNT(DISTINCT MTCN) AS total_transactions
 FROM CAR_824_TXN_BASE
 GROUP BY 1,2;
 
@@ -107,6 +108,29 @@ WHERE rnk = 1;
 
 select count(distinct GID), count(GID) from CAR_824_DOMINANT_PPT_BUCKET;--246,937	246,937
 
+CREATE OR REPLACE TABLE CAR_824_NATIONALITY_COUNTS AS
+SELECT
+    corridor,
+    snd_country,
+    nationality,
+    COUNT(DISTINCT GID) AS customers
+FROM CAR_824_TXN_BASE
+WHERE customer_nationality IS NOT NULL
+GROUP BY 1,2,3;
+
+-- Rank nationalities per sender country
+CREATE OR REPLACE TABLE CAR_824_NATIONALITY_RANK AS
+SELECT
+    snd_country,
+    corridor,
+    nationality,
+    customers,
+    ROW_NUMBER() OVER (
+        PARTITION BY snd_country, corridor
+        ORDER BY customers DESC, nationality ASC
+    ) AS nat_rank
+FROM CAR_824_NATIONALITY_COUNTS;
+
 CREATE OR REPLACE TABLE CAR_824_GID_ENRICHED AS 
 SELECT
     gc.snd_country,
@@ -114,6 +138,7 @@ SELECT
     gc.GID,
     gc.digital_txn,
     gc.retail_txn,
+    gc.total_transactions,
     dp.PAYOUT_TYPE AS dominant_payout_type,
     PPT_bucket,
     CASE WHEN gc.digital_txn > 0 THEN 1 ELSE 0 END AS has_digital,
@@ -124,26 +149,44 @@ SELECT
         WHEN gc.retail_txn  > 0 AND gc.digital_txn = 0 THEN 'RETAIL_ONLY'
         ELSE 'OTHER'
     END AS customer_type,
-    b.nationality AS customer_nationality
-
-FROM CAR_824_GID_CHANNELS as gc
+    CASE 
+        WHEN gc.total_transactions = 1 THEN 'A.1x'
+        WHEN gc.total_transactions = 2 THEN 'A.2x'
+        WHEN gc.total_transactions = 3 THEN 'A.3x'
+        WHEN gc.total_transactions >=4  THEN 'A.4x+'
+        ELSE 'Unknown'
+    END AS TPC_bucket,
+    b.nationality AS customer_nationality,
+    CASE
+        WHEN e.customer_nationality IS NULL THEN 'UNKNOWN'
+        WHEN nr.nat_rank <= 5 THEN e.customer_nationality
+        ELSE 'OTHERS'
+    END AS top_nationality,
+    COUNT(DISTINCT e.GID) AS customers
+FROM CAR_824_GID_CHANNELS AS gc
 LEFT JOIN CAR_824_GID_DOMINANT_CORRIDOR AS dc
-    ON GC.GID = dc.gid
-LEFT JOIN CAR_824_TXN_BASE AS b
-    ON gc.snd_country = b.snd_country AND gc.gid = b.gid
+    ON gc.GID = dc.gid
 LEFT JOIN CAR_824_DOMINANT_PAYOUT dp
     ON gc.gid = dp.gid
-GROUP BY ALL;
-
+LEFT JOIN CAR_824_DOMINANT_PPT_BUCKET dpb
+    ON gc.gid = dpb.gid
+LEFT JOIN (
+    SELECT DISTINCT GID, snd_country, nationality
+    FROM CAR_824_TXN_BASE
+) b
+    ON gc.snd_country = b.snd_country AND gc.gid = b.gid;
+    
+select TPC_bucket, count(distinct gid) as customers from CAR_824_GID_ENRICHED group by 1;
 select count(distinct gid), count(gid) from CAR_824_GID_ENRICHED;--246,937	246,937
 
+--final pull
 SELECT 
     corridor,
     customer_type,
     customer_nationality,
     dominant_payout_type,
     PPT_bucket,
-    customer_type,
+    TPC_bucket,
     COUNT(DISTINCT GID) AS customers
 FROM CAR_824_GID_ENRICHED
 where corridor = 'SG-ID'
