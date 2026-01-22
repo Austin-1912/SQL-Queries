@@ -1,10 +1,84 @@
-CREATE OR REPLACE TABLE CAR_806_TXN_BASE AS
+-- =====================================================
+-- PART 1: PRE vs POST ANALYSIS (MERGED)
+-- Pre Period: 01 Aug 2025 - 14 Oct 2025
+-- Post Period: 15 Oct 2025 - 31 Dec 2025
+-- =====================================================
+
+-- Merged Pre vs Post Analysis (Transactions + Customer Behavior)
+CREATE OR REPLACE TABLE CAR_806_PRE_POST_ANALYSIS AS 
+SELECT 
+    period,
+    channel_group,
+    payout_type,
+    TPC_bucket,
+    COUNT(DISTINCT GID) AS customer_count,
+    COUNT(DISTINCT MTCN) AS total_txns,
+    SUM(SNDPRINCIPAL_USD) AS total_principal,
+    SUM(REVENUE) AS total_revenue,
+    ROUND(AVG(SNDPRINCIPAL_USD), 2) AS avg_principal_per_txn,
+    ROUND(AVG(REVENUE), 2) AS avg_revenue_per_txn
+FROM (
+    SELECT 
+        'PRE' AS period,
+        GID,
+        channel_group,
+        payout_type,
+        MTCN,
+        SNDPRINCIPAL_USD,
+        REVENUE,
+        CASE 
+            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) = 1 THEN 'A.1x'
+            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) = 2 THEN 'B.2x'
+            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) = 3 THEN 'C.3x'
+            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) BETWEEN 4 AND 7 THEN 'D.4x - 7x'
+            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) BETWEEN 8 AND 12 THEN 'E.8x - 12x'
+            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) > 12 THEN 'F.12x+'
+            ELSE 'Unknown'
+        END AS TPC_bucket
+    FROM CAR_806_TXN_BASE
+    WHERE DATE(txn_dt) >= '2025-08-01' AND DATE(txn_dt) < '2025-10-15'
+    
+    UNION ALL
+    
     SELECT
+        'POST' AS period,
+        GID,
+        channel_group,
+        payout_type,
+        MTCN,
+        SNDPRINCIPAL_USD,
+        REVENUE,
+        CASE 
+            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) = 1 THEN 'A.1x'
+            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) = 2 THEN 'B.2x'
+            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) = 3 THEN 'C.3x'
+            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) BETWEEN 4 AND 7 THEN 'D.4x - 7x'
+            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) BETWEEN 8 AND 12 THEN 'E.8x - 12x'
+            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) > 12 THEN 'F.12x+'
+            ELSE 'Unknown'
+        END AS TPC_bucket
+    FROM CAR_806_TXN_BASE
+    WHERE DATE(txn_dt) >= '2025-10-15' AND DATE(txn_dt) <= '2025-12-31'
+) customer_metrics
+GROUP BY period, channel_group, payout_type, TPC_bucket
+ORDER BY period, channel_group, payout_type, TPC_bucket;
+
+SELECT * FROM CAR_806_PRE_POST_ANALYSIS;
+
+
+-- =====================================================
+-- PART 2: YEAR-OVER-YEAR (YoY) ANALYSIS
+-- Current Period: 15 Oct 2024 - 31 Dec 2024
+-- Prior Year Period: 15 Oct 2023 - 31 Dec 2023
+-- =====================================================
+
+-- Step 1: Create base table with YoY date range
+CREATE OR REPLACE TABLE CAR_806_TXN_BASE_YOY AS
+SELECT
     DATE_TRUNC('MONTH', txn.rcvpaying_datetime) AS MTH_YR,
-    txn.rcvpaying_datetime                      AS txn_dt,
+    txn.rcvpaying_datetime AS txn_dt,
     txn.SNDCOUNTRY_CODE AS snd_country,
     txn.RCVCOUNTRY_CODE AS rcv_country,
-    -- CONCAT(txn.SNDCOUNTRY_CODE, '-', txn.RCVCOUNTRY_CODE) AS corridor,
     txn.SNDCUSTOMER_KEY AS GID,
     txn.MTCN,
     CASE
@@ -18,92 +92,70 @@ CREATE OR REPLACE TABLE CAR_806_TXN_BASE AS
 FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW txn
     JOIN WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
         ON txn.sndcustomer_key = cm.customer_key
-WHERE DATE(txn.rcvpaying_datetime) >= '2024-10-01'
-  AND DATE(txn.rcvpaying_datetime) <= '2025-12-31'
+WHERE (
+    (DATE(txn.rcvpaying_datetime) >= '2023-10-15' AND DATE(txn.rcvpaying_datetime) <= '2023-12-31') OR
+    (DATE(txn.rcvpaying_datetime) >= '2024-10-15' AND DATE(txn.rcvpaying_datetime) <= '2024-12-31')
+)
   AND txn.SNDCOUNTRY_CODE IN ('AE')
   AND txn.RCVCOUNTRY_CODE IN ('LB');
 
-select * from CAR_806_TXN_BASE limit 100;
-select count(distinct Gid), count(GID) from CAR_806_TXN_BASE;--78,204	424,768
-
---Pre VS Post transactions analyss
-CREATE OR REPLACE TABLE CAR_806_PRE_POST_TXN_ANALYSIS AS 
+-- Step 2: Merged YoY Analysis (Transactions + Customer Behavior)
+CREATE OR REPLACE TABLE CAR_806_YOY_ANALYSIS AS
 SELECT 
-    period,
-    channel_group,
-    payout_type,
-    count(distinct MTCN) as total_txns,
-    count(distinct GID) as unique_customers,
-    SUM(REVENUE) as total_revenue,    
-FROM (
-    SELECT
-    'PRE' as period,
-    *
-FROM CAR_806_TXN_BASE
-where DATE(txn_dt) >= '2025-08-01' and DATE(txn_dt) < '2025-10-15'
-UNION ALL
-    SELECT
-    'POST' AS period,
-    *
-FROM CAR_806_TXN_BASE
-where DATE(txn_dt) >= '2025-10-15' and DATE(txn_dt) <= '2025-12-31' ) combined
-GROUP BY 1,2,3
-ORDER BY 1,2,3;
-
-select * FROM CAR_806_PRE_POST_TXN_ANALYSIS;
---Pre Vs Post Customer Behaviour Analysis
-CREATE OR REPLACE TABLE CAR_806_PRE_POST_CUSTOMER_ANALYSIS AS 
-SELECT
-    period,
+    year_period,
     channel_group,
     payout_type,
     TPC_bucket,
-    count(distinct GID) as customer_count,
+    COUNT(DISTINCT GID) AS customer_count,
+    COUNT(DISTINCT MTCN) AS total_txns,
+    SUM(SNDPRINCIPAL_USD) AS total_principal,
+    SUM(REVENUE) AS total_revenue,
+    ROUND(AVG(SNDPRINCIPAL_USD), 2) AS avg_principal_per_txn,
+    ROUND(AVG(REVENUE), 2) AS avg_revenue_per_txn
 FROM (
-SELECT 
-    'PRE' as period,
-    GID,
-    channel_group,
-    Payout_type,
-    count(MTCN) as txn_count,
-    SUM(SNDPRINCIPAL_USD) as total_principal,
-    SUM(revenue) as total_revenue,
-    CASE 
-        WHEN COUNT(DISTINCT MTCN) = 1 THEN 'A.1x'
-        WHEN COUNT(DISTINCT MTCN) = 2 THEN 'B.2x'
-        WHEN COUNT(DISTINCT MTCN) = 3 THEN 'C.3x'
-        WHEN COUNT(DISTINCT MTCN) >= 4 AND COUNT(DISTINCT MTCN) <= 7 THEN 'D.4x - 7x'
-        WHEN COUNT(DISTINCT MTCN) >= 8 AND COUNT(DISTINCT MTCN) <= 12 THEN 'E.8x - 12x'
-        WHEN COUNT(DISTINCT MTCN) > 12 THEN 'F.12x+'
-        ELSE 'Unknown'
-    END AS TPC_bucket,
-FROM CAR_806_TXN_BASE
-where DATE(txn_dt) >= '2025-08-01' and DATE(txn_dt) < '2025-10-15'
-GROUP BY GID, channel_group, payout_type
-UNION ALL
-
-SELECT
-    'POST' As period,
-    GID,
-    channel_group,
-    PAYOUT_TYPE,
-    count(MTCN) as txn_count,
-    SUM(SNDPRINCIPAL_USD) as total_principal,
-    SUM(REVENUE) as total_revenue,
-    CASE 
-        WHEN COUNT(DISTINCT MTCN) = 1 THEN 'A.1x'
-        WHEN COUNT(DISTINCT MTCN) = 2 THEN 'B.2x'
-        WHEN COUNT(DISTINCT MTCN) = 3 THEN 'C.3x'
-        WHEN COUNT(DISTINCT MTCN) >= 4 AND COUNT(DISTINCT MTCN) <= 7 THEN 'D.4x - 7x'
-        WHEN COUNT(DISTINCT MTCN) >= 8 AND COUNT(DISTINCT MTCN) <= 12 THEN 'E.8x - 12x'
-        WHEN COUNT(DISTINCT MTCN) > 12 THEN 'F.12x+'
-        ELSE 'Unknown'
-    END AS TPC_bucket
-    FROM CAR_806_TXN_BASE
-where DATE(txn_dt) >= '2025-10-15' and DATE(txn_dt) <= '2025-12-31'
-GROUP BY GID, channel_group, payout_type
+    SELECT 
+        '2023' AS year_period,
+        GID,
+        channel_group,
+        payout_type,
+        MTCN,
+        SNDPRINCIPAL_USD,
+        REVENUE,
+        CASE 
+            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) = 1 THEN 'A.1x'
+            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) = 2 THEN 'B.2x'
+            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) = 3 THEN 'C.3x'
+            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) BETWEEN 4 AND 7 THEN 'D.4x - 7x'
+            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) BETWEEN 8 AND 12 THEN 'E.8x - 12x'
+            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) > 12 THEN 'F.12x+'
+            ELSE 'Unknown'
+        END AS TPC_bucket
+    FROM CAR_806_TXN_BASE_YOY
+    WHERE DATE(txn_dt) >= '2023-10-15' AND DATE(txn_dt) <= '2023-12-31'
+    
+    UNION ALL
+    
+    SELECT
+        '2024' AS year_period,
+        GID,
+        channel_group,
+        payout_type,
+        MTCN,
+        SNDPRINCIPAL_USD,
+        REVENUE,
+        CASE 
+            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) = 1 THEN 'A.1x'
+            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) = 2 THEN 'B.2x'
+            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) = 3 THEN 'C.3x'
+            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) BETWEEN 4 AND 7 THEN 'D.4x - 7x'
+            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) BETWEEN 8 AND 12 THEN 'E.8x - 12x'
+            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) > 12 THEN 'F.12x+'
+            ELSE 'Unknown'
+        END AS TPC_bucket
+    FROM CAR_806_TXN_BASE_YOY
+    WHERE DATE(txn_dt) >= '2024-10-15' AND DATE(txn_dt) <= '2024-12-31'
 ) customer_metrics
-GROUP BY period, channel_group, payout_type, TPC_bucket
-ORDER BY period, channel_group, payout_type, TPC_Bucket;
+GROUP BY year_period, channel_group, payout_type, TPC_bucket
+ORDER BY year_period, channel_group, payout_type, TPC_bucket;
 
-select * from CAR_806_PRE_POST_CUSTOMER_ANALYSIS;   
+SELECT * FROM CAR_806_YOY_ANALYSIS;
