@@ -1,55 +1,24 @@
-CREATE OR REPLACE TABLE CAR_824_GID_ENRICHED AS 
-SELECT
-    gc.MTH_YR,
-    gc.snd_country,
-    dc.corridor,
-    gc.GID,
-    gc.digital_txn,
-    gc.retail_txn,
-    gc.total_transactions,
-    dp.PAYOUT_TYPE AS dominant_payout_type,
-    dpb.PPT_bucket AS PPT_bucket,
-    CASE WHEN gc.digital_txn > 0 THEN 1 ELSE 0 END AS has_digital,
-    CASE WHEN gc.retail_txn  > 0 THEN 1 ELSE 0 END AS has_retail,
+CREATE OR REPLACE TABLE CAR_806_TXN_BASE AS
+    SELECT
+    DATE_TRUNC('MONTH', txn.rcvpaying_datetime) AS MTH_YR,
+    txn.rcvpaying_datetime                      AS txn_dt,
+    txn.SNDCOUNTRY_CODE AS snd_country,
+    txn.RCVCOUNTRY_CODE AS rcv_country,
+    -- CONCAT(txn.SNDCOUNTRY_CODE, '-', txn.RCVCOUNTRY_CODE) AS corridor,
+    txn.SNDCUSTOMER_KEY AS GID,
+    txn.MTCN,
     CASE
-        WHEN gc.digital_txn > 0 AND gc.retail_txn > 0 THEN 'OMNICHANNEL'
-        WHEN gc.digital_txn > 0 AND gc.retail_txn = 0 THEN 'DIGITAL_ONLY'
-        WHEN gc.retail_txn  > 0 AND gc.digital_txn = 0 THEN 'RETAIL_ONLY'
+        WHEN TXN.PRICING_CHANNEL IN ('WEB', 'APP') THEN 'DIGITAL'
+        WHEN TXN.PRICING_CHANNEL IN ('POS', 'TMT', 'AIR') THEN 'RETAIL'
         ELSE 'OTHER'
-    END AS customer_type,
-    CASE 
-        WHEN gc.total_transactions = 1 THEN 'A.1x'
-        WHEN gc.total_transactions = 2 THEN 'B.2x'
-        WHEN gc.total_transactions = 3 THEN 'C.3x'
-        WHEN gc.total_transactions >= 4 AND gc.total_transactions <= 7 THEN 'D.4x - 7x'
-        WHEN gc.total_transactions >= 8 AND gc.total_transactions <= 12 THEN 'E.8x - 12x'
-        WHEN gc.total_transactions > 12 THEN 'F.12x+'
-        ELSE 'Unknown'
-    END AS TPC_bucket,
-    b.nationality AS customer_nationality,
-    CASE
-        WHEN b.nationality IS NULL THEN 'UNKNOWN'
-        WHEN nr.nat_rank <= 5 THEN b.nationality
-        ELSE 'OTHERS'
-    END AS top_nationality,
-    ROUND(c.IPF,2) as IPF
-FROM CAR_824_GID_CHANNELS AS gc
-LEFT JOIN WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL c
-ON gc.GID = c.SNDCUSTOMER_KEY AND gc.MTH_YR = c.MTH_YR
-LEFT JOIN CAR_824_GID_DOMINANT_CORRIDOR AS dc
-    ON gc.GID = dc.gid
-LEFT JOIN CAR_824_DOMINANT_PAYOUT dp
-    ON gc.gid = dp.gid
-LEFT JOIN CAR_824_DOMINANT_PPT_BUCKET dpb
-    ON gc.gid = dpb.gid
-LEFT JOIN (
-    SELECT DISTINCT GID, snd_country, nationality
-    FROM CAR_824_TXN_BASE
-) b
-    ON gc.snd_country = b.snd_country AND gc.gid = b.gid
-LEFT JOIN CAR_824_NATIONALITY_RANK nr
-    ON dc.corridor = nr.corridor AND b.nationality = nr.nationality;
-
-IPF is the frequency the customer transacts in like every 7 days or 30 days and so on so i have to create a bucket 
-for the IPF as well instead of just bringing it directly. IPF contains the number of days like 7.00, 30.12 and so on.
-So create for me weekly , monthly, quarterly, half yearly and yearly. 
+    END AS channel_group,
+    txn.SNDPRINCIPAL_USD,
+    txn.Revenue,
+    txn.PAYOUT_TYPE
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW txn
+    JOIN WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
+        ON txn.sndcustomer_key = cm.customer_key
+WHERE txn.rcvpaying_datetime >= '2024-10-01'
+  AND txn.rcvpaying_datetime <= '2025-12-31'
+  AND txn.SNDCOUNTRY_CODE IN ('AE')
+  AND txn.RCVCOUNTRY_CODE IN ('LB');
