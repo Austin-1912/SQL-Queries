@@ -1,16 +1,10 @@
--- =====================================================
--- PART 1: PRE vs POST ANALYSIS
--- Pre Period: 15 Aug 2024 - 31 Oct 2024 (78 days)
--- Post Period: 15 Oct 2024 - 31 Dec 2024 (78 days)
--- =====================================================
-
--- Step 1: Create base table with extended date range for Pre period
-CREATE OR REPLACE TABLE CAR_806_TXN_BASE_EXTENDED AS
-SELECT
+CREATE OR REPLACE TABLE CAR_806_TXN_BASE AS
+    SELECT
     DATE_TRUNC('MONTH', txn.rcvpaying_datetime) AS MTH_YR,
-    txn.rcvpaying_datetime AS txn_dt,
+    txn.rcvpaying_datetime                      AS txn_dt,
     txn.SNDCOUNTRY_CODE AS snd_country,
     txn.RCVCOUNTRY_CODE AS rcv_country,
+    -- CONCAT(txn.SNDCOUNTRY_CODE, '-', txn.RCVCOUNTRY_CODE) AS corridor,
     txn.SNDCUSTOMER_KEY AS GID,
     txn.MTCN,
     CASE
@@ -24,274 +18,92 @@ SELECT
 FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW txn
     JOIN WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
         ON txn.sndcustomer_key = cm.customer_key
-WHERE txn.rcvpaying_datetime >= '2024-08-15'  -- Extended for Pre period
-  AND txn.rcvpaying_datetime <= '2025-12-31'
+WHERE DATE(txn.rcvpaying_datetime) >= '2024-10-01'
+  AND DATE(txn.rcvpaying_datetime) <= '2025-12-31'
   AND txn.SNDCOUNTRY_CODE IN ('AE')
   AND txn.RCVCOUNTRY_CODE IN ('LB');
 
--- Step 2: Pre vs Post Transaction Analysis
-CREATE OR REPLACE TABLE CAR_806_PRE_POST_TXN_ANALYSIS AS
+select * from CAR_806_TXN_BASE limit 100;
+select count(distinct Gid), count(GID) from CAR_806_TXN_BASE;--78,204	424,768
+
+--Pre VS Post transactions analyss
+CREATE OR REPLACE TABLE CAR_806_PRE_POST_TXN_ANALYSIS AS 
+SELECT 
+    period,
+    channel_group,
+    payout_type,
+    count(distinct MTCN) as total_txns,
+    count(distinct GID) as unique_customers,
+    SUM(REVENUE) as total_revenue,    
+FROM (
+    SELECT
+    'PRE' as period,
+    *
+FROM CAR_806_TXN_BASE
+where DATE(txn_dt) >= '2025-08-01' and DATE(txn_dt) < '2025-10-15'
+UNION ALL
+    SELECT
+    'POST' AS period,
+    *
+FROM CAR_806_TXN_BASE
+where DATE(txn_dt) >= '2025-10-15' and DATE(txn_dt) <= '2025-12-31' ) combined
+GROUP BY 1,2,3
+ORDER BY 1,2,3;
+
+select * FROM CAR_806_PRE_POST_TXN_ANALYSIS;
+--Pre Vs Post Customer Behaviour Analysis
+CREATE OR REPLACE TABLE CAR_806_PRE_POST_CUSTOMER_ANALYSIS AS 
 SELECT
     period,
     channel_group,
-    PAYOUT_TYPE,
-    COUNT(DISTINCT MTCN) AS total_txns,
-    COUNT(DISTINCT GID) AS unique_customers,
-    ROUND(COUNT(DISTINCT MTCN) * 1.0 / COUNT(DISTINCT GID), 2) AS txns_per_customer,
-    ROUND(SUM(SNDPRINCIPAL_USD), 2) AS total_principal,
-    ROUND(SUM(Revenue), 2) AS total_revenue,
-    ROUND(AVG(SNDPRINCIPAL_USD), 2) AS avg_principal_per_txn,
-    ROUND(AVG(Revenue), 2) AS avg_revenue_per_txn
+    payout_type,
+    TPC_bucket,
+    count(distinct GID) as customer_count,
 FROM (
-    SELECT 
-        'PRE' AS period,
-        *
-    FROM CAR_806_TXN_BASE_EXTENDED
-    WHERE txn_dt >= '2024-08-15' AND txn_dt < '2024-10-15'
-    
-    UNION ALL
-    
-    SELECT 
-        'POST' AS period,
-        *
-    FROM CAR_806_TXN_BASE_EXTENDED
-    WHERE txn_dt >= '2024-10-15' AND txn_dt <= '2024-12-31'
-) combined
-GROUP BY period, channel_group, PAYOUT_TYPE
-ORDER BY period, channel_group, PAYOUT_TYPE;
+SELECT 
+    'PRE' as period,
+    GID,
+    channel_group,
+    Payout_type,
+    count(MTCN) as txn_count,
+    SUM(SNDPRINCIPAL_USD) as total_principal,
+    SUM(revenue) as total_revenue,
+    CASE 
+        WHEN COUNT(DISTINCT MTCN) = 1 THEN 'A.1x'
+        WHEN COUNT(DISTINCT MTCN) = 2 THEN 'B.2x'
+        WHEN COUNT(DISTINCT MTCN) = 3 THEN 'C.3x'
+        WHEN COUNT(DISTINCT MTCN) >= 4 AND COUNT(DISTINCT MTCN) <= 7 THEN 'D.4x - 7x'
+        WHEN COUNT(DISTINCT MTCN) >= 8 AND COUNT(DISTINCT MTCN) <= 12 THEN 'E.8x - 12x'
+        WHEN COUNT(DISTINCT MTCN) > 12 THEN 'F.12x+'
+        ELSE 'Unknown'
+    END AS TPC_bucket,
+FROM CAR_806_TXN_BASE
+where DATE(txn_dt) >= '2025-08-01' and DATE(txn_dt) < '2025-10-15'
+GROUP BY GID, channel_group, payout_type
+UNION ALL
 
--- Step 3: Pre vs Post Customer Behavior Analysis
-CREATE OR REPLACE TABLE CAR_806_PRE_POST_CUSTOMER_ANALYSIS AS
 SELECT
-    period,
+    'POST' As period,
+    GID,
     channel_group,
     PAYOUT_TYPE,
-    customer_segment,
-    COUNT(DISTINCT GID) AS customer_count,
-    ROUND(AVG(txn_count), 2) AS avg_txns_per_customer,
-    ROUND(AVG(total_principal), 2) AS avg_principal_per_customer,
-    ROUND(AVG(total_revenue), 2) AS avg_revenue_per_customer
-FROM (
-    SELECT 
-        'PRE' AS period,
-        GID,
-        channel_group,
-        PAYOUT_TYPE,
-        COUNT(MTCN) AS txn_count,
-        SUM(SNDPRINCIPAL_USD) AS total_principal,
-        SUM(Revenue) AS total_revenue,
-        CASE 
-            WHEN COUNT(MTCN) = 1 THEN 'One-Time'
-            WHEN COUNT(MTCN) BETWEEN 2 AND 5 THEN 'Occasional'
-            WHEN COUNT(MTCN) > 5 THEN 'Frequent'
-        END AS customer_segment
-    FROM CAR_806_TXN_BASE_EXTENDED
-    WHERE txn_dt >= '2024-08-15' AND txn_dt < '2024-10-15'
-    GROUP BY GID, channel_group, PAYOUT_TYPE
-    
-    UNION ALL
-    
-    SELECT 
-        'POST' AS period,
-        GID,
-        channel_group,
-        PAYOUT_TYPE,
-        COUNT(MTCN) AS txn_count,
-        SUM(SNDPRINCIPAL_USD) AS total_principal,
-        SUM(Revenue) AS total_revenue,
-        CASE 
-            WHEN COUNT(MTCN) = 1 THEN 'One-Time'
-            WHEN COUNT(MTCN) BETWEEN 2 AND 5 THEN 'Occasional'
-            WHEN COUNT(MTCN) > 5 THEN 'Frequent'
-        END AS customer_segment
-    FROM CAR_806_TXN_BASE_EXTENDED
-    WHERE txn_dt >= '2024-10-15' AND txn_dt <= '2024-12-31'
-    GROUP BY GID, channel_group, PAYOUT_TYPE
+    count(MTCN) as txn_count,
+    SUM(SNDPRINCIPAL_USD) as total_principal,
+    SUM(REVENUE) as total_revenue,
+    CASE 
+        WHEN COUNT(DISTINCT MTCN) = 1 THEN 'A.1x'
+        WHEN COUNT(DISTINCT MTCN) = 2 THEN 'B.2x'
+        WHEN COUNT(DISTINCT MTCN) = 3 THEN 'C.3x'
+        WHEN COUNT(DISTINCT MTCN) >= 4 AND COUNT(DISTINCT MTCN) <= 7 THEN 'D.4x - 7x'
+        WHEN COUNT(DISTINCT MTCN) >= 8 AND COUNT(DISTINCT MTCN) <= 12 THEN 'E.8x - 12x'
+        WHEN COUNT(DISTINCT MTCN) > 12 THEN 'F.12x+'
+        ELSE 'Unknown'
+    END AS TPC_bucket
+    FROM CAR_806_TXN_BASE
+where DATE(txn_dt) >= '2025-10-15' and DATE(txn_dt) <= '2025-12-31'
+GROUP BY GID, channel_group, payout_type
 ) customer_metrics
-GROUP BY period, channel_group, PAYOUT_TYPE, customer_segment
-ORDER BY period, channel_group, PAYOUT_TYPE, customer_segment;
+GROUP BY period, channel_group, payout_type, TPC_bucket
+ORDER BY period, channel_group, payout_type, TPC_Bucket;
 
--- Step 4: Pre vs Post Summary Comparison
-CREATE OR REPLACE TABLE CAR_806_PRE_POST_SUMMARY AS
-SELECT
-    channel_group,
-    PAYOUT_TYPE,
-    SUM(CASE WHEN period = 'PRE' THEN total_txns ELSE 0 END) AS pre_txns,
-    SUM(CASE WHEN period = 'POST' THEN total_txns ELSE 0 END) AS post_txns,
-    ROUND((SUM(CASE WHEN period = 'POST' THEN total_txns ELSE 0 END) - 
-           SUM(CASE WHEN period = 'PRE' THEN total_txns ELSE 0 END)) * 100.0 / 
-           NULLIF(SUM(CASE WHEN period = 'PRE' THEN total_txns ELSE 0 END), 0), 2) AS txn_change_pct,
-    SUM(CASE WHEN period = 'PRE' THEN unique_customers ELSE 0 END) AS pre_customers,
-    SUM(CASE WHEN period = 'POST' THEN unique_customers ELSE 0 END) AS post_customers,
-    ROUND((SUM(CASE WHEN period = 'POST' THEN unique_customers ELSE 0 END) - 
-           SUM(CASE WHEN period = 'PRE' THEN unique_customers ELSE 0 END)) * 100.0 / 
-           NULLIF(SUM(CASE WHEN period = 'PRE' THEN unique_customers ELSE 0 END), 0), 2) AS customer_change_pct,
-    ROUND(SUM(CASE WHEN period = 'PRE' THEN total_principal ELSE 0 END), 2) AS pre_principal,
-    ROUND(SUM(CASE WHEN period = 'POST' THEN total_principal ELSE 0 END), 2) AS post_principal,
-    ROUND((SUM(CASE WHEN period = 'POST' THEN total_principal ELSE 0 END) - 
-           SUM(CASE WHEN period = 'PRE' THEN total_principal ELSE 0 END)) * 100.0 / 
-           NULLIF(SUM(CASE WHEN period = 'PRE' THEN total_principal ELSE 0 END), 0), 2) AS principal_change_pct,
-    ROUND(SUM(CASE WHEN period = 'PRE' THEN total_revenue ELSE 0 END), 2) AS pre_revenue,
-    ROUND(SUM(CASE WHEN period = 'POST' THEN total_revenue ELSE 0 END), 2) AS post_revenue,
-    ROUND((SUM(CASE WHEN period = 'POST' THEN total_revenue ELSE 0 END) - 
-           SUM(CASE WHEN period = 'PRE' THEN total_revenue ELSE 0 END)) * 100.0 / 
-           NULLIF(SUM(CASE WHEN period = 'PRE' THEN total_revenue ELSE 0 END), 0), 2) AS revenue_change_pct
-FROM CAR_806_PRE_POST_TXN_ANALYSIS
-GROUP BY channel_group, PAYOUT_TYPE
-ORDER BY channel_group, PAYOUT_TYPE;
-
-
--- =====================================================
--- PART 2: YEAR-OVER-YEAR (YoY) ANALYSIS
--- Current Period: 15 Oct 2024 - 31 Dec 2024
--- Prior Year Period: 15 Oct 2023 - 31 Dec 2023
--- =====================================================
-
--- Step 1: Create base table with YoY date range
-CREATE OR REPLACE TABLE CAR_806_TXN_BASE_YOY AS
-SELECT
-    DATE_TRUNC('MONTH', txn.rcvpaying_datetime) AS MTH_YR,
-    txn.rcvpaying_datetime AS txn_dt,
-    txn.SNDCOUNTRY_CODE AS snd_country,
-    txn.RCVCOUNTRY_CODE AS rcv_country,
-    txn.SNDCUSTOMER_KEY AS GID,
-    txn.MTCN,
-    CASE
-        WHEN TXN.PRICING_CHANNEL IN ('WEB', 'APP') THEN 'DIGITAL'
-        WHEN TXN.PRICING_CHANNEL IN ('POS', 'TMT', 'AIR') THEN 'RETAIL'
-        ELSE 'OTHER'
-    END AS channel_group,
-    txn.SNDPRINCIPAL_USD,
-    txn.Revenue,
-    txn.PAYOUT_TYPE
-FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW txn
-    JOIN WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
-        ON txn.sndcustomer_key = cm.customer_key
-WHERE (
-    (txn.rcvpaying_datetime >= '2023-10-15' AND txn.rcvpaying_datetime <= '2023-12-31') OR
-    (txn.rcvpaying_datetime >= '2024-10-15' AND txn.rcvpaying_datetime <= '2024-12-31')
-)
-  AND txn.SNDCOUNTRY_CODE IN ('AE')
-  AND txn.RCVCOUNTRY_CODE IN ('LB');
-
--- Step 2: YoY Transaction Analysis
-CREATE OR REPLACE TABLE CAR_806_YOY_TXN_ANALYSIS AS
-SELECT
-    year_period,
-    channel_group,
-    PAYOUT_TYPE,
-    COUNT(DISTINCT MTCN) AS total_txns,
-    COUNT(DISTINCT GID) AS unique_customers,
-    ROUND(COUNT(DISTINCT MTCN) * 1.0 / COUNT(DISTINCT GID), 2) AS txns_per_customer,
-    ROUND(SUM(SNDPRINCIPAL_USD), 2) AS total_principal,
-    ROUND(SUM(Revenue), 2) AS total_revenue,
-    ROUND(AVG(SNDPRINCIPAL_USD), 2) AS avg_principal_per_txn,
-    ROUND(AVG(Revenue), 2) AS avg_revenue_per_txn
-FROM (
-    SELECT 
-        '2023' AS year_period,
-        *
-    FROM CAR_806_TXN_BASE_YOY
-    WHERE txn_dt >= '2023-10-15' AND txn_dt <= '2023-12-31'
-    
-    UNION ALL
-    
-    SELECT 
-        '2024' AS year_period,
-        *
-    FROM CAR_806_TXN_BASE_YOY
-    WHERE txn_dt >= '2024-10-15' AND txn_dt <= '2024-12-31'
-) combined
-GROUP BY year_period, channel_group, PAYOUT_TYPE
-ORDER BY year_period, channel_group, PAYOUT_TYPE;
-
--- Step 3: YoY Customer Behavior Analysis
-CREATE OR REPLACE TABLE CAR_806_YOY_CUSTOMER_ANALYSIS AS
-SELECT
-    year_period,
-    channel_group,
-    PAYOUT_TYPE,
-    customer_segment,
-    COUNT(DISTINCT GID) AS customer_count,
-    ROUND(AVG(txn_count), 2) AS avg_txns_per_customer,
-    ROUND(AVG(total_principal), 2) AS avg_principal_per_customer,
-    ROUND(AVG(total_revenue), 2) AS avg_revenue_per_customer
-FROM (
-    SELECT 
-        '2023' AS year_period,
-        GID,
-        channel_group,
-        PAYOUT_TYPE,
-        COUNT(MTCN) AS txn_count,
-        SUM(SNDPRINCIPAL_USD) AS total_principal,
-        SUM(Revenue) AS total_revenue,
-        CASE 
-            WHEN COUNT(MTCN) = 1 THEN 'One-Time'
-            WHEN COUNT(MTCN) BETWEEN 2 AND 5 THEN 'Occasional'
-            WHEN COUNT(MTCN) > 5 THEN 'Frequent'
-        END AS customer_segment
-    FROM CAR_806_TXN_BASE_YOY
-    WHERE txn_dt >= '2023-10-15' AND txn_dt <= '2023-12-31'
-    GROUP BY GID, channel_group, PAYOUT_TYPE
-    
-    UNION ALL
-    
-    SELECT 
-        '2024' AS year_period,
-        GID,
-        channel_group,
-        PAYOUT_TYPE,
-        COUNT(MTCN) AS txn_count,
-        SUM(SNDPRINCIPAL_USD) AS total_principal,
-        SUM(Revenue) AS total_revenue,
-        CASE 
-            WHEN COUNT(MTCN) = 1 THEN 'One-Time'
-            WHEN COUNT(MTCN) BETWEEN 2 AND 5 THEN 'Occasional'
-            WHEN COUNT(MTCN) > 5 THEN 'Frequent'
-        END AS customer_segment
-    FROM CAR_806_TXN_BASE_YOY
-    WHERE txn_dt >= '2024-10-15' AND txn_dt <= '2024-12-31'
-    GROUP BY GID, channel_group, PAYOUT_TYPE
-) customer_metrics
-GROUP BY year_period, channel_group, PAYOUT_TYPE, customer_segment
-ORDER BY year_period, channel_group, PAYOUT_TYPE, customer_segment;
-
--- Step 4: YoY Summary Comparison
-CREATE OR REPLACE TABLE CAR_806_YOY_SUMMARY AS
-SELECT
-    channel_group,
-    PAYOUT_TYPE,
-    SUM(CASE WHEN year_period = '2023' THEN total_txns ELSE 0 END) AS txns_2023,
-    SUM(CASE WHEN year_period = '2024' THEN total_txns ELSE 0 END) AS txns_2024,
-    ROUND((SUM(CASE WHEN year_period = '2024' THEN total_txns ELSE 0 END) - 
-           SUM(CASE WHEN year_period = '2023' THEN total_txns ELSE 0 END)) * 100.0 / 
-           NULLIF(SUM(CASE WHEN year_period = '2023' THEN total_txns ELSE 0 END), 0), 2) AS txn_yoy_change_pct,
-    SUM(CASE WHEN year_period = '2023' THEN unique_customers ELSE 0 END) AS customers_2023,
-    SUM(CASE WHEN year_period = '2024' THEN unique_customers ELSE 0 END) AS customers_2024,
-    ROUND((SUM(CASE WHEN year_period = '2024' THEN unique_customers ELSE 0 END) - 
-           SUM(CASE WHEN year_period = '2023' THEN unique_customers ELSE 0 END)) * 100.0 / 
-           NULLIF(SUM(CASE WHEN year_period = '2023' THEN unique_customers ELSE 0 END), 0), 2) AS customer_yoy_change_pct,
-    ROUND(SUM(CASE WHEN year_period = '2023' THEN total_principal ELSE 0 END), 2) AS principal_2023,
-    ROUND(SUM(CASE WHEN year_period = '2024' THEN total_principal ELSE 0 END), 2) AS principal_2024,
-    ROUND((SUM(CASE WHEN year_period = '2024' THEN total_principal ELSE 0 END) - 
-           SUM(CASE WHEN year_period = '2023' THEN total_principal ELSE 0 END)) * 100.0 / 
-           NULLIF(SUM(CASE WHEN year_period = '2023' THEN total_principal ELSE 0 END), 0), 2) AS principal_yoy_change_pct,
-    ROUND(SUM(CASE WHEN year_period = '2023' THEN total_revenue ELSE 0 END), 2) AS revenue_2023,
-    ROUND(SUM(CASE WHEN year_period = '2024' THEN total_revenue ELSE 0 END), 2) AS revenue_2024,
-    ROUND((SUM(CASE WHEN year_period = '2024' THEN total_revenue ELSE 0 END) - 
-           SUM(CASE WHEN year_period = '2023' THEN total_revenue ELSE 0 END)) * 100.0 / 
-           NULLIF(SUM(CASE WHEN year_period = '2023' THEN total_revenue ELSE 0 END), 0), 2) AS revenue_yoy_change_pct
-FROM CAR_806_YOY_TXN_ANALYSIS
-GROUP BY channel_group, PAYOUT_TYPE
-ORDER BY channel_group, PAYOUT_TYPE;
-
-
--- =====================================================
--- FINAL: Query to view all results
--- =====================================================
-
--- View Pre vs Post Summary
-SELECT 'PRE vs POST SUMMARY' AS analysis_type, * FROM CAR_806_PRE_POST_SUMMARY;
-
--- View YoY Summary
-SELECT 'YOY SUMMARY' AS analysis_type, * FROM CAR_806_YOY_SUMMARY;
+select * from CAR_806_PRE_POST_CUSTOMER_ANALYSIS;   
