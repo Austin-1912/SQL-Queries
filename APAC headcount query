@@ -12,31 +12,32 @@ SELECT
     payout_type,
     TPC_bucket,
     COUNT(DISTINCT GID) AS customer_count,
-    COUNT(DISTINCT MTCN) AS total_txns,
-    SUM(SNDPRINCIPAL_USD) AS total_principal,
-    SUM(REVENUE) AS total_revenue,
-    ROUND(AVG(SNDPRINCIPAL_USD), 2) AS avg_principal_per_txn,
-    ROUND(AVG(REVENUE), 2) AS avg_revenue_per_txn
+    SUM(txn_count) AS total_txns,
+    SUM(total_principal) AS total_principal,
+    SUM(total_revenue) AS total_revenue,
+    ROUND(AVG(total_principal / txn_count), 2) AS avg_principal_per_txn,
+    ROUND(AVG(total_revenue / txn_count), 2) AS avg_revenue_per_txn
 FROM (
     SELECT 
         'PRE' AS period,
         GID,
         channel_group,
         payout_type,
-        MTCN,
-        SNDPRINCIPAL_USD,
-        REVENUE,
+        COUNT(MTCN) AS txn_count,
+        SUM(SNDPRINCIPAL_USD) AS total_principal,
+        SUM(REVENUE) AS total_revenue,
         CASE 
-            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) = 1 THEN 'A.1x'
-            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) = 2 THEN 'B.2x'
-            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) = 3 THEN 'C.3x'
-            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) BETWEEN 4 AND 7 THEN 'D.4x - 7x'
-            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) BETWEEN 8 AND 12 THEN 'E.8x - 12x'
-            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) > 12 THEN 'F.12x+'
+            WHEN COUNT(DISTINCT MTCN) = 1 THEN 'A.1x'
+            WHEN COUNT(DISTINCT MTCN) = 2 THEN 'B.2x'
+            WHEN COUNT(DISTINCT MTCN) = 3 THEN 'C.3x'
+            WHEN COUNT(DISTINCT MTCN) >= 4 AND COUNT(DISTINCT MTCN) <= 7 THEN 'D.4x - 7x'
+            WHEN COUNT(DISTINCT MTCN) >= 8 AND COUNT(DISTINCT MTCN) <= 12 THEN 'E.8x - 12x'
+            WHEN COUNT(DISTINCT MTCN) > 12 THEN 'F.12x+'
             ELSE 'Unknown'
         END AS TPC_bucket
     FROM CAR_806_TXN_BASE
     WHERE DATE(txn_dt) >= '2025-08-01' AND DATE(txn_dt) < '2025-10-15'
+    GROUP BY GID, channel_group, payout_type
     
     UNION ALL
     
@@ -45,20 +46,21 @@ FROM (
         GID,
         channel_group,
         payout_type,
-        MTCN,
-        SNDPRINCIPAL_USD,
-        REVENUE,
+        COUNT(MTCN) AS txn_count,
+        SUM(SNDPRINCIPAL_USD) AS total_principal,
+        SUM(REVENUE) AS total_revenue,
         CASE 
-            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) = 1 THEN 'A.1x'
-            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) = 2 THEN 'B.2x'
-            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) = 3 THEN 'C.3x'
-            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) BETWEEN 4 AND 7 THEN 'D.4x - 7x'
-            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) BETWEEN 8 AND 12 THEN 'E.8x - 12x'
-            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) > 12 THEN 'F.12x+'
+            WHEN COUNT(DISTINCT MTCN) = 1 THEN 'A.1x'
+            WHEN COUNT(DISTINCT MTCN) = 2 THEN 'B.2x'
+            WHEN COUNT(DISTINCT MTCN) = 3 THEN 'C.3x'
+            WHEN COUNT(DISTINCT MTCN) >= 4 AND COUNT(DISTINCT MTCN) <= 7 THEN 'D.4x - 7x'
+            WHEN COUNT(DISTINCT MTCN) >= 8 AND COUNT(DISTINCT MTCN) <= 12 THEN 'E.8x - 12x'
+            WHEN COUNT(DISTINCT MTCN) > 12 THEN 'F.12x+'
             ELSE 'Unknown'
         END AS TPC_bucket
     FROM CAR_806_TXN_BASE
     WHERE DATE(txn_dt) >= '2025-10-15' AND DATE(txn_dt) <= '2025-12-31'
+    GROUP BY GID, channel_group, payout_type
 ) customer_metrics
 GROUP BY period, channel_group, payout_type, TPC_bucket
 ORDER BY period, channel_group, payout_type, TPC_bucket;
@@ -107,31 +109,32 @@ SELECT
     payout_type,
     TPC_bucket,
     COUNT(DISTINCT GID) AS customer_count,
-    COUNT(DISTINCT MTCN) AS total_txns,
-    SUM(SNDPRINCIPAL_USD) AS total_principal,
-    SUM(REVENUE) AS total_revenue,
-    ROUND(AVG(SNDPRINCIPAL_USD), 2) AS avg_principal_per_txn,
-    ROUND(AVG(REVENUE), 2) AS avg_revenue_per_txn
+    SUM(txn_count) AS total_txns,
+    SUM(total_principal) AS total_principal,
+    SUM(total_revenue) AS total_revenue,
+    ROUND(AVG(total_principal / txn_count), 2) AS avg_principal_per_txn,
+    ROUND(AVG(total_revenue / txn_count), 2) AS avg_revenue_per_txn
 FROM (
     SELECT 
         '2023' AS year_period,
         GID,
         channel_group,
         payout_type,
-        MTCN,
-        SNDPRINCIPAL_USD,
-        REVENUE,
+        COUNT(MTCN) AS txn_count,
+        SUM(SNDPRINCIPAL_USD) AS total_principal,
+        SUM(REVENUE) AS total_revenue,
         CASE 
-            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) = 1 THEN 'A.1x'
-            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) = 2 THEN 'B.2x'
-            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) = 3 THEN 'C.3x'
-            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) BETWEEN 4 AND 7 THEN 'D.4x - 7x'
-            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) BETWEEN 8 AND 12 THEN 'E.8x - 12x'
-            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) > 12 THEN 'F.12x+'
+            WHEN COUNT(DISTINCT MTCN) = 1 THEN 'A.1x'
+            WHEN COUNT(DISTINCT MTCN) = 2 THEN 'B.2x'
+            WHEN COUNT(DISTINCT MTCN) = 3 THEN 'C.3x'
+            WHEN COUNT(DISTINCT MTCN) >= 4 AND COUNT(DISTINCT MTCN) <= 7 THEN 'D.4x - 7x'
+            WHEN COUNT(DISTINCT MTCN) >= 8 AND COUNT(DISTINCT MTCN) <= 12 THEN 'E.8x - 12x'
+            WHEN COUNT(DISTINCT MTCN) > 12 THEN 'F.12x+'
             ELSE 'Unknown'
         END AS TPC_bucket
     FROM CAR_806_TXN_BASE_YOY
     WHERE DATE(txn_dt) >= '2023-10-15' AND DATE(txn_dt) <= '2023-12-31'
+    GROUP BY GID, channel_group, payout_type
     
     UNION ALL
     
@@ -140,20 +143,21 @@ FROM (
         GID,
         channel_group,
         payout_type,
-        MTCN,
-        SNDPRINCIPAL_USD,
-        REVENUE,
+        COUNT(MTCN) AS txn_count,
+        SUM(SNDPRINCIPAL_USD) AS total_principal,
+        SUM(REVENUE) AS total_revenue,
         CASE 
-            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) = 1 THEN 'A.1x'
-            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) = 2 THEN 'B.2x'
-            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) = 3 THEN 'C.3x'
-            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) BETWEEN 4 AND 7 THEN 'D.4x - 7x'
-            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) BETWEEN 8 AND 12 THEN 'E.8x - 12x'
-            WHEN COUNT(DISTINCT MTCN) OVER (PARTITION BY GID, channel_group, payout_type) > 12 THEN 'F.12x+'
+            WHEN COUNT(DISTINCT MTCN) = 1 THEN 'A.1x'
+            WHEN COUNT(DISTINCT MTCN) = 2 THEN 'B.2x'
+            WHEN COUNT(DISTINCT MTCN) = 3 THEN 'C.3x'
+            WHEN COUNT(DISTINCT MTCN) >= 4 AND COUNT(DISTINCT MTCN) <= 7 THEN 'D.4x - 7x'
+            WHEN COUNT(DISTINCT MTCN) >= 8 AND COUNT(DISTINCT MTCN) <= 12 THEN 'E.8x - 12x'
+            WHEN COUNT(DISTINCT MTCN) > 12 THEN 'F.12x+'
             ELSE 'Unknown'
         END AS TPC_bucket
     FROM CAR_806_TXN_BASE_YOY
     WHERE DATE(txn_dt) >= '2024-10-15' AND DATE(txn_dt) <= '2024-12-31'
+    GROUP BY GID, channel_group, payout_type
 ) customer_metrics
 GROUP BY year_period, channel_group, payout_type, TPC_bucket
 ORDER BY year_period, channel_group, payout_type, TPC_bucket;
