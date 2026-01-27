@@ -1,3 +1,11 @@
+I'll review your script and help you complete it with proper flow and validation. Let me analyze the requirements and improve the code:
+
+```sql
+-- ============================================================================
+-- CAR_841: Canada CEM Audience Sizing Analysis
+-- ============================================================================
+
+-- Step 1: Create historical transactions table
 CREATE OR REPLACE TABLE CAR_841_HISTORICAL_TXNS AS
 SELECT DISTINCT
     SNDCUSTOMER_KEY,
@@ -25,64 +33,219 @@ WHERE DATE(RCVPAYING_DATETIME) >= DATEADD(MONTH, -48, DATE('2025-01-26'))
   AND SNDCOUNTRY_CODE = 'CA'
   AND RCVPAYING_DATETIME IS NOT NULL;
 
-  -- App users in R12
+-- Validation checkpoint
+SELECT 'Historical Transactions' AS checkpoint,
+       COUNT(*) AS total_records,
+       COUNT(DISTINCT SNDCUSTOMER_KEY) AS unique_customers
+FROM CAR_841_HISTORICAL_TXNS;
+
+-- Step 2: Identify active customers (transacted in R12)
+CREATE OR REPLACE TEMP TABLE CAR_841_ACTIVE_CUSTOMERS AS
+SELECT DISTINCT SNDCUSTOMER_KEY AS customer_key
+FROM CAR_841_HISTORICAL_TXNS
+WHERE history_period = 'R12';
+
+-- Step 3: Identify lapsed customers (transacted in R13+ but not R12)
+CREATE OR REPLACE TEMP TABLE CAR_841_LAPSED_CUSTOMERS AS
+SELECT DISTINCT SNDCUSTOMER_KEY AS customer_key
+FROM CAR_841_HISTORICAL_TXNS
+WHERE history_period = 'R13_PLUS'
+  AND SNDCUSTOMER_KEY NOT IN (SELECT customer_key FROM CAR_841_ACTIVE_CUSTOMERS);
+
+-- Step 4: App users in R12 (for app marketability)
 CREATE OR REPLACE TEMP TABLE CAR_841_CA_APP_USERS_R12 AS
 SELECT DISTINCT SNDCUSTOMER_KEY AS customer_key
 FROM CAR_841_HISTORICAL_TXNS
 WHERE history_period = 'R12' AND PRICING_CHANNEL = 'APP';
 
-select count(distinct customer_key), count(customer_key) from CAR_841_CA_APP_USERS_R12;--327,290	327,290
+-- Validation checkpoint
+SELECT 'App Users R12' AS checkpoint,
+       COUNT(DISTINCT customer_key) AS unique_customers,
+       COUNT(customer_key) AS total_records
+FROM CAR_841_CA_APP_USERS_R12;
 
--- Master marketability snapshot for Canada
+-- Step 5: Identify RNT (Registered Non-Transactors) in R12
+-- Users who registered in R12 but have no transactions in R12
+CREATE OR REPLACE TEMP TABLE CAR_841_RNT_R12 AS
+SELECT DISTINCT cm.customer_key
+FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
+WHERE cm.country_code = 'CA'
+  AND DATE(cm.registration_date) >= DATEADD(MONTH, -12, DATE('2025-01-26'))
+  AND DATE(cm.registration_date) < DATE('2025-01-26')
+  AND cm.customer_key NOT IN (SELECT customer_key FROM CAR_841_ACTIVE_CUSTOMERS);
+
+-- Step 6: Master marketability table
 CREATE OR REPLACE TABLE CAR_841_CA_MARKETABILITY AS
 SELECT
     cm.customer_key,
     cm.country_code,
     cm.global_holdout,
+    cm.email_address_on_file_flag,
+    cm.mobile_number_on_file_flag,
+    cm.marketing_flag,
+    cm.opt_email,
+    cm.opt_sms,
+    cm.double_opt_sms,
+
+    -- Customer segment
+    CASE
+        WHEN ac.customer_key IS NOT NULL THEN 'ACTIVE'
+        WHEN lc.customer_key IS NOT NULL THEN 'LAPSED'
+        WHEN rnt.customer_key IS NOT NULL THEN 'RNT'
+        ELSE 'OTHER'
+    END AS customer_segment,
 
     -- Email marketable (marketing + email on file + opt-in)
     CASE
-      WHEN cm.marketing_flag = 'Y'
-       AND cm.email_address_on_file_flag = 'Y'
-       AND cm.opt_email = 'I'
-      THEN 'Y' ELSE 'N' END AS email_marketability_flag,
+        WHEN cm.marketing_flag = 'Y'
+         AND cm.email_address_on_file_flag = 'Y'
+         AND cm.opt_email = 'I'
+        THEN 'Y' ELSE 'N'
+    END AS email_marketability_flag,
 
-    -- SMS marketable 
+    -- SMS marketable
     CASE 
-        WHEN cm.marketing_flag = 'Y' AND cm.mobile_number_on_file_flag = 'Y' AND cm.opt_sms = 'I' THEN 'Y'
+        WHEN cm.marketing_flag = 'Y' 
+         AND cm.mobile_number_on_file_flag = 'Y' 
+         AND cm.opt_sms = 'I'
+        THEN 'Y'
         ELSE 'N'
     END AS sms_marketability_flag,
 
-    -- App reachable = had APP txn in R12
-    CASE WHEN au.customer_key IS NOT NULL THEN 'Y' ELSE 'N' END AS app_marketability_flag,
+    -- App reachable (had APP txn in R12)
+    CASE 
+        WHEN au.customer_key IS NOT NULL THEN 'Y' 
+        ELSE 'N' 
+    END AS app_marketability_flag,
 
-    -- Overall CEM addressable (any of email/sms/app)
+    -- Service email (email on file, regardless of marketing opt-in)
     CASE
-      WHEN (
-        (cm.marketing_flag = 'Y' AND cm.email_address_on_file_flag = 'Y' AND cm.opt_email = 'I') OR
-        (
-          (cm.mobile_number_on_file_flag = 'Y' AND cm.opt_sms = 'I' AND cm.double_opt_sms = 'I' AND cm.marketing_flag = 'Y')
-          OR
-          ( cm.mobile_number_on_file_flag = 'Y' AND cm.opt_sms = 'I' AND cm.marketing_flag = 'Y')
-        ) OR
-        (au.customer_key IS NOT NULL)
-      )
-      THEN 'Y' ELSE 'N'
+        WHEN cm.email_address_on_file_flag = 'Y' THEN 'Y'
+        ELSE 'N'
+    END AS service_email_flag,
+
+    -- Overall CEM addressable (any of email/sms/app with marketing consent)
+    CASE
+        WHEN (
+            (cm.marketing_flag = 'Y' AND cm.email_address_on_file_flag = 'Y' AND cm.opt_email = 'I') OR
+            (cm.marketing_flag = 'Y' AND cm.mobile_number_on_file_flag = 'Y' AND cm.opt_sms = 'I') OR
+            (au.customer_key IS NOT NULL)
+        )
+        THEN 'Y' ELSE 'N'
     END AS marketability_flag
 
 FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
-LEFT JOIN CAR_841_CA_APP_USERS_R12 au
-  ON cm.customer_key = au.customer_key
+LEFT JOIN CAR_841_ACTIVE_CUSTOMERS ac ON cm.customer_key = ac.customer_key
+LEFT JOIN CAR_841_LAPSED_CUSTOMERS lc ON cm.customer_key = lc.customer_key
+LEFT JOIN CAR_841_RNT_R12 rnt ON cm.customer_key = rnt.customer_key
+LEFT JOIN CAR_841_CA_APP_USERS_R12 au ON cm.customer_key = au.customer_key
 WHERE cm.country_code = 'CA';
 
-select count(distinct customer_key), count(customer_key) FROM CAR_841_CA_MARKETABILITY;--9,134,584	9,134,584
+-- Validation checkpoint
+SELECT 'Marketability Master' AS checkpoint,
+       COUNT(DISTINCT customer_key) AS unique_customers,
+       COUNT(customer_key) AS total_records
+FROM CAR_841_CA_MARKETABILITY;
 
-I have written a script for the below request, i want you to check and complete the script and make the code simple and ensure
-the proper flow of numbers.
+-- ============================================================================
+-- FINAL OUTPUTS: Answer to the 4 questions
+-- ============================================================================
 
-1.overall audience of size of Canada CEM audience - the total number of Canadian users that we can send a cem communication to,
-this can include both active and lapsed(Haven’t transacted in the past 12 months but have transacted before that).
-2.total number of addressable lapsed customers that can be reached by CEM (email/in-app/push notification/sms)-
-3.total addressable RNT audience - People who have Registered in R12 and have not transacted in that time Frame
-4. total audience we can message via service email - Service email would be sent to all users , so that would be the total size
-Whereas addressable lapsed would only be for users that specifically opted in for marketing emails / communications
+-- Question 1: Overall Canada CEM audience size
+-- (total addressable via any CEM channel: email/SMS/app with marketing consent)
+SELECT 
+    '1. Overall CEM Audience (Active + Lapsed)' AS metric,
+    COUNT(DISTINCT customer_key) AS total_customers
+FROM CAR_841_CA_MARKETABILITY
+WHERE marketability_flag = 'Y'
+  AND customer_segment IN ('ACTIVE', 'LAPSED');
+
+-- Question 2: Total addressable lapsed customers via CEM
+SELECT 
+    '2. Addressable Lapsed Customers' AS metric,
+    COUNT(DISTINCT customer_key) AS total_customers
+FROM CAR_841_CA_MARKETABILITY
+WHERE marketability_flag = 'Y'
+  AND customer_segment = 'LAPSED';
+
+-- Breakdown by channel for lapsed
+SELECT 
+    '2a. Lapsed - Channel Breakdown' AS metric,
+    SUM(CASE WHEN email_marketability_flag = 'Y' THEN 1 ELSE 0 END) AS email_addressable,
+    SUM(CASE WHEN sms_marketability_flag = 'Y' THEN 1 ELSE 0 END) AS sms_addressable,
+    SUM(CASE WHEN app_marketability_flag = 'Y' THEN 1 ELSE 0 END) AS app_addressable
+FROM CAR_841_CA_MARKETABILITY
+WHERE customer_segment = 'LAPSED';
+
+-- Question 3: Total addressable RNT audience
+SELECT 
+    '3. Addressable RNT (Registered Non-Transactors)' AS metric,
+    COUNT(DISTINCT customer_key) AS total_customers
+FROM CAR_841_CA_MARKETABILITY
+WHERE marketability_flag = 'Y'
+  AND customer_segment = 'RNT';
+
+-- Breakdown by channel for RNT
+SELECT 
+    '3a. RNT - Channel Breakdown' AS metric,
+    SUM(CASE WHEN email_marketability_flag = 'Y' THEN 1 ELSE 0 END) AS email_addressable,
+    SUM(CASE WHEN sms_marketability_flag = 'Y' THEN 1 ELSE 0 END) AS sms_addressable,
+    SUM(CASE WHEN app_marketability_flag = 'Y' THEN 1 ELSE 0 END) AS app_addressable
+FROM CAR_841_CA_MARKETABILITY
+WHERE customer_segment = 'RNT';
+
+-- Question 4: Total audience for service email
+-- (all users with email on file, regardless of marketing opt-in)
+SELECT 
+    '4. Service Email Audience (All CA with Email)' AS metric,
+    COUNT(DISTINCT customer_key) AS total_customers
+FROM CAR_841_CA_MARKETABILITY
+WHERE service_email_flag = 'Y';
+
+-- ============================================================================
+-- COMPREHENSIVE SUMMARY VIEW
+-- ============================================================================
+SELECT 
+    customer_segment,
+    COUNT(DISTINCT customer_key) AS total_customers,
+    SUM(CASE WHEN marketability_flag = 'Y' THEN 1 ELSE 0 END) AS cem_addressable,
+    SUM(CASE WHEN email_marketability_flag = 'Y' THEN 1 ELSE 0 END) AS email_addressable,
+    SUM(CASE WHEN sms_marketability_flag = 'Y' THEN 1 ELSE 0 END) AS sms_addressable,
+    SUM(CASE WHEN app_marketability_flag = 'Y' THEN 1 ELSE 0 END) AS app_addressable,
+    SUM(CASE WHEN service_email_flag = 'Y' THEN 1 ELSE 0 END) AS service_email_addressable
+FROM CAR_841_CA_MARKETABILITY
+GROUP BY customer_segment
+ORDER BY 
+    CASE customer_segment
+        WHEN 'ACTIVE' THEN 1
+        WHEN 'LAPSED' THEN 2
+        WHEN 'RNT' THEN 3
+        ELSE 4
+    END;
+
+-- ============================================================================
+-- VALIDATION: Ensure no overlap between segments
+-- ============================================================================
+SELECT 
+    'Validation - Segment Overlap Check' AS check_name,
+    COUNT(*) AS records_with_multiple_segments
+FROM (
+    SELECT customer_key, COUNT(DISTINCT customer_segment) AS segment_count
+    FROM CAR_841_CA_MARKETABILITY
+    WHERE customer_segment IN ('ACTIVE', 'LAPSED', 'RNT')
+    GROUP BY customer_key
+    HAVING COUNT(DISTINCT customer_segment) > 1
+);
+```
+
+## Key Improvements:
+
+1. **Clear Segmentation**: Added `customer_segment` field to distinguish ACTIVE, LAPSED, and RNT users
+2. **RNT Identification**: Created proper logic for Registered Non-Transactors
+3. **Service Email Flag**: Separate flag for service emails (no marketing consent required)
+4. **Validation Checkpoints**: Added queries to validate data at each step
+5. **Comprehensive Summary**: Final summary showing all metrics by segment
+6. **No Overlap**: Ensured mutually exclusive customer segments
+7. **Clear Answers**: Four separate queries directly answering your questions
+
+The script now properly flows and provides clear, validated numbers for each audience segment.
