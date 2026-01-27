@@ -1,165 +1,88 @@
--- =====================================================
--- PART 1: PRE vs POST ANALYSIS (MERGED)
--- Pre Period: 01 Aug 2025 - 14 Oct 2025
--- Post Period: 15 Oct 2025 - 31 Dec 2025
--- =====================================================
-
--- Merged Pre vs Post Analysis (Transactions + Customer Behavior)
-CREATE OR REPLACE TABLE CAR_806_PRE_POST_ANALYSIS AS 
-SELECT 
-    period,
-    channel_group,
-    payout_type,
-    TPC_bucket,
-    COUNT(DISTINCT GID) AS customer_count,
-    SUM(txn_count) AS total_txns,
-    SUM(total_principal) AS total_principal,
-    SUM(total_revenue) AS total_revenue,
-    ROUND(AVG(total_principal / txn_count), 2) AS avg_principal_per_txn,
-    ROUND(AVG(total_revenue / txn_count), 2) AS avg_revenue_per_txn
-FROM (
-    SELECT 
-        'PRE' AS period,
-        GID,
-        channel_group,
-        payout_type,
-        COUNT(MTCN) AS txn_count,
-        SUM(SNDPRINCIPAL_USD) AS total_principal,
-        SUM(REVENUE) AS total_revenue,
-        CASE 
-            WHEN COUNT(DISTINCT MTCN) = 1 THEN 'A.1x'
-            WHEN COUNT(DISTINCT MTCN) = 2 THEN 'B.2x'
-            WHEN COUNT(DISTINCT MTCN) = 3 THEN 'C.3x'
-            WHEN COUNT(DISTINCT MTCN) >= 4 AND COUNT(DISTINCT MTCN) <= 7 THEN 'D.4x - 7x'
-            WHEN COUNT(DISTINCT MTCN) >= 8 AND COUNT(DISTINCT MTCN) <= 12 THEN 'E.8x - 12x'
-            WHEN COUNT(DISTINCT MTCN) > 12 THEN 'F.12x+'
-            ELSE 'Unknown'
-        END AS TPC_bucket
-    FROM CAR_806_TXN_BASE
-    WHERE DATE(txn_dt) >= '2025-08-01' AND DATE(txn_dt) < '2025-10-15'
-    GROUP BY GID, channel_group, payout_type
-    
-    UNION ALL
-    
-    SELECT
-        'POST' AS period,
-        GID,
-        channel_group,
-        payout_type,
-        COUNT(MTCN) AS txn_count,
-        SUM(SNDPRINCIPAL_USD) AS total_principal,
-        SUM(REVENUE) AS total_revenue,
-        CASE 
-            WHEN COUNT(DISTINCT MTCN) = 1 THEN 'A.1x'
-            WHEN COUNT(DISTINCT MTCN) = 2 THEN 'B.2x'
-            WHEN COUNT(DISTINCT MTCN) = 3 THEN 'C.3x'
-            WHEN COUNT(DISTINCT MTCN) >= 4 AND COUNT(DISTINCT MTCN) <= 7 THEN 'D.4x - 7x'
-            WHEN COUNT(DISTINCT MTCN) >= 8 AND COUNT(DISTINCT MTCN) <= 12 THEN 'E.8x - 12x'
-            WHEN COUNT(DISTINCT MTCN) > 12 THEN 'F.12x+'
-            ELSE 'Unknown'
-        END AS TPC_bucket
-    FROM CAR_806_TXN_BASE
-    WHERE DATE(txn_dt) >= '2025-10-15' AND DATE(txn_dt) <= '2025-12-31'
-    GROUP BY GID, channel_group, payout_type
-) customer_metrics
-GROUP BY period, channel_group, payout_type, TPC_bucket
-ORDER BY period, channel_group, payout_type, TPC_bucket;
-
-SELECT * FROM CAR_806_PRE_POST_ANALYSIS;
-
-
--- =====================================================
--- PART 2: YEAR-OVER-YEAR (YoY) ANALYSIS
--- Current Period: 15 Oct 2024 - 31 Dec 2024
--- Prior Year Period: 15 Oct 2023 - 31 Dec 2023
--- =====================================================
-
--- Step 1: Create base table with YoY date range
-CREATE OR REPLACE TABLE CAR_806_TXN_BASE_YOY AS
-SELECT
-    DATE_TRUNC('MONTH', txn.rcvpaying_datetime) AS MTH_YR,
-    txn.rcvpaying_datetime AS txn_dt,
-    txn.SNDCOUNTRY_CODE AS snd_country,
-    txn.RCVCOUNTRY_CODE AS rcv_country,
-    txn.SNDCUSTOMER_KEY AS GID,
-    txn.MTCN,
+CREATE OR REPLACE TABLE CAR_841_HISTORICAL_TXNS AS
+SELECT DISTINCT
+    SNDCUSTOMER_KEY,
+    RCVPAYING_DATETIME,
+    PRICING_CHANNEL,
+    -- Channel classification
     CASE
-        WHEN TXN.PRICING_CHANNEL IN ('WEB', 'APP') THEN 'DIGITAL'
-        WHEN TXN.PRICING_CHANNEL IN ('POS', 'TMT', 'AIR') THEN 'RETAIL'
+        WHEN PRICING_CHANNEL IN ('WEB', 'APP') THEN 'DIGITAL'
+        WHEN PRICING_CHANNEL IN ('POS', 'TMT', 'AIR') THEN 'RETAIL'
         ELSE 'OTHER'
     END AS channel_group,
-    txn.SNDPRINCIPAL_USD,
-    txn.Revenue,
-    txn.PAYOUT_TYPE
-FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW txn
-    JOIN WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
-        ON txn.sndcustomer_key = cm.customer_key
-WHERE (
-    (DATE(txn.rcvpaying_datetime) >= '2023-10-15' AND DATE(txn.rcvpaying_datetime) <= '2023-12-31') OR
-    (DATE(txn.rcvpaying_datetime) >= '2024-10-15' AND DATE(txn.rcvpaying_datetime) <= '2024-12-31')
-)
-  AND txn.SNDCOUNTRY_CODE IN ('AE')
-  AND txn.RCVCOUNTRY_CODE IN ('LB');
+    -- Time period classification
+    CASE
+        WHEN DATE(RCVPAYING_DATETIME) >= DATEADD(MONTH, -12, DATE('2025-01-26'))
+             AND DATE(RCVPAYING_DATETIME) < DATE('2025-01-26')
+        THEN 'R12'
+        
+        WHEN DATE(RCVPAYING_DATETIME) >= DATEADD(MONTH, -48, DATE('2025-01-26'))
+             AND DATE(RCVPAYING_DATETIME) < DATEADD(MONTH, -12, DATE('2025-01-26'))
+        THEN 'R13_PLUS'
+    END AS history_period
+FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+WHERE DATE(RCVPAYING_DATETIME) >= DATEADD(MONTH, -48, DATE('2025-01-26'))
+  AND DATE(RCVPAYING_DATETIME) < DATE('2025-01-26')
+  AND SNDCOUNTRY_CODE = 'CA'
+  AND RCVPAYING_DATETIME IS NOT NULL;
 
--- Step 2: Merged YoY Analysis (Transactions + Customer Behavior)
-CREATE OR REPLACE TABLE CAR_806_YOY_ANALYSIS AS
-SELECT 
-    year_period,
-    channel_group,
-    payout_type,
-    TPC_bucket,
-    COUNT(DISTINCT GID) AS customer_count,
-    SUM(txn_count) AS total_txns,
-    SUM(total_principal) AS total_principal,
-    SUM(total_revenue) AS total_revenue,
-    ROUND(AVG(total_principal / txn_count), 2) AS avg_principal_per_txn,
-    ROUND(AVG(total_revenue / txn_count), 2) AS avg_revenue_per_txn
-FROM (
-    SELECT 
-        '2023' AS year_period,
-        GID,
-        channel_group,
-        payout_type,
-        COUNT(MTCN) AS txn_count,
-        SUM(SNDPRINCIPAL_USD) AS total_principal,
-        SUM(REVENUE) AS total_revenue,
-        CASE 
-            WHEN COUNT(DISTINCT MTCN) = 1 THEN 'A.1x'
-            WHEN COUNT(DISTINCT MTCN) = 2 THEN 'B.2x'
-            WHEN COUNT(DISTINCT MTCN) = 3 THEN 'C.3x'
-            WHEN COUNT(DISTINCT MTCN) >= 4 AND COUNT(DISTINCT MTCN) <= 7 THEN 'D.4x - 7x'
-            WHEN COUNT(DISTINCT MTCN) >= 8 AND COUNT(DISTINCT MTCN) <= 12 THEN 'E.8x - 12x'
-            WHEN COUNT(DISTINCT MTCN) > 12 THEN 'F.12x+'
-            ELSE 'Unknown'
-        END AS TPC_bucket
-    FROM CAR_806_TXN_BASE_YOY
-    WHERE DATE(txn_dt) >= '2023-10-15' AND DATE(txn_dt) <= '2023-12-31'
-    GROUP BY GID, channel_group, payout_type
-    
-    UNION ALL
-    
-    SELECT
-        '2024' AS year_period,
-        GID,
-        channel_group,
-        payout_type,
-        COUNT(MTCN) AS txn_count,
-        SUM(SNDPRINCIPAL_USD) AS total_principal,
-        SUM(REVENUE) AS total_revenue,
-        CASE 
-            WHEN COUNT(DISTINCT MTCN) = 1 THEN 'A.1x'
-            WHEN COUNT(DISTINCT MTCN) = 2 THEN 'B.2x'
-            WHEN COUNT(DISTINCT MTCN) = 3 THEN 'C.3x'
-            WHEN COUNT(DISTINCT MTCN) >= 4 AND COUNT(DISTINCT MTCN) <= 7 THEN 'D.4x - 7x'
-            WHEN COUNT(DISTINCT MTCN) >= 8 AND COUNT(DISTINCT MTCN) <= 12 THEN 'E.8x - 12x'
-            WHEN COUNT(DISTINCT MTCN) > 12 THEN 'F.12x+'
-            ELSE 'Unknown'
-        END AS TPC_bucket
-    FROM CAR_806_TXN_BASE_YOY
-    WHERE DATE(txn_dt) >= '2024-10-15' AND DATE(txn_dt) <= '2024-12-31'
-    GROUP BY GID, channel_group, payout_type
-) customer_metrics
-GROUP BY year_period, channel_group, payout_type, TPC_bucket
-ORDER BY year_period, channel_group, payout_type, TPC_bucket;
+  -- App users in R12
+CREATE OR REPLACE TEMP TABLE CAR_841_CA_APP_USERS_R12 AS
+SELECT DISTINCT SNDCUSTOMER_KEY AS customer_key
+FROM CAR_841_HISTORICAL_TXNS
+WHERE history_period = 'R12' AND PRICING_CHANNEL = 'APP';
 
-SELECT * FROM CAR_806_YOY_ANALYSIS;
+select count(distinct customer_key), count(customer_key) from CAR_841_CA_APP_USERS_R12;--327,290	327,290
+
+-- Master marketability snapshot for Canada
+CREATE OR REPLACE TABLE CAR_841_CA_MARKETABILITY AS
+SELECT
+    cm.customer_key,
+    cm.country_code,
+    cm.global_holdout,
+
+    -- Email marketable (marketing + email on file + opt-in)
+    CASE
+      WHEN cm.marketing_flag = 'Y'
+       AND cm.email_address_on_file_flag = 'Y'
+       AND cm.opt_email = 'I'
+      THEN 'Y' ELSE 'N' END AS email_marketability_flag,
+
+    -- SMS marketable 
+    CASE 
+        WHEN cm.marketing_flag = 'Y' AND cm.mobile_number_on_file_flag = 'Y' AND cm.opt_sms = 'I' THEN 'Y'
+        ELSE 'N'
+    END AS sms_marketability_flag,
+
+    -- App reachable = had APP txn in R12
+    CASE WHEN au.customer_key IS NOT NULL THEN 'Y' ELSE 'N' END AS app_marketability_flag,
+
+    -- Overall CEM addressable (any of email/sms/app)
+    CASE
+      WHEN (
+        (cm.marketing_flag = 'Y' AND cm.email_address_on_file_flag = 'Y' AND cm.opt_email = 'I') OR
+        (
+          (cm.mobile_number_on_file_flag = 'Y' AND cm.opt_sms = 'I' AND cm.double_opt_sms = 'I' AND cm.marketing_flag = 'Y')
+          OR
+          ( cm.mobile_number_on_file_flag = 'Y' AND cm.opt_sms = 'I' AND cm.marketing_flag = 'Y')
+        ) OR
+        (au.customer_key IS NOT NULL)
+      )
+      THEN 'Y' ELSE 'N'
+    END AS marketability_flag
+
+FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
+LEFT JOIN CAR_841_CA_APP_USERS_R12 au
+  ON cm.customer_key = au.customer_key
+WHERE cm.country_code = 'CA';
+
+select count(distinct customer_key), count(customer_key) FROM CAR_841_CA_MARKETABILITY;--9,134,584	9,134,584
+
+I have written a script for the below request, i want you to check and complete the script and make the code simple and ensure
+the proper flow of numbers.
+
+1.overall audience of size of Canada CEM audience - the total number of Canadian users that we can send a cem communication to,
+this can include both active and lapsed(Haven’t transacted in the past 12 months but have transacted before that).
+2.total number of addressable lapsed customers that can be reached by CEM (email/in-app/push notification/sms)-
+3.total addressable RNT audience - People who have Registered in R12 and have not transacted in that time Frame
+4. total audience we can message via service email - Service email would be sent to all users , so that would be the total size
+Whereas addressable lapsed would only be for users that specifically opted in for marketing emails / communications
