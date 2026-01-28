@@ -1,18 +1,69 @@
-select
-    '@' || t.txn_id AS TXN_ID,
-    MIN(rcvpaying_datetime) as transaction_date,
-    '@' || t.sndcustomer_key as GID,
-    t.send_country_name,
-    t.Send_state,
-    c.country_code As Registered_Country_Code,
-    c.state as Registered_State,
-    c.city as Registered_City,
-    RCVCOUNTRY_CODE as corridor,
-    t.SND_Purpose_Purchase_Category as Transaction_Reason,
-        MONTH(rcvpaying_datetime) as transaction_Month,
-    YEAR(rcvpaying_datetime) as transaction_Year,
-FROM WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
-LEFT JOIN wudna.summary_gen.wudna_txn_master_analytics_vw txn
-where cm.first_registration_date >= '2025-12-01' 
-and cm.FIRST_REGISTRATION_DATE <= '2025-12-31' 
-and cm.country_code = 'IN'
+Here's the modified query to get the first transacted corridor and dominant corridor for each distinct customer registered in the last 6 months:
+WITH customer_base AS (
+    -- Get customers registered in the last 6 months
+    SELECT DISTINCT
+        '@' || cm.customer_key AS GID,
+        cm.country_code AS Registered_Country_Code,
+        cm.state AS Registered_State,
+        cm.city AS Registered_City,
+        cm.first_registration_date
+    FROM WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
+    WHERE cm.first_registration_date >= DATEADD(MONTH, -6, CURRENT_DATE())
+      AND cm.first_registration_date <= CURRENT_DATE()
+      AND cm.country_code = 'IN'
+),
+
+customer_transactions AS (
+    -- Get all transactions for these customers
+    SELECT 
+        '@' || txn.sndcustomer_key AS GID,
+        txn.RCVCOUNTRY_CODE AS corridor,
+        txn.rcvpaying_datetime AS transaction_date,
+        ROW_NUMBER() OVER (PARTITION BY txn.sndcustomer_key ORDER BY txn.rcvpaying_datetime ASC) AS rn_first
+    FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW txn
+    WHERE '@' || txn.sndcustomer_key IN (SELECT GID FROM customer_base)
+),
+
+first_corridor AS (
+    -- Get first transacted corridor
+    SELECT 
+        GID,
+        corridor AS first_corridor,
+        transaction_date AS first_transaction_date
+    FROM customer_transactions
+    WHERE rn_first = 1
+),
+
+dominant_corridor AS (
+    -- Get dominant (most frequent) corridor
+    SELECT 
+        GID,
+        corridor AS dominant_corridor,
+        COUNT(*) AS transaction_count
+    FROM customer_transactions
+    GROUP BY GID, corridor
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY GID ORDER BY COUNT(*) DESC, corridor ASC) = 1
+)
+
+-- Final output
+SELECT 
+    cb.GID,
+    cb.Registered_Country_Code,
+    cb.Registered_State,
+    cb.Registered_City,
+    cb.first_registration_date,
+    fc.first_corridor,
+    fc.first_transaction_date,
+    dc.dominant_corridor,
+    dc.transaction_count AS dominant_corridor_txn_count
+FROM customer_base cb
+LEFT JOIN first_corridor fc ON cb.GID = fc.GID
+LEFT JOIN dominant_corridor dc ON cb.GID = dc.GID
+ORDER BY cb.GID;
+Key changes made:
+Dynamic 6-month period: Changed from hardcoded dates to DATEADD(MONTH, -6, CURRENT_DATE()) to always capture the last 6 months
+First corridor: Uses ROW_NUMBER() ordered by transaction date to identify the first transaction
+Dominant corridor: Uses GROUP BY with COUNT(*) and QUALIFY to find the most frequently used corridor per customer
+Better structure: Used CTEs for clarity and maintainability
+LEFT JOINs: Ensures all registered customers appear even if they haven't transacted yet
+The query returns one row per customer with their registration details, first corridor used, and most frequently used corridor.
