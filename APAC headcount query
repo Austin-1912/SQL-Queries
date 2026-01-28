@@ -1,69 +1,201 @@
-Here's the modified query to get the first transacted corridor and dominant corridor for each distinct customer registered in the last 6 months:
-WITH customer_base AS (
-    -- Get customers registered in the last 6 months
-    SELECT DISTINCT
-        '@' || cm.customer_key AS GID,
-        cm.country_code AS Registered_Country_Code,
-        cm.state AS Registered_State,
-        cm.city AS Registered_City,
-        cm.first_registration_date
-    FROM WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
-    WHERE cm.first_registration_date >= DATEADD(MONTH, -6, CURRENT_DATE())
-      AND cm.first_registration_date <= CURRENT_DATE()
-      AND cm.country_code = 'IN'
-),
+CREATE OR REPLACE TABLE CAR_841_HISTORICAL_TXNS AS
+SELECT DISTINCT
+    SNDCUSTOMER_KEY,
+    RCVPAYING_DATETIME,
+    PRICING_CHANNEL,
+    -- Channel classification
+    CASE
+        WHEN PRICING_CHANNEL IN ('WEB', 'APP') THEN 'DIGITAL'
+        WHEN PRICING_CHANNEL IN ('POS', 'TMT', 'AIR') THEN 'RETAIL'
+        ELSE 'OTHER'
+    END AS channel_group,
+    -- Time period classification
+    CASE
+        WHEN DATE(RCVPAYING_DATETIME) >= DATEADD(MONTH, -12, DATE('2026-01-27'))
+             AND DATE(RCVPAYING_DATETIME) < DATE('2026-01-27')
+        THEN 'R12'
+        
+        WHEN DATE(RCVPAYING_DATETIME) >= DATEADD(MONTH, -48, DATE('2026-01-27'))
+                     AND DATE(RCVPAYING_DATETIME) < DATEADD(MONTH, -12, DATE('2026-01-27'))             
+        THEN 'R13_PLUS'
+    END AS history_period
+FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+WHERE DATE(RCVPAYING_DATETIME) >= DATEADD(MONTH, -48, DATE('2026-01-27'))
+  AND DATE(RCVPAYING_DATETIME) < DATE('2026-01-27')
+  AND SNDCOUNTRY_CODE = 'CA'
+  AND RCVPAYING_DATETIME IS NOT NULL AND sndcustomer_key is not null;
 
-customer_transactions AS (
-    -- Get all transactions for these customers
-    SELECT 
-        '@' || txn.sndcustomer_key AS GID,
-        txn.RCVCOUNTRY_CODE AS corridor,
-        txn.rcvpaying_datetime AS transaction_date,
-        ROW_NUMBER() OVER (PARTITION BY txn.sndcustomer_key ORDER BY txn.rcvpaying_datetime ASC) AS rn_first
-    FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW txn
-    WHERE '@' || txn.sndcustomer_key IN (SELECT GID FROM customer_base)
-),
 
-first_corridor AS (
-    -- Get first transacted corridor
-    SELECT 
-        GID,
-        corridor AS first_corridor,
-        transaction_date AS first_transaction_date
-    FROM customer_transactions
-    WHERE rn_first = 1
-),
+-- Step 2: Identify active customers (transacted in R12)
+CREATE OR REPLACE TABLE CAR_841_ACTIVE_CUSTOMERS AS
+SELECT DISTINCT SNDCUSTOMER_KEY AS customer_key
+FROM CAR_841_HISTORICAL_TXNS
+WHERE history_period = 'R12';
 
-dominant_corridor AS (
-    -- Get dominant (most frequent) corridor
-    SELECT 
-        GID,
-        corridor AS dominant_corridor,
-        COUNT(*) AS transaction_count
-    FROM customer_transactions
-    GROUP BY GID, corridor
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY GID ORDER BY COUNT(*) DESC, corridor ASC) = 1
-)
+select Count(distinct customer_key), count(customer_key) from CAR_841_ACTIVE_CUSTOMERS;--1,151,351	1,151,351
 
--- Final output
+-- Step 3: Identify lapsed customers (transacted in R13+ but not R12)
+CREATE OR REPLACE TABLE CAR_841_LAPSED_CUSTOMERS AS
+SELECT DISTINCT SNDCUSTOMER_KEY AS customer_key
+FROM CAR_841_HISTORICAL_TXNS
+WHERE history_period = 'R13_PLUS'
+  AND SNDCUSTOMER_KEY NOT IN (SELECT distinct customer_key FROM CAR_841_ACTIVE_CUSTOMERS where customer_key is not null);
+
+select count(distinct customer_key), count(customer_key) from CAR_841_LAPSED_CUSTOMERS;--1,391,515	1,391,515
+
+  -- App users in R12
+CREATE OR REPLACE TABLE CAR_841_CA_APP_USERS_R12 AS
+SELECT DISTINCT SNDCUSTOMER_KEY AS customer_key
+FROM CAR_841_HISTORICAL_TXNS
+WHERE PRICING_CHANNEL = 'APP'
+and date(rcvpaying_datetime) >= '2025-01-27' 
+and Date(rcvpaying_datetime) < '2026-01-27';
+
+select count(distinct customer_key), count(customer_key) from CAR_841_CA_APP_USERS_R12;--357,169	357,169
+  -- App users in R13Plus
+CREATE OR REPLACE TABLE CAR_841_CA_APP_USERS_R13_Plus AS
+SELECT DISTINCT SNDCUSTOMER_KEY AS customer_key
+FROM CAR_841_HISTORICAL_TXNS
+WHERE PRICING_CHANNEL = 'APP'
+and date(rcvpaying_datetime) >= '2022-01-27' 
+and Date(rcvpaying_datetime) < '2025-01-27';
+
+select count(distinct customer_key), count(customer_key) from CAR_841_CA_APP_USERS_R13_Plus;--521,434	521,434
+
+
+SELECT count(a.customer_key) from CAR_841_CA_APP_USERS_R13_Plus a
+INNER JOIN CAR_841_LAPSED_CUSTOMERS b
+ON a.customer_key = b.CUSTOMER_KEY
+where b.history_period = 'R13_PLUS';
+
+-- Step 5: Identify RNT (Registered Non-Transactors) in R12
+-- Users who registered in R12 but have no transactions in R12
+CREATE OR REPLACE TABLE CAR_841_RNT_R12 AS
+SELECT DISTINCT cm.customer_key
+FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
+WHERE cm.country_code = 'CA'
+  AND DATE(cm.first_registration_date) >= DATEADD(MONTH, -12, DATE('2026-01-27'))
+  AND DATE(cm.first_registration_date) < DATE('2026-01-27')
+  AND cm.customer_key NOT IN (SELECT distinct customer_key FROM CAR_841_ACTIVE_CUSTOMERS where customer_key is not null);--204,209	204,209
+
+  select Count(Distinct customer_key), count(customer_key) from CAR_841_RNT_R12;
+
+-- Step 6: Master marketability table
+CREATE OR REPLACE TABLE CAR_841_CA_MARKETABILITY1 AS
+SELECT
+    cm.customer_key,
+    cm.country_code,
+    cm.global_holdout,
+
+    -- Customer segment
+    CASE
+        WHEN ac.customer_key IS NOT NULL THEN 'ACTIVE'
+        WHEN lc.customer_key IS NOT NULL THEN 'LAPSED'
+        WHEN rnt.customer_key IS NOT NULL THEN 'RNT'
+        ELSE 'OTHER'
+    END AS customer_segment,
+
+    -- Email marketable (marketing + email on file + opt-in)
+    CASE
+        WHEN cm.marketing_flag = 'Y'
+         AND cm.email_address_on_file_flag = 'Y'
+         AND cm.opt_email = 'I'
+        THEN 'Y' ELSE 'N'
+    END AS email_marketability_flag,
+
+    -- SMS marketable
+    case 
+	when cm.country_code in ('US','CA') AND cm.MOBILE_NUMBER_ON_FILE_FLAG = 'Y' AND cm.opt_sms = 'I' AND cm.DOUBLE_OPT_SMS = 'I' and cm.marketing_flag='Y' then 'Y' else 'N' end as SMS_Marketable,
+
+    -- App reachable (had APP txn in R12)
+    CASE 
+        WHEN au.customer_key IS NOT NULL THEN 'Y' 
+        ELSE 'N' 
+    END AS app_marketability_flag,
+    
+ -- App reachable (had APP txn in R12)
+       CASE 
+        WHEN aus.customer_key IS NOT NULL THEN 'Y' 
+        ELSE 'N' 
+    END AS R13plus_app_marketability_flag,
+
+    -- Service email (email on file, regardless of marketing opt-in)
+    CASE
+        WHEN cm.email_address_on_file_flag = 'Y' THEN 'Y'
+        ELSE 'N'
+    END AS service_email_flag,
+
+    -- Overall CEM addressable (any of email/sms/app with marketing consent)
+ 
+CASE
+        WHEN (
+            (cm.marketing_flag = 'Y'
+             AND cm.email_address_on_file_flag = 'Y'
+             AND cm.opt_email = 'I')
+            OR
+            (
+                cm.country_code IN ('US','CA')
+                AND cm.MOBILE_NUMBER_ON_FILE_FLAG = 'Y'
+                AND cm.opt_sms = 'I'
+                AND cm.DOUBLE_OPT_SMS = 'I'
+                AND cm.marketing_flag='Y'
+            )
+            OR au.customer_key IS NOT NULL
+        )
+        THEN 'Y'
+        ELSE 'N'
+    END AS R12_marketability_flag,
+
+    CASE
+        WHEN (
+            (cm.marketing_flag = 'Y'
+             AND cm.email_address_on_file_flag = 'Y'
+             AND cm.opt_email = 'I')
+            OR
+            (
+                cm.country_code IN ('US','CA')
+                AND cm.MOBILE_NUMBER_ON_FILE_FLAG = 'Y'
+                AND cm.opt_sms = 'I'
+                AND cm.DOUBLE_OPT_SMS = 'I'
+                AND cm.marketing_flag='Y'
+            )
+            OR aus.customer_key IS NOT NULL
+        )
+        THEN 'Y'
+        ELSE 'N'
+    END AS R12Plus_marketability_flag
+
+
+FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
+LEFT JOIN CAR_841_ACTIVE_CUSTOMERS ac ON cm.customer_key = ac.customer_key
+LEFT JOIN CAR_841_LAPSED_CUSTOMERS lc ON cm.customer_key = lc.customer_key
+LEFT JOIN CAR_841_RNT_R12 rnt ON cm.customer_key = rnt.customer_key
+LEFT JOIN CAR_841_CA_APP_USERS_R12 au ON lc.customer_key = au.customer_key
+LEFT JOIN CAR_841_CA_APP_USERS_R13_Plus aus ON cm.customer_key = aus.customer_key
+WHERE cm.country_code = 'CA'; 
+-- AND cm.first_registration_date is not null; 
+-- AND DATE(cm.first_registration_date) >= DATEADD(MONTH, -48, DATE('2026-01-27'));
+
+select count(distinct customer_key), count(customer_key) FROM CAR_841_CA_MARKETABILITY;--6,481,872	6,481,872
+
+--Final Report
 SELECT 
-    cb.GID,
-    cb.Registered_Country_Code,
-    cb.Registered_State,
-    cb.Registered_City,
-    cb.first_registration_date,
-    fc.first_corridor,
-    fc.first_transaction_date,
-    dc.dominant_corridor,
-    dc.transaction_count AS dominant_corridor_txn_count
-FROM customer_base cb
-LEFT JOIN first_corridor fc ON cb.GID = fc.GID
-LEFT JOIN dominant_corridor dc ON cb.GID = dc.GID
-ORDER BY cb.GID;
-Key changes made:
-Dynamic 6-month period: Changed from hardcoded dates to DATEADD(MONTH, -6, CURRENT_DATE()) to always capture the last 6 months
-First corridor: Uses ROW_NUMBER() ordered by transaction date to identify the first transaction
-Dominant corridor: Uses GROUP BY with COUNT(*) and QUALIFY to find the most frequently used corridor per customer
-Better structure: Used CTEs for clarity and maintainability
-LEFT JOINs: Ensures all registered customers appear even if they haven't transacted yet
-The query returns one row per customer with their registration details, first corridor used, and most frequently used corridor.
+    customer_segment,
+    COUNT(DISTINCT customer_key) AS total_customers,
+    SUM(CASE WHEN R12_marketability_flag = 'Y' THEN 1 ELSE 0 END) AS R12Marketable,
+    SUM(CASE WHEN R12Plus_marketability_flag = 'Y' THEN 1 ELSE 0 END) AS R13PlusMarketable,
+    SUM(CASE WHEN email_marketability_flag = 'Y' AND SMS_Marketable = 'N' AND App_Marketability_Flag = 'N' THEN 1 ELSE 0 END) AS EMAIL_ONLY,
+    SUM(CASE WHEN email_marketability_flag = 'N' AND SMS_Marketable = 'N' AND App_Marketability_Flag = 'Y' THEN 1 ELSE 0 END) AS R12APP_ONLY,
+    SUM(CASE WHEN email_marketability_flag = 'N' AND SMS_Marketable = 'N' AND R13plus_app_marketability_flag = 'Y' THEN 1 ELSE 0 END) AS R13PlusAPP_ONLY,
+    SUM(CASE WHEN email_marketability_flag = 'Y' AND SMS_Marketable = 'N' AND App_Marketability_Flag = 'Y' THEN 1 ELSE 0 END) AS EMAIL_APP,
+    SUM(CASE WHEN email_marketability_flag = 'Y' AND SMS_Marketable = 'N' AND R13plus_app_marketability_flag = 'Y' THEN 1 ELSE 0 END) AS R13PlusEMAIL_APP,
+    SUM(CASE WHEN service_email_flag = 'Y' THEN 1 ELSE 0 END) AS service_email_addressable
+FROM CAR_841_CA_MARKETABILITY1
+GROUP BY customer_segment
+ORDER BY 
+    CASE customer_segment
+        WHEN 'ACTIVE' THEN 1
+        WHEN 'LAPSED' THEN 2
+        WHEN 'RNT' THEN 3
+        ELSE 4
+    END;
