@@ -1,5 +1,25 @@
-CREATE OR REPLACE TABLE CAR_843_CUSTOMER_BASE1
-AS
+I've reviewed your SQL code against the requirements. Here are the issues I found:
+
+## **Critical Issues:**
+
+1. **Missing JOIN in `CAR_843_first_corridor_txns`**
+   - You're selecting `b.*` but there's no JOIN condition that filters for the first transaction. This will return ALL transactions for qualifying customers, not just their first one.
+
+2. **Invalid WHERE clause in `dominant_corridor1`**
+   - References `a.R6_txns` and `a.R6Plus_txns` but there's no table alias `a` in scope
+   - This query should filter customers, not transactions
+
+3. **Missing table alias in final SELECT**
+   - `fc.first_transaction_date` and `fc.first_corridor` reference table `fc` which doesn't exist in the FROM clause
+
+4. **Incorrect source table in final SELECT**
+   - Uses `CAR_843_Customer_base` (note lowercase 'base') but you created `CAR_843_CUSTOMER_BASE1`
+
+## **Corrected Code:**
+
+```sql
+-- Step 1: Base transaction data
+CREATE OR REPLACE TABLE CAR_843_CUSTOMER_BASE1 AS
 SELECT
     t.txn_id,
     t.rcvpaying_datetime as transaction_date,
@@ -10,76 +30,83 @@ SELECT
     cm.state as Registered_State,
     cm.city as Registered_City,
     cm.first_registration_date,
-ROW_NUMBER() OVER (PARTITION BY t.sndcustomer_key ORDER BY t.rcvpaying_datetime ASC) AS rn_first
+    ROW_NUMBER() OVER (PARTITION BY t.sndcustomer_key ORDER BY t.rcvpaying_datetime ASC) AS rn_first
 FROM wudna.summary_gen.wudna_txn_master_analytics_vw t
 LEFT JOIN WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
     ON t.sndcustomer_key = cm.customer_key
 WHERE 
-DATE(rcvpaying_datetime) <= '2026-01-26' AND 
-t.sndcountry_code = 'IN' 
-AND cm.country_code = 'IN';
+    DATE(rcvpaying_datetime) <= '2026-01-26' 
+    AND t.sndcountry_code = 'IN' 
+    AND cm.country_code = 'IN';
 
-
+-- Step 2: Customer flags and first corridor
 CREATE OR REPLACE TABLE CAR_843_Customer_Flags AS
 SELECT
-    MIN(transaction_date) AS first_transaction_date,
     GID AS Customer_key,
+    MIN(transaction_date) AS first_transaction_date,
+    MAX(CASE WHEN rn_first = 1 THEN snd_country || '-' || rcv_country END) AS first_corridor,
     COUNT(CASE 
-        WHEN DATE(transaction_date) >= '2025-07-01' AND DATE(transaction_date) <= '2026-01-26' THEN txn_id 
+        WHEN DATE(transaction_date) >= '2025-07-01' AND DATE(transaction_date) <= '2026-01-26' 
+        THEN txn_id 
     END) AS R6_txns,
     COUNT(CASE
-        WHEN DATE(transaction_date) < '2025-07-01' THEN txn_id 
-    END) AS R6Plus_txns,
-    MODE(CASE 
-        WHEN rn_first = 1 THEN snd_country || '-' || rcv_country 
-    END) AS first_corridor 
+        WHEN DATE(transaction_date) < '2025-07-01' 
+        THEN txn_id 
+    END) AS R6Plus_txns
 FROM CAR_843_CUSTOMER_BASE1 
-GROUP BY ALL;
+GROUP BY GID;
 
-CREATE OR REPLACE TABLE CAR_843_first_corridor_txns AS
-SELECT 
-    a.*,
-    b.*
-FROM 
-    CAR_843_Customer_Flags a 
-    LEFT JOIN CAR_843_CUSTOMER_BASE1 b
-        ON a.customer_key = b.GID
-WHERE 
-    a.R6_txns > 0 
-    AND a.R6Plus_txns = 0;
-
+-- Step 3: Dominant corridor (for qualifying customers only)
 CREATE OR REPLACE TABLE dominant_corridor1 AS
-    -- Get dominant (most frequent) corridor
-    SELECT *
-FROM (
-    SELECT
-        GID,
-        CONCAT(snd_country, '-', rcv_country) AS corridor,
-        COUNT(DISTINCT txn_id)                  AS txn_count,
-        ROW_NUMBER() OVER (
-            PARTITION BY GID
-            ORDER BY COUNT(DISTINCT txn_id) DESC, MAX(transaction_date) DESC
-        ) AS rnk
-    FROM CAR_843_CUSTOMER_BASE1
-    WHERE 
-    a.R6_txns > 0 
-    AND a.R6Plus_txns = 0;
-    GROUP BY ALL
-)
-WHERE rnk = 1;
+SELECT
+    cb.GID,
+    CONCAT(cb.snd_country, '-', cb.rcv_country) AS corridor,
+    COUNT(DISTINCT cb.txn_id) AS txn_count
+FROM CAR_843_CUSTOMER_BASE1 cb
+INNER JOIN CAR_843_Customer_Flags cf 
+    ON cb.GID = cf.Customer_key
+WHERE cf.R6_txns > 0 
+    AND cf.R6Plus_txns = 0
+GROUP BY cb.GID, CONCAT(cb.snd_country, '-', cb.rcv_country)
+QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY cb.GID
+    ORDER BY COUNT(DISTINCT cb.txn_id) DESC, MAX(cb.transaction_date) DESC
+) = 1;
 
--- Final output
+-- Step 4: Final output
 SELECT 
     '@' || cb.GID AS GID,
     cb.Registered_Country_Code,
     cb.Registered_State,
     cb.Registered_City,
     cb.first_registration_date,
-    fc.first_corridor,
-    fc.first_transaction_date,
-    dc.corridor as dominant_corridor,
-FROM CAR_843_Customer_base cb
-LEFT JOIN dominant_corridor dc ON cb.GID = dc.GID
-where fc.first_transaction_date IS NOT NULL
--- and fc.first_transaction_date >= cb.first_registration_date
+    cf.first_corridor,
+    cf.first_transaction_date,
+    dc.corridor AS dominant_corridor
+FROM CAR_843_CUSTOMER_BASE1 cb
+INNER JOIN CAR_843_Customer_Flags cf 
+    ON cb.GID = cf.Customer_key
+LEFT JOIN dominant_corridor1 dc 
+    ON cb.GID = dc.GID
+WHERE cf.R6_txns > 0 
+    AND cf.R6Plus_txns = 0
+    AND cf.first_transaction_date >= '2025-07-01'
+    AND cf.first_transaction_date <= '2026-01-26'
+GROUP BY 
+    cb.GID,
+    cb.Registered_Country_Code,
+    cb.Registered_State,
+    cb.Registered_City,
+    cb.first_registration_date,
+    cf.first_corridor,
+    cf.first_transaction_date,
+    dc.corridor
 ORDER BY cb.GID;
+```
+
+## **Key Changes:**
+1. Moved `first_corridor` calculation to `CAR_843_Customer_Flags` using `MAX()` with `CASE`
+2. Fixed `dominant_corridor1` to properly join with flags table for filtering
+3. Removed unnecessary `CAR_843_first_corridor_txns` table
+4. Added proper joins and WHERE clause in final SELECT
+5. Added `GROUP BY` in final query to handle one row per customer
