@@ -1,48 +1,83 @@
-select DISTINCT
-    a.campaign_name,
-FROM 
-    SJ_BI_CAMPAIGN_WISE_EMAIL_COMMUNICATIONS_2_V2_MYWU_UPDATE_CUSTOMER_LEVEL a
-LEFT JOIN WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW b
-ON a.txn_id = b.txn_id
-AND a.customer_key = b.sndcustomer_key
-where campaign_name like ('%CORRIDOREXPANSION%')
-AND campaign_name NOT IN  ('APP_AWARENESS_MULTIPRODUCT_CTADIGITAL_CORRIDOREXPANSION_WAVE1NAUS_VARIANT1 IAM1_UNITED STATES');
-i have the above code however i want to implement the below logics in the above code in order to get the communication sent, communication delivered(communications_sent
--Communications_undelivered), Communications Opened, Communications Clicked, Communications with at least 1 retail txn,Communications with at least 1 digital txn,
-communications_with_atleast_1_txn, winback , lapsed_only_delivered_opened_clicked_7days. TOTAL OPEN FOR PUSH + TOTAL CLICKS This will be used in order to calculate the 
-retail and digital conversion in excel. 
-SUM(Case when SUBSTR(ACTIVITY_CODE,3,1) = 'P' THEN (TOTAL_EMAILS_SENT) ELSE 1 END) as communications_sent,
-
- 
-count(case when EMAILS_UN_DELIVERED > 0 then 1 end) as Communications_undelivered,
- 
-count(case when EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0 then 1 end) as communications_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION,
-
-count(case when EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0  then 1 end) as communications_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION,
- 
-SUM(Case when SUBSTR(ACTIVITY_CODE,3,1) IN ('P','E','W') THEN (TOTAL_EMAILS_SENT) END) as OPEN_communications_sent,
- 
-SUM(Case when SUBSTR(ACTIVITY_CODE,3,1) NOT IN ('P') THEN (TOTAL_EMAILS_SENT) END) as CLICK_communications_sent,
- 
-count(case when retail_txns_7days > 0 then 1 end ) as test_communications_with_atleast_1_retail_txn_7days,
- 
-count(case when digital_txns_7days > 0 then 1 end ) as test_communications_with_atleast_1_digital_txn_7days,
- 
-count(case when txns_7days > 0 then 1 end ) as test_communications_with_atleast_1_txn_7days,
- 
-count(case when lapsed='Y' and txns_7days > 0 then 1 end ) as test_communications_winbacks_7DAYS,
- 
-count(case when emails_un_delivered=0 
-
-			and lapsed='Y' 
-
-			AND ((SUBSTR(ACTIVITY_CODE,3,1) IN ('P') AND EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0 )
-
-				or
-
-				(SUBSTR(ACTIVITY_CODE,3,1) IN ('E','S','I','C','W') AND  EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0))
-
-					then 1 end ) as test_lapsed_only_delivered_opened_clicked_7days,
- 
-TOTAL OPEN FOR PUSH + TOTAL CLICKS
- 
+SELECT
+    corridor,
+    communications_sent,
+    communications_sent - Communications_undelivered as communications_delivered,
+    Communications_undelivered,
+    communications_opened,
+    communications_clicked,
+    communications_with_atleast_1_retail_txn,
+    communications_with_atleast_1_digital_txn,
+    communications_with_atleast_1_txn,
+    winback,
+    lapsed_only_delivered_opened_clicked_7days,
+    total_open_for_push,
+    total_clicks,
+    total_open_for_push + total_clicks as total_open_plus_clicks
+FROM (
+    SELECT
+        b.sndcountry_code || '-' || b.rcvcountry_code as corridor,
+        
+        -- Communications sent
+        SUM(CASE WHEN SUBSTR(a.ACTIVITY_CODE, 3, 1) = 'P'
+            THEN a.TOTAL_EMAILS_SENT
+            ELSE 1
+        END) as communications_sent,
+        
+        -- Communications undelivered
+        COUNT(CASE WHEN a.EMAILS_UN_DELIVERED > 0 THEN 1 END) as Communications_undelivered,
+        
+        -- Communications opened
+        COUNT(CASE WHEN a.EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0
+            THEN 1
+        END) as communications_opened,
+        
+        -- Communications clicked
+        COUNT(CASE WHEN a.EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0
+            THEN 1
+        END) as communications_clicked,
+        
+        -- Communications with at least 1 retail txn
+        COUNT(CASE WHEN a.retail_txns_7days > 0 THEN 1 END) as communications_with_atleast_1_retail_txn,
+        
+        -- Communications with at least 1 digital txn
+        COUNT(CASE WHEN a.digital_txns_7days > 0 THEN 1 END) as communications_with_atleast_1_digital_txn,
+        
+        -- Communications with at least 1 txn
+        COUNT(CASE WHEN a.txns_7days > 0 THEN 1 END) as communications_with_atleast_1_txn,
+        
+        -- Winback
+        COUNT(CASE WHEN a.lapsed = 'Y' AND a.txns_7days > 0 THEN 1 END) as winback,
+        
+        -- Lapsed only delivered opened clicked 7days
+        COUNT(CASE WHEN a.emails_un_delivered = 0
+                AND a.lapsed = 'Y'
+                AND ((SUBSTR(a.ACTIVITY_CODE, 3, 1) IN ('P')
+                      AND a.EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0)
+                     OR
+                     (SUBSTR(a.ACTIVITY_CODE, 3, 1) IN ('E', 'S', 'I', 'C', 'W')
+                      AND a.EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0))
+            THEN 1
+        END) as lapsed_only_delivered_opened_clicked_7days,
+        
+        -- Total open for push
+        SUM(CASE WHEN SUBSTR(a.ACTIVITY_CODE, 3, 1) IN ('P', 'E', 'W')
+            THEN a.TOTAL_EMAILS_SENT
+        END) as total_open_for_push,
+        
+        -- Total clicks
+        SUM(CASE WHEN SUBSTR(a.ACTIVITY_CODE, 3, 1) NOT IN ('P')
+            THEN a.TOTAL_EMAILS_SENT
+        END) as total_clicks
+        
+    FROM
+        SJ_BI_CAMPAIGN_WISE_EMAIL_COMMUNICATIONS_2_V2_MYWU_UPDATE_CUSTOMER_LEVEL a
+    LEFT JOIN
+        WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW b
+        ON a.txn_id = b.txn_id
+        AND a.customer_key = b.sndcustomer_key
+    WHERE
+        a.campaign_name LIKE ('%CORRIDOREXPANSION%')
+        AND a.campaign_name NOT IN ('APP_AWARENESS_MULTIPRODUCT_CTADIGITAL_CORRIDOREXPANSION_WAVE1NAUS_VARIANT1 IAM1_UNITED STATES')
+    GROUP BY
+        1
+) subquery;
