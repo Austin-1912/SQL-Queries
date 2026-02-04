@@ -1,112 +1,35 @@
-I've reviewed your SQL code against the requirements. Here are the issues I found:
+SUM(Case when SUBSTR(ACTIVITY_CODE,3,1) = 'P' THEN (TOTAL_EMAILS_SENT) ELSE 1 END) as communications_sent,
 
-## **Critical Issues:**
+ 
+count(case when EMAILS_UN_DELIVERED > 0 then 1 end) as Communications_undelivered,
+ 
+count(case when EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0 then 1 end) as communications_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION,
 
-1. **Missing JOIN in `CAR_843_first_corridor_txns`**
-   - You're selecting `b.*` but there's no JOIN condition that filters for the first transaction. This will return ALL transactions for qualifying customers, not just their first one.
+count(case when EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0  then 1 end) as communications_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION,
+ 
+SUM(Case when SUBSTR(ACTIVITY_CODE,3,1) IN ('P','E','W') THEN (TOTAL_EMAILS_SENT) END) as OPEN_communications_sent,
+ 
+SUM(Case when SUBSTR(ACTIVITY_CODE,3,1) NOT IN ('P') THEN (TOTAL_EMAILS_SENT) END) as CLICK_communications_sent,
+ 
+count(case when retail_txns_7days > 0 then 1 end ) as test_communications_with_atleast_1_retail_txn_7days,
+ 
+count(case when digital_txns_7days > 0 then 1 end ) as test_communications_with_atleast_1_digital_txn_7days,
+ 
+count(case when txns_7days > 0 then 1 end ) as test_communications_with_atleast_1_txn_7days,
+ 
+count(case when lapsed='Y' and txns_7days > 0 then 1 end ) as test_communications_winbacks_7DAYS,
+ 
+count(case when emails_un_delivered=0 
 
-2. **Invalid WHERE clause in `dominant_corridor1`**
-   - References `a.R6_txns` and `a.R6Plus_txns` but there's no table alias `a` in scope
-   - This query should filter customers, not transactions
+			and lapsed='Y' 
 
-3. **Missing table alias in final SELECT**
-   - `fc.first_transaction_date` and `fc.first_corridor` reference table `fc` which doesn't exist in the FROM clause
+			AND ((SUBSTR(ACTIVITY_CODE,3,1) IN ('P') AND EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0 )
 
-4. **Incorrect source table in final SELECT**
-   - Uses `CAR_843_Customer_base` (note lowercase 'base') but you created `CAR_843_CUSTOMER_BASE1`
+				or
 
-## **Corrected Code:**
+				(SUBSTR(ACTIVITY_CODE,3,1) IN ('E','S','I','C','W') AND  EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0))
 
-```sql
--- Step 1: Base transaction data
-CREATE OR REPLACE TABLE CAR_843_CUSTOMER_BASE1 AS
-SELECT
-    t.txn_id,
-    t.rcvpaying_datetime as transaction_date,
-    t.sndcustomer_key as GID,
-    t.sndcountry_code as snd_country,
-    t.rcvcountry_code as rcv_country,
-    cm.country_code as Registered_Country_Code,
-    cm.state as Registered_State,
-    cm.city as Registered_City,
-    cm.first_registration_date,
-    ROW_NUMBER() OVER (PARTITION BY t.sndcustomer_key ORDER BY t.rcvpaying_datetime ASC) AS rn_first
-FROM wudna.summary_gen.wudna_txn_master_analytics_vw t
-LEFT JOIN WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
-    ON t.sndcustomer_key = cm.customer_key
-WHERE 
-    DATE(rcvpaying_datetime) <= '2026-01-26' 
-    AND t.sndcountry_code = 'IN' 
-    AND cm.country_code = 'IN';
-
--- Step 2: Customer flags and first corridor
-CREATE OR REPLACE TABLE CAR_843_Customer_Flags AS
-SELECT
-    GID AS Customer_key,
-    MIN(transaction_date) AS first_transaction_date,
-    MAX(CASE WHEN rn_first = 1 THEN snd_country || '-' || rcv_country END) AS first_corridor,
-    COUNT(CASE 
-        WHEN DATE(transaction_date) >= '2025-07-01' AND DATE(transaction_date) <= '2026-01-26' 
-        THEN txn_id 
-    END) AS R6_txns,
-    COUNT(CASE
-        WHEN DATE(transaction_date) < '2025-07-01' 
-        THEN txn_id 
-    END) AS R6Plus_txns
-FROM CAR_843_CUSTOMER_BASE1 
-GROUP BY GID;
-
--- Step 3: Dominant corridor (for qualifying customers only)
-CREATE OR REPLACE TABLE dominant_corridor1 AS
-SELECT
-    cb.GID,
-    CONCAT(cb.snd_country, '-', cb.rcv_country) AS corridor,
-    COUNT(DISTINCT cb.txn_id) AS txn_count
-FROM CAR_843_CUSTOMER_BASE1 cb
-INNER JOIN CAR_843_Customer_Flags cf 
-    ON cb.GID = cf.Customer_key
-WHERE cf.R6_txns > 0 
-    AND cf.R6Plus_txns = 0
-GROUP BY cb.GID, CONCAT(cb.snd_country, '-', cb.rcv_country)
-QUALIFY ROW_NUMBER() OVER (
-    PARTITION BY cb.GID
-    ORDER BY COUNT(DISTINCT cb.txn_id) DESC, MAX(cb.transaction_date) DESC
-) = 1;
-
--- Step 4: Final output
-SELECT 
-    '@' || cb.GID AS GID,
-    cb.Registered_Country_Code,
-    cb.Registered_State,
-    cb.Registered_City,
-    cb.first_registration_date,
-    cf.first_corridor,
-    cf.first_transaction_date,
-    dc.corridor AS dominant_corridor
-FROM CAR_843_CUSTOMER_BASE1 cb
-INNER JOIN CAR_843_Customer_Flags cf 
-    ON cb.GID = cf.Customer_key
-LEFT JOIN dominant_corridor1 dc 
-    ON cb.GID = dc.GID
-WHERE cf.R6_txns > 0 
-    AND cf.R6Plus_txns = 0
-    AND cf.first_transaction_date >= '2025-07-01'
-    AND cf.first_transaction_date <= '2026-01-26'
-GROUP BY 
-    cb.GID,
-    cb.Registered_Country_Code,
-    cb.Registered_State,
-    cb.Registered_City,
-    cb.first_registration_date,
-    cf.first_corridor,
-    cf.first_transaction_date,
-    dc.corridor
-ORDER BY cb.GID;
-```
-
-## **Key Changes:**
-1. Moved `first_corridor` calculation to `CAR_843_Customer_Flags` using `MAX()` with `CASE`
-2. Fixed `dominant_corridor1` to properly join with flags table for filtering
-3. Removed unnecessary `CAR_843_first_corridor_txns` table
-4. Added proper joins and WHERE clause in final SELECT
-5. Added `GROUP BY` in final query to handle one row per customer
+					then 1 end ) as test_lapsed_only_delivered_opened_clicked_7days,
+ 
+TOTAL OPEN FOR PUSH + TOTAL CLICKS
+ 
