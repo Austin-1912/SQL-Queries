@@ -1,3 +1,16 @@
+select DISTINCT
+    a.campaign_name,
+FROM 
+    SJ_BI_CAMPAIGN_WISE_EMAIL_COMMUNICATIONS_2_V2_MYWU_UPDATE_CUSTOMER_LEVEL a
+LEFT JOIN WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW b
+ON a.txn_id = b.txn_id
+AND a.customer_key = b.sndcustomer_key
+where campaign_name like ('%CORRIDOREXPANSION%')
+AND campaign_name NOT IN  ('APP_AWARENESS_MULTIPRODUCT_CTADIGITAL_CORRIDOREXPANSION_WAVE1NAUS_VARIANT1 IAM1_UNITED STATES');
+i have the above code however i want to implement the below logics in the above code in order to get the communication sent, communication delivered(communications_sent
+-Communications_undelivered), Communications Opened, Communications Clicked, Communications with at least 1 retail txn,Communications with at least 1 digital txn,
+communications_with_atleast_1_txn, winback , lapsed_only_delivered_opened_clicked_7days. TOTAL OPEN FOR PUSH + TOTAL CLICKS This will be used in order to calculate the 
+retail and digital conversion in excel. 
 SUM(Case when SUBSTR(ACTIVITY_CODE,3,1) = 'P' THEN (TOTAL_EMAILS_SENT) ELSE 1 END) as communications_sent,
 
  
