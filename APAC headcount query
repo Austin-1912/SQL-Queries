@@ -16,19 +16,34 @@ WHERE SNDCOUNTRY_CODE = 'US'
     AND sndcustomer_key IS NOT NULL;
 
 SELECT 
-    MTH_YR,
+    MTH_YR,--month
     SNDCUSTOMER_KEY,
     COUNTRY_CODE,
-    FLAG_MARKETABLE,
+    FLAG_MARKETABLE,--Marketable or Non marketable
     R12_TXNS,
     R12_PRINCIPAL,
     R12_REVENUE,
-    RFM__PERSONA,
+    RFM__PERSONA,--
     DOMINANT_CHANNEL,
     DOMINANT__CORRIDOR,
-    DOMINANT_CORRIDOR_TYPE_1,
+    DOMINANT_CORRIDOR_TYPE_1,--contains international (IMT) and Domestic (DMT)
     DOMINANT__SNDCOUNTRY_NAME,
     RETAIL_DIGITAL__FLAG,
-    MYWU_STATUS_1,
-    Dominant_attribute_funds_in
+    MYWU_STATUS_1,--loyalty status
+    DOMINANT_ATTRBUTE_FUNDS_IN
 FROM Country_Packet_CUST_LEVEL_R12
+
+Description
+
+APN sender customer profiling:
+
+ Requirement : To conduct APN sender customer profiling for the US market.
+
+ Objective : To identify and understand patterns, behaviors, and trends within the APN customer base, using attributes such as dominant corridor, 
+channel,  TPC/PPC/PPT/RPT, RFM, age group, new/existing flag, marketability, dominant funds‑in source, IMT/DMT, and loyalty status.
+So the first table that was base and using that we need to connect with the Country_Packet_CUST_LEVEL_R12 in order to get the R12 active customers details.
+The steps i understand is:
+1. The base table wherein get the customers who have had at least one transaction with PAYOUT_TYPE = 'ACCOUNT' in the given time period.
+2. Join with Country_Packet_CUST_LEVEL_R12 join on MTH_YR and sndcustomer_key to get all the attributes for the R12 active customers 
+3. Calculate the TPC/PPC/PPT/RPT for Only the APN transactions, and also for the entire transactions irrespective of the Payout Type. 
+I can do this on excel as well but just give set up everything in a proper flow for easy calculations.
