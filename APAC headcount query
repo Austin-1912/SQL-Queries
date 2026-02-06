@@ -1,83 +1,34 @@
-SELECT
-    corridor,
-    communications_sent,
-    communications_sent - Communications_undelivered as communications_delivered,
-    Communications_undelivered,
-    communications_opened,
-    communications_clicked,
-    communications_with_atleast_1_retail_txn,
-    communications_with_atleast_1_digital_txn,
-    communications_with_atleast_1_txn,
-    winback,
-    lapsed_only_delivered_opened_clicked_7days,
-    total_open_for_push,
-    total_clicks,
-    total_open_for_push + total_clicks as total_open_plus_clicks
-FROM (
-    SELECT
-        b.sndcountry_code || '-' || b.rcvcountry_code as corridor,
-        
-        -- Communications sent
-        SUM(CASE WHEN SUBSTR(a.ACTIVITY_CODE, 3, 1) = 'P'
-            THEN a.TOTAL_EMAILS_SENT
-            ELSE 1
-        END) as communications_sent,
-        
-        -- Communications undelivered
-        COUNT(CASE WHEN a.EMAILS_UN_DELIVERED > 0 THEN 1 END) as Communications_undelivered,
-        
-        -- Communications opened
-        COUNT(CASE WHEN a.EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0
-            THEN 1
-        END) as communications_opened,
-        
-        -- Communications clicked
-        COUNT(CASE WHEN a.EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0
-            THEN 1
-        END) as communications_clicked,
-        
-        -- Communications with at least 1 retail txn
-        COUNT(CASE WHEN a.retail_txns_7days > 0 THEN 1 END) as communications_with_atleast_1_retail_txn,
-        
-        -- Communications with at least 1 digital txn
-        COUNT(CASE WHEN a.digital_txns_7days > 0 THEN 1 END) as communications_with_atleast_1_digital_txn,
-        
-        -- Communications with at least 1 txn
-        COUNT(CASE WHEN a.txns_7days > 0 THEN 1 END) as communications_with_atleast_1_txn,
-        
-        -- Winback
-        COUNT(CASE WHEN a.lapsed = 'Y' AND a.txns_7days > 0 THEN 1 END) as winback,
-        
-        -- Lapsed only delivered opened clicked 7days
-        COUNT(CASE WHEN a.emails_un_delivered = 0
-                AND a.lapsed = 'Y'
-                AND ((SUBSTR(a.ACTIVITY_CODE, 3, 1) IN ('P')
-                      AND a.EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0)
-                     OR
-                     (SUBSTR(a.ACTIVITY_CODE, 3, 1) IN ('E', 'S', 'I', 'C', 'W')
-                      AND a.EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0))
-            THEN 1
-        END) as lapsed_only_delivered_opened_clicked_7days,
-        
-        -- Total open for push
-        SUM(CASE WHEN SUBSTR(a.ACTIVITY_CODE, 3, 1) IN ('P', 'E', 'W')
-            THEN a.TOTAL_EMAILS_SENT
-        END) as total_open_for_push,
-        
-        -- Total clicks
-        SUM(CASE WHEN SUBSTR(a.ACTIVITY_CODE, 3, 1) NOT IN ('P')
-            THEN a.TOTAL_EMAILS_SENT
-        END) as total_clicks
-        
-    FROM
-        SJ_BI_CAMPAIGN_WISE_EMAIL_COMMUNICATIONS_2_V2_MYWU_UPDATE_CUSTOMER_LEVEL a
-    LEFT JOIN
-        WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW b
-        ON a.txn_id = b.txn_id
-        AND a.customer_key = b.sndcustomer_key
-    WHERE
-        a.campaign_name LIKE ('%CORRIDOREXPANSION%')
-        AND a.campaign_name NOT IN ('APP_AWARENESS_MULTIPRODUCT_CTADIGITAL_CORRIDOREXPANSION_WAVE1NAUS_VARIANT1 IAM1_UNITED STATES')
-    GROUP BY
-        1
-) subquery;
+CREATE OR REPLACE TABLE CAM_1746_BASE1 AS 
+SELECT 
+    txn.SNDCUSTOMER_KEY,
+    txn.TXN_ID,
+    DATE_TRUNC('MONTH', txn.rcvpaying_datetime) AS mth_yr,
+    txn.sndcountry_code,
+    txn.rcvcountry_code,
+    txn.PAYOUT_TYPE,
+    cm.age
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW txn
+    LEFT JOIN wudna.summary_gen.wudna_customer_master_vw cm
+        ON txn.sndcustomer_key = cm.customer_key
+WHERE SNDCOUNTRY_CODE = 'US'
+    AND DATE(rcvpaying_datetime) >= '2025-02-01'
+    AND DATE(rcvpaying_datetime) < '2026-02-01'
+    AND sndcustomer_key IS NOT NULL;
+
+SELECT 
+    MTH_YR,
+    SNDCUSTOMER_KEY,
+    COUNTRY_CODE,
+    FLAG_MARKETABLE,
+    R12_TXNS,
+    R12_PRINCIPAL,
+    R12_REVENUE,
+    RFM__PERSONA,
+    DOMINANT_CHANNEL,
+    DOMINANT__CORRIDOR,
+    DOMINANT_CORRIDOR_TYPE_1,
+    DOMINANT__SNDCOUNTRY_NAME,
+    RETAIL_DIGITAL__FLAG,
+    MYWU_STATUS_1,
+    Dominant_attribute_funds_in
+FROM Country_Packet_CUST_LEVEL_R12
