@@ -1,3 +1,18 @@
+-- ============================================================================
+-- APN SENDER CUSTOMER PROFILING - US MARKET
+-- ============================================================================
+-- Objective: Identify and understand patterns, behaviors, and trends within 
+--            the APN customer base using multiple attributes
+-- Period: Feb 2025 - Jan 2026
+-- ============================================================================
+
+-- ============================================================================
+-- STEP 1: CREATE BASE TABLE - APN CUSTOMERS
+-- ============================================================================
+-- Purpose: Identify customers who have had at least one APN transaction
+--          (PAYOUT_TYPE = 'ACCOUNT') in the analysis period
+-- ============================================================================
+
 CREATE OR REPLACE TABLE CAM_1746_BASE1 AS 
 SELECT 
     txn.SNDCUSTOMER_KEY,
@@ -6,44 +21,362 @@ SELECT
     txn.sndcountry_code,
     txn.rcvcountry_code,
     txn.PAYOUT_TYPE,
+    txn.PRINCIPAL_AMT,
+    txn.REVENUE_AMT,
     cm.age
 FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW txn
     LEFT JOIN wudna.summary_gen.wudna_customer_master_vw cm
         ON txn.sndcustomer_key = cm.customer_key
-WHERE SNDCOUNTRY_CODE = 'US'
+WHERE SNDCUSTRY_CODE = 'US'
     AND DATE(rcvpaying_datetime) >= '2025-02-01'
     AND DATE(rcvpaying_datetime) < '2026-02-01'
     AND sndcustomer_key IS NOT NULL;
 
+-- Verification query
+SELECT COUNT(DISTINCT SNDCUSTOMER_KEY) AS total_customers,
+       COUNT(DISTINCT CASE WHEN PAYOUT_TYPE = 'ACCOUNT' THEN SNDCUSTOMER_KEY END) AS apn_customers,
+       COUNT(*) AS total_transactions,
+       COUNT(CASE WHEN PAYOUT_TYPE = 'ACCOUNT' THEN 1 END) AS apn_transactions
+FROM CAM_1746_BASE1;
+
+
+-- ============================================================================
+-- STEP 2: IDENTIFY APN ACTIVE CUSTOMERS
+-- ============================================================================
+-- Purpose: Filter to only customers with at least one APN transaction
+-- ============================================================================
+
+CREATE OR REPLACE TABLE CAM_1746_APN_CUSTOMERS AS
+SELECT DISTINCT SNDCUSTOMER_KEY
+FROM CAM_1746_BASE1
+WHERE PAYOUT_TYPE = 'ACCOUNT';
+
+-- Verification
+SELECT COUNT(*) AS apn_active_customers
+FROM CAM_1746_APN_CUSTOMERS;
+
+
+-- ============================================================================
+-- STEP 3: GET R12 CUSTOMER ATTRIBUTES
+-- ============================================================================
+-- Purpose: Join with Country_Packet to get R12 attributes for APN customers
+-- ============================================================================
+
+CREATE OR REPLACE TABLE CAM_1746_APN_WITH_R12_ATTRIBUTES AS
 SELECT 
-    MTH_YR,--month
+    cp.MTH_YR,
+    cp.SNDCUSTOMER_KEY,
+    cp.COUNTRY_CODE,
+    cp.FLAG_MARKETABLE,
+    cp.R12_TXNS,
+    cp.R12_PRINCIPAL,
+    cp.R12_REVENUE,
+    cp.RFM__PERSONA,
+    cp.DOMINANT_CHANNEL,
+    cp.DOMINANT__CORRIDOR,
+    cp.DOMINANT_CORRIDOR_TYPE_1,  -- IMT/DMT
+    cp.DOMINANT__SNDCOUNTRY_NAME,
+    cp.RETAIL_DIGITAL__FLAG,
+    cp.MYWU_STATUS_1,  -- Loyalty status
+    cp.DOMINANT_ATTRBUTE_FUNDS_IN
+FROM Country_Packet_CUST_LEVEL_R12 cp
+    INNER JOIN CAM_1746_APN_CUSTOMERS apn
+        ON cp.SNDCUSTOMER_KEY = apn.SNDCUSTOMER_KEY
+WHERE cp.COUNTRY_CODE = 'US'
+    AND cp.MTH_YR >= '2025-02-01'
+    AND cp.MTH_YR < '2026-02-01';
+
+-- Verification
+SELECT MTH_YR,
+       COUNT(DISTINCT SNDCUSTOMER_KEY) AS customers,
+       SUM(R12_TXNS) AS total_r12_txns,
+       SUM(R12_PRINCIPAL) AS total_r12_principal,
+       SUM(R12_REVENUE) AS total_r12_revenue
+FROM CAM_1746_APN_WITH_R12_ATTRIBUTES
+GROUP BY MTH_YR
+ORDER BY MTH_YR;
+
+
+-- ============================================================================
+-- STEP 4: CALCULATE TPC/PPC/PPT/RPT METRICS
+-- ============================================================================
+-- Purpose: Calculate Transaction, Principal, and Revenue metrics
+--          - For APN transactions only
+--          - For all transactions (entire portfolio)
+-- ============================================================================
+
+-- 4A: Calculate metrics for APN transactions only
+CREATE OR REPLACE TABLE CAM_1746_APN_METRICS AS
+SELECT 
+    mth_yr,
     SNDCUSTOMER_KEY,
-    COUNTRY_CODE,
-    FLAG_MARKETABLE,--Marketable or Non marketable
+    
+    -- APN Transaction Metrics
+    COUNT(DISTINCT TXN_ID) AS APN_TXN_COUNT,
+    SUM(PRINCIPAL_AMT) AS APN_PRINCIPAL,
+    SUM(REVENUE_AMT) AS APN_REVENUE,
+    
+    -- APN Per-Transaction Metrics
+    AVG(PRINCIPAL_AMT) AS APN_PPT,  -- Principal Per Transaction
+    AVG(REVENUE_AMT) AS APN_RPT,     -- Revenue Per Transaction
+    
+    -- Corridor breakdown for APN
+    COUNT(DISTINCT rcvcountry_code) AS APN_UNIQUE_CORRIDORS
+    
+FROM CAM_1746_BASE1
+WHERE PAYOUT_TYPE = 'ACCOUNT'
+GROUP BY mth_yr, SNDCUSTOMER_KEY;
+
+
+-- 4B: Calculate metrics for ALL transactions (entire portfolio)
+CREATE OR REPLACE TABLE CAM_1746_ALL_METRICS AS
+SELECT 
+    mth_yr,
+    SNDCUSTOMER_KEY,
+    
+    -- All Transaction Metrics
+    COUNT(DISTINCT TXN_ID) AS TOTAL_TXN_COUNT,
+    SUM(PRINCIPAL_AMT) AS TOTAL_PRINCIPAL,
+    SUM(REVENUE_AMT) AS TOTAL_REVENUE,
+    
+    -- All Per-Transaction Metrics
+    AVG(PRINCIPAL_AMT) AS TOTAL_PPT,  -- Principal Per Transaction
+    AVG(REVENUE_AMT) AS TOTAL_RPT,     -- Revenue Per Transaction
+    
+    -- Payout type breakdown
+    COUNT(DISTINCT CASE WHEN PAYOUT_TYPE = 'ACCOUNT' THEN TXN_ID END) AS ACCOUNT_TXNS,
+    COUNT(DISTINCT CASE WHEN PAYOUT_TYPE = 'CASH' THEN TXN_ID END) AS CASH_TXNS,
+    COUNT(DISTINCT CASE WHEN PAYOUT_TYPE NOT IN ('ACCOUNT', 'CASH') THEN TXN_ID END) AS OTHER_TXNS,
+    
+    -- Corridor breakdown for all
+    COUNT(DISTINCT rcvcountry_code) AS TOTAL_UNIQUE_CORRIDORS
+    
+FROM CAM_1746_BASE1
+GROUP BY mth_yr, SNDCUSTOMER_KEY;
+
+
+-- ============================================================================
+-- STEP 5: CREATE FINAL COMPREHENSIVE DATASET
+-- ============================================================================
+-- Purpose: Combine all attributes and metrics into one analysis-ready table
+-- ============================================================================
+
+CREATE OR REPLACE TABLE CAM_1746_FINAL_APN_PROFILING AS
+SELECT 
+    -- Time and Customer Identifiers
+    r12.MTH_YR,
+    r12.SNDCUSTOMER_KEY,
+    r12.COUNTRY_CODE,
+    
+    -- Customer Profile Attributes
+    r12.FLAG_MARKETABLE,
+    r12.RFM__PERSONA,
+    r12.MYWU_STATUS_1 AS LOYALTY_STATUS,
+    base.age AS AGE,
+    
+    -- Channel & Corridor Attributes
+    r12.DOMINANT_CHANNEL,
+    r12.DOMINANT__CORRIDOR,
+    r12.DOMINANT_CORRIDOR_TYPE_1 AS IMT_DMT_FLAG,
+    r12.DOMINANT__SNDCOUNTRY_NAME,
+    r12.RETAIL_DIGITAL__FLAG,
+    r12.DOMINANT_ATTRBUTE_FUNDS_IN,
+    
+    -- R12 Overall Metrics
+    r12.R12_TXNS,
+    r12.R12_PRINCIPAL,
+    r12.R12_REVENUE,
+    
+    -- APN-Specific Metrics (from monthly transactions)
+    COALESCE(apn.APN_TXN_COUNT, 0) AS APN_TXN_COUNT,
+    COALESCE(apn.APN_PRINCIPAL, 0) AS APN_PRINCIPAL,
+    COALESCE(apn.APN_REVENUE, 0) AS APN_REVENUE,
+    apn.APN_PPT,
+    apn.APN_RPT,
+    apn.APN_UNIQUE_CORRIDORS,
+    
+    -- All Transactions Metrics (from monthly transactions)
+    COALESCE(all_m.TOTAL_TXN_COUNT, 0) AS TOTAL_TXN_COUNT,
+    COALESCE(all_m.TOTAL_PRINCIPAL, 0) AS TOTAL_PRINCIPAL,
+    COALESCE(all_m.TOTAL_REVENUE, 0) AS TOTAL_REVENUE,
+    all_m.TOTAL_PPT,
+    all_m.TOTAL_RPT,
+    all_m.TOTAL_UNIQUE_CORRIDORS,
+    
+    -- Payout Type Breakdown
+    COALESCE(all_m.ACCOUNT_TXNS, 0) AS ACCOUNT_TXNS,
+    COALESCE(all_m.CASH_TXNS, 0) AS CASH_TXNS,
+    COALESCE(all_m.OTHER_TXNS, 0) AS OTHER_TXNS,
+    
+    -- Calculated Ratios
+    CASE 
+        WHEN all_m.TOTAL_TXN_COUNT > 0 
+        THEN ROUND(COALESCE(apn.APN_TXN_COUNT, 0) * 100.0 / all_m.TOTAL_TXN_COUNT, 2)
+        ELSE 0 
+    END AS APN_TXN_PERCENTAGE,
+    
+    CASE 
+        WHEN all_m.TOTAL_PRINCIPAL > 0 
+        THEN ROUND(COALESCE(apn.APN_PRINCIPAL, 0) * 100.0 / all_m.TOTAL_PRINCIPAL, 2)
+        ELSE 0 
+    END AS APN_PRINCIPAL_PERCENTAGE,
+    
+    CASE 
+        WHEN all_m.TOTAL_REVENUE > 0 
+        THEN ROUND(COALESCE(apn.APN_REVENUE, 0) * 100.0 / all_m.TOTAL_REVENUE, 2)
+        ELSE 0 
+    END AS APN_REVENUE_PERCENTAGE
+
+FROM CAM_1746_APN_WITH_R12_ATTRIBUTES r12
+    LEFT JOIN CAM_1746_APN_METRICS apn
+        ON r12.MTH_YR = apn.mth_yr 
+        AND r12.SNDCUSTOMER_KEY = apn.SNDCUSTOMER_KEY
+    LEFT JOIN CAM_1746_ALL_METRICS all_m
+        ON r12.MTH_YR = all_m.mth_yr 
+        AND r12.SNDCUSTOMER_KEY = all_m.SNDCUSTOMER_KEY
+    LEFT JOIN (
+        SELECT SNDCUSTOMER_KEY, MAX(age) AS age
+        FROM CAM_1746_BASE1
+        GROUP BY SNDCUSTOMER_KEY
+    ) base
+        ON r12.SNDCUSTOMER_KEY = base.SNDCUSTOMER_KEY;
+
+
+-- ============================================================================
+-- STEP 6: ANALYSIS QUERIES & VALIDATION
+-- ============================================================================
+
+-- 6A: Monthly Summary
+SELECT 
+    MTH_YR,
+    COUNT(DISTINCT SNDCUSTOMER_KEY) AS unique_customers,
+    SUM(APN_TXN_COUNT) AS total_apn_txns,
+    SUM(APN_PRINCIPAL) AS total_apn_principal,
+    SUM(APN_REVENUE) AS total_apn_revenue,
+    AVG(APN_PPT) AS avg_apn_ppt,
+    AVG(APN_RPT) AS avg_apn_rpt,
+    AVG(APN_TXN_PERCENTAGE) AS avg_apn_txn_pct
+FROM CAM_1746_FINAL_APN_PROFILING
+GROUP BY MTH_YR
+ORDER BY MTH_YR;
+
+
+-- 6B: RFM Persona Distribution
+SELECT 
+    RFM__PERSONA,
+    COUNT(DISTINCT SNDCUSTOMER_KEY) AS customer_count,
+    SUM(APN_TXN_COUNT) AS apn_txns,
+    AVG(APN_PPT) AS avg_apn_ppt,
+    AVG(APN_RPT) AS avg_apn_rpt
+FROM CAM_1746_FINAL_APN_PROFILING
+GROUP BY RFM__PERSONA
+ORDER BY customer_count DESC;
+
+
+-- 6C: Channel Distribution
+SELECT 
+    DOMINANT_CHANNEL,
+    COUNT(DISTINCT SNDCUSTOMER_KEY) AS customer_count,
+    SUM(APN_TXN_COUNT) AS apn_txns,
+    AVG(APN_PRINCIPAL) AS avg_apn_principal,
+    AVG(APN_TXN_PERCENTAGE) AS avg_apn_pct
+FROM CAM_1746_FINAL_APN_PROFILING
+GROUP BY DOMINANT_CHANNEL
+ORDER BY customer_count DESC;
+
+
+-- 6D: IMT vs DMT Distribution
+SELECT 
+    DOMINANT_CORRIDOR_TYPE_1 AS corridor_type,
+    COUNT(DISTINCT SNDCUSTOMER_KEY) AS customer_count,
+    SUM(APN_TXN_COUNT) AS apn_txns,
+    AVG(APN_PPT) AS avg_apn_ppt,
+    SUM(APN_PRINCIPAL) AS total_apn_principal
+FROM CAM_1746_FINAL_APN_PROFILING
+GROUP BY DOMINANT_CORRIDOR_TYPE_1
+ORDER BY customer_count DESC;
+
+
+-- 6E: Loyalty Status Distribution
+SELECT 
+    LOYALTY_STATUS,
+    COUNT(DISTINCT SNDCUSTOMER_KEY) AS customer_count,
+    SUM(APN_TXN_COUNT) AS apn_txns,
+    AVG(APN_REVENUE) AS avg_apn_revenue,
+    AVG(R12_TXNS) AS avg_r12_txns
+FROM CAM_1746_FINAL_APN_PROFILING
+GROUP BY LOYALTY_STATUS
+ORDER BY customer_count DESC;
+
+
+-- 6F: Marketability Analysis
+SELECT 
+    FLAG_MARKETABLE,
+    COUNT(DISTINCT SNDCUSTOMER_KEY) AS customer_count,
+    SUM(APN_TXN_COUNT) AS apn_txns,
+    AVG(APN_PRINCIPAL) AS avg_apn_principal,
+    AVG(APN_TXN_PERCENTAGE) AS avg_apn_pct
+FROM CAM_1746_FINAL_APN_PROFILING
+GROUP BY FLAG_MARKETABLE
+ORDER BY customer_count DESC;
+
+
+-- ============================================================================
+-- STEP 7: EXPORT FOR EXCEL ANALYSIS (OPTIONAL)
+-- ============================================================================
+-- Purpose: Create a simplified version for Excel export if needed
+-- ============================================================================
+
+CREATE OR REPLACE TABLE CAM_1746_EXCEL_EXPORT AS
+SELECT 
+    MTH_YR,
+    SNDCUSTOMER_KEY,
+    FLAG_MARKETABLE,
+    RFM__PERSONA,
+    LOYALTY_STATUS,
+    AGE,
+    DOMINANT_CHANNEL,
+    DOMINANT_CORRIDOR_TYPE_1,
+    RETAIL_DIGITAL__FLAG,
+    
+    -- Key Metrics
     R12_TXNS,
     R12_PRINCIPAL,
     R12_REVENUE,
-    RFM__PERSONA,--
-    DOMINANT_CHANNEL,
-    DOMINANT__CORRIDOR,
-    DOMINANT_CORRIDOR_TYPE_1,--contains international (IMT) and Domestic (DMT)
-    DOMINANT__SNDCOUNTRY_NAME,
-    RETAIL_DIGITAL__FLAG,
-    MYWU_STATUS_1,--loyalty status
-    DOMINANT_ATTRBUTE_FUNDS_IN
-FROM Country_Packet_CUST_LEVEL_R12
+    APN_TXN_COUNT,
+    APN_PRINCIPAL,
+    APN_REVENUE,
+    TOTAL_TXN_COUNT,
+    TOTAL_PRINCIPAL,
+    TOTAL_REVENUE,
+    
+    -- Per Transaction Metrics
+    APN_PPT,
+    APN_RPT,
+    TOTAL_PPT,
+    TOTAL_RPT,
+    
+    -- Percentages
+    APN_TXN_PERCENTAGE,
+    APN_PRINCIPAL_PERCENTAGE,
+    APN_REVENUE_PERCENTAGE
+    
+FROM CAM_1746_FINAL_APN_PROFILING;
 
-Description
 
-APN sender customer profiling:
-
- Requirement : To conduct APN sender customer profiling for the US market.
-
- Objective : To identify and understand patterns, behaviors, and trends within the APN customer base, using attributes such as dominant corridor, 
-channel,  TPC/PPC/PPT/RPT, RFM, age group, new/existing flag, marketability, dominant funds‑in source, IMT/DMT, and loyalty status.
-So the first table that was base and using that we need to connect with the Country_Packet_CUST_LEVEL_R12 in order to get the R12 active customers details.
-The steps i understand is:
-1. The base table wherein get the customers who have had at least one transaction with PAYOUT_TYPE = 'ACCOUNT' in the given time period.
-2. Join with Country_Packet_CUST_LEVEL_R12 join on MTH_YR and sndcustomer_key to get all the attributes for the R12 active customers 
-3. Calculate the TPC/PPC/PPT/RPT for Only the APN transactions, and also for the entire transactions irrespective of the Payout Type. 
-I can do this on excel as well but just give set up everything in a proper flow for easy calculations.
+-- ============================================================================
+-- NOTES FOR EXCEL CALCULATIONS
+-- ============================================================================
+-- If you prefer to do TPC/PPC/PPT/RPT calculations in Excel:
+-- 
+-- 1. Export CAM_1746_FINAL_APN_PROFILING or CAM_1746_EXCEL_EXPORT
+-- 
+-- 2. In Excel, you can create pivot tables for:
+--    - TPC (Transactions Per Customer) = SUM(TXN_COUNT) / COUNT(CUSTOMERS)
+--    - PPC (Principal Per Customer) = SUM(PRINCIPAL) / COUNT(CUSTOMERS)
+--    - PPT (Principal Per Transaction) = Already calculated in APN_PPT, TOTAL_PPT
+--    - RPT (Revenue Per Transaction) = Already calculated in APN_RPT, TOTAL_RPT
+--
+-- 3. Segment by any dimension (RFM, Channel, Corridor Type, etc.)
+--
+-- ============================================================================
