@@ -1,10 +1,11 @@
+--SCRIPT 1
 -- ============================================================================
 -- STEP 1: CREATE BASE TABLE - APN CUSTOMERS
 -- ============================================================================
 -- Purpose: Identify customers who have had at least one APN transaction
 -- ============================================================================
 CREATE OR REPLACE TABLE CAM_1746_BASE AS 
-SELECT 
+SELECT
     txn.SNDCUSTOMER_KEY,
     txn.TXN_ID,
     DATE_TRUNC('MONTH', txn.rcvpaying_datetime) AS mth_yr,
@@ -74,6 +75,7 @@ SELECT DISTINCT
     cp.DOMINANT__CORRIDOR, 
     cp.DOMINANT_CORRIDOR_TYPE_1,  -- IMT/DMT
     cp.DOMINANT__SNDCOUNTRY_NAME,
+    cp.R12_Active_Breakup,
     cp.RETAIL_DIGITAL__FLAG,
     cp.MYWU_STATUS_1,  -- Loyalty status
     cp.DOMINANT_ATTRBUTE_FUNDS_IN
@@ -101,6 +103,7 @@ SELECT
     r12.RFM__PERSONA,
     r12.MYWU_STATUS_1 AS LOYALTY_STATUS,
     r12.age AS AGE_group,
+    r12.R12_Active_Breakup AS New_Existing,
     
     -- Channel & Corridor Attributes
     r12.DOMINANT_CHANNEL,
@@ -114,7 +117,57 @@ SELECT
      SUM(r12.R12_TXNS) AS TOTAL_TXN_COUNT,
     SUM(r12.R12_PRINCIPAL) AS TOTAL_PRINCIPAL,
     SUM(r12.R12_REVENUE) AS TOTAL_REVENUE,
+    
+    -- **PPT Bucket - calculated per customer**
+    CASE
+        WHEN (SUM(r12.R12_PRINCIPAL) / NULLIF(SUM(r12.R12_TXNS), 0)) < 100 THEN 'A.<$100'
+        WHEN (SUM(r12.R12_PRINCIPAL) / NULLIF(SUM(r12.R12_TXNS), 0)) >= 100
+             AND (SUM(r12.R12_PRINCIPAL) / NULLIF(SUM(r12.R12_TXNS), 0)) < 500 THEN 'B.$100-$500'
+        WHEN (SUM(r12.R12_PRINCIPAL) / NULLIF(SUM(r12.R12_TXNS), 0)) >= 500
+             AND (SUM(r12.R12_PRINCIPAL) / NULLIF(SUM(r12.R12_TXNS), 0)) < 1000 THEN 'C.$500-$1,000'
+        WHEN (SUM(r12.R12_PRINCIPAL) / NULLIF(SUM(r12.R12_TXNS), 0)) >= 1000
+             AND (SUM(r12.R12_PRINCIPAL) / NULLIF(SUM(r12.R12_TXNS), 0)) < 2000 THEN 'D.$1,000-$2,000'
+        WHEN (SUM(r12.R12_PRINCIPAL) / NULLIF(SUM(r12.R12_TXNS), 0)) >= 2000
+             AND (SUM(r12.R12_PRINCIPAL) / NULLIF(SUM(r12.R12_TXNS), 0)) < 5000 THEN 'E.$2,000-$5,000'
+        WHEN (SUM(r12.R12_PRINCIPAL) / NULLIF(SUM(r12.R12_TXNS), 0)) >= 5000 THEN 'F.$5,000+'
+        ELSE 'Unknown'
+    END AS PPT_BUCKET,
+    
+    -- PPC Bucket - Principal Per Customer
+    CASE
+        WHEN SUM(r12.R12_PRINCIPAL) < 100 THEN 'A.<$100'
+        WHEN SUM(r12.R12_PRINCIPAL) >= 100 AND SUM(r12.R12_PRINCIPAL) < 500 THEN 'B.$100-$500'
+        WHEN SUM(r12.R12_PRINCIPAL) >= 500 AND SUM(r12.R12_PRINCIPAL) < 1000 THEN 'C.$500-$1,000'
+        WHEN SUM(r12.R12_PRINCIPAL) >= 1000 AND SUM(r12.R12_PRINCIPAL) < 2000 THEN 'D.$1,000-$2,000'
+        WHEN SUM(r12.R12_PRINCIPAL) >= 2000 AND SUM(r12.R12_PRINCIPAL) < 5000 THEN 'E.$2,000-$5,000'
+        WHEN SUM(r12.R12_PRINCIPAL) >= 5000 AND SUM(r12.R12_PRINCIPAL) < 10000 THEN 'F.$5,000-$10,000'
+        WHEN SUM(r12.R12_PRINCIPAL) >= 10000 THEN 'G.$10,000+'
+        ELSE 'Unknown'
+    END AS PPC_BUCKET,
 
+       -- **RPT Bucket - calculated per customer**
+    CASE
+        WHEN (SUM(r12.R12_REVENUE) / NULLIF(SUM(r12.R12_TXNS), 0)) < 100 THEN 'A.<$100'
+        WHEN (SUM(r12.R12_REVENUE) / NULLIF(SUM(r12.R12_TXNS), 0)) >= 100
+             AND (SUM(r12.R12_REVENUE) / NULLIF(SUM(r12.R12_TXNS), 0)) < 500 THEN 'B.$100-$500'
+        WHEN (SUM(r12.R12_REVENUE) / NULLIF(SUM(r12.R12_TXNS), 0)) >= 500
+             AND (SUM(r12.R12_REVENUE) / NULLIF(SUM(r12.R12_TXNS), 0)) < 1000 THEN 'C.$500-$1,000'
+        WHEN (SUM(r12.R12_REVENUE) / NULLIF(SUM(r12.R12_TXNS), 0)) >= 1000
+             AND (SUM(r12.R12_REVENUE) / NULLIF(SUM(r12.R12_TXNS), 0)) < 2000 THEN 'D.$1,000-$2,000'
+        WHEN (SUM(r12.R12_REVENUE) / NULLIF(SUM(r12.R12_TXNS), 0)) >= 2000
+             AND (SUM(r12.R12_REVENUE) / NULLIF(SUM(r12.R12_TXNS), 0)) < 5000 THEN 'E.$2,000-$5,000'
+        WHEN (SUM(r12.R12_REVENUE) / NULLIF(SUM(r12.R12_TXNS), 0)) >= 5000 THEN 'F.$5,000+'
+        ELSE 'Unknown'
+    END AS RPT_BUCKET,
+    
+    -- **TPC Bucket - Transaction Per Customer (already at customer level)**
+    CASE
+        WHEN SUM(r12.R12_TXNS) = 1 THEN 'A.1x'
+        WHEN SUM(r12.R12_TXNS) = 2 THEN 'B.2x'
+        WHEN SUM(r12.R12_TXNS) = 3 THEN 'C.3x'
+        WHEN SUM(r12.R12_TXNS) >= 4 THEN 'D.4x+'
+        ELSE 'E.Unknown'
+    END AS TPC_BUCKET
 
 FROM CAM_1746_APN_WITH_R12_ATTRIBUTES1 r12
 GROUP BY ALL;
@@ -128,33 +181,218 @@ SELECT
     RFM__PERSONA,
     DOMINANT_CHANNEL,
     RETAIL_DIGITAL__FLAG,
+    New_Existing,
     IMT_DMT_FLAG,
     DOMINANT__CORRIDOR,
+    DOMINANT_ATTRBUTE_FUNDS_IN,
     AGE_GROUP,
-    COUNT(DISTINCT SNDCUSTOMER_KEY) AS DISTINCT_CUSTOMERS,
-    sum(TOTAL_TXN_COUNT) as Total_Txns,
-     SUM(TOTAL_PRINCIPAL) AS TOTAL_PRINCIPAL,
-    SUM(TOTAL_REVENUE) AS TOTAL_REVENUE,
-    CASE
-        WHEN TOTAL_PRINCIPAL < 100 THEN 'A.<$100'
-        WHEN TOTAL_PRINCIPAL >= 100 AND TOTAL_PRINCIPAL < 500 THEN 'B.$100-$500'
-        WHEN TOTAL_PRINCIPAL >= 500 AND TOTAL_PRINCIPAL < 1000 THEN 'C.$500-$1,000'
-        WHEN TOTAL_PRINCIPAL >= 1000 AND TOTAL_PRINCIPAL < 2000 THEN 'D.$1,000-$2,000'
-        WHEN TOTAL_PRINCIPAL >= 2000 AND TOTAL_PRINCIPAL < 5000 THEN 'E.$2,000-$5,000'
-        WHEN TOTAL_PRINCIPAL >= 5000 THEN 'F.$5,000+'
-        ELSE 'Unknown'
-    END AS PPT_bucket,
-/* Bucket based on each customer's total transactions */
-    CASE
-        WHEN Total_Txns = 1 THEN 'A.1x'
-        WHEN Total_Txns = 2 THEN 'B.2x'
-        WHEN Total_Txns = 3 THEN 'C.3x'
-        WHEN Total_Txns >= 4 THEN 'D.4x+'
-        ELSE 'E.Unknown'
-    END AS TPC_bucket,
-    
-FROM CAM_1746_FINAL_APN_PROFILING
+    PPT_BUCKET,
+    PPC_BUCKET,
+    TPC_BUCKET,
+    RPT_BUCKET,    
+    COUNT(DISTINCT SNDCUSTOMER_KEY) AS DISTINCT_CUSTOMERS
+    -- SUM(TOTAL_TXN_COUNT) AS TOTAL_TXNS,
+    -- SUM(TOTAL_PRINCIPAL) AS TOTAL_PRINCIPAL,
+    -- SUM(TOTAL_REVENUE) AS TOTAL_REVENUE,
+FROM CAM_1746_FINAL_APN_PROFILING1
 GROUP BY ALL
 ORDER BY MTH_YR, COUNTRY_CODE, DOMINANT_CHANNEL, RFM__PERSONA;
+ 
+SELECT * FROM CAM_1746_APN_COUNTS;
+I had created the script in the above way but due to some limitations i cant do it in this way, so i am trying to create it 
+again using the base tables :
+--SCRIPT 2:
+-- ============================================================================
+-- STEP 1: CREATE BASE TABLE - APN CUSTOMERS
+-- ============================================================================
+-- Purpose: Identify customers who have had at least one APN transaction
+-- ============================================================================
+CREATE OR REPLACE TABLE CAM_1746_Cust_Base AS 
+SELECT 
+    SNDCUSTOMER_KEY,
+    TXN_ID,
+    DATE_TRUNC('MONTH', rcvpaying_datetime) AS mth_yr,
+    RCVPAYING_DATETIME AS txn_dt,
+    sndcountry_code,
+    rcvcountry_code,
+    PAYOUT_TYPE,
+    SUB_PAYIN_TYPE,
+    REVENUE,
+    SNDPRINCIPAL_USD,
+    COUNT(CASE WHEN PRICING_CHANNEL = 'APP' THEN txn_id End) AS         APP_TXNS,
+    DIRECTION,
+    -- cm.age,
+    -- cm.marketing_flag,
+    CASE
+        WHEN PRICING_CHANNEL IN ('WEB', 'APP') THEN 'DIGITAL'
+        WHEN PRICING_CHANNEL IN ('POS', 'TMT', 'AIR') THEN 'RETAIL'
+        ELSE 'OTHER'
+    END AS channel_group,
+   -- APN FLAG: 1 if customer has at least one ACCOUNT transaction, 0 otherwise
+    -- CASE
+    --     WHEN COUNT(CASE WHEN PAYOUT_TYPE = 'ACCOUNT' THEN 1 END)
+    --          OVER (PARTITION BY SNDCUSTOMER_KEY) >= 1
+    --     THEN 1
+    --     ELSE 0
+    -- END AS APN_CUSTOMER_FLAG,
+    -- PPT Bucket
+    CASE
+        WHEN SNDPRINCIPAL_USD < 100 THEN 'A.<$100'
+        WHEN SNDPRINCIPAL_USD >= 100 AND SNDPRINCIPAL_USD < 500 THEN 'B.$100-$500'
+        WHEN SNDPRINCIPAL_USD >= 500 AND SNDPRINCIPAL_USD < 1000 THEN 'C.$500-$1,000'
+        WHEN SNDPRINCIPAL_USD >= 1000 AND SNDPRINCIPAL_USD < 2000 THEN 'D.$1,000-$2,000'
+        WHEN SNDPRINCIPAL_USD >= 2000 AND SNDPRINCIPAL_USD < 5000 THEN 'E.$2,000-$5,000'
+        WHEN SNDPRINCIPAL_USD >= 5000 THEN 'F.$5,000+'
+        ELSE 'Unknown'
+    END AS PPT_bucket,
+    CASE
+        WHEN REVENUE < 100 THEN 'A.<$100'
+        WHEN REVENUE >= 100 AND REVENUE < 500 THEN 'B.$100-$500'
+        WHEN REVENUE >= 500 AND REVENUE < 1000 THEN 'C.$500-$1,000'
+        WHEN REVENUE >= 1000 AND REVENUE < 2000 THEN 'D.$1,000-$2,000'
+        WHEN REVENUE >= 2000 AND REVENUE < 5000 THEN 'E.$2,000-$5,000'
+        WHEN REVENUE >= 5000 THEN 'F.$5,000+'
+        ELSE 'Unknown'
+    END AS RPT_bucket
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+    -- LEFT JOIN wudna.summary_gen.wudna_customer_master_vw cm
+    --     ON txn.sndcustomer_key = cm.customer_key
+WHERE SNDCOUNTRY_CODE = 'US'
+    AND DATE(rcvpaying_datetime) >= '2025-02-01'
+    AND DATE(rcvpaying_datetime) < '2026-02-01'
+    AND sndcustomer_key IS NOT NULL
+    GROUP BY ALL;
 
-select * from CAM_1746_APN_COUNTS;
+CREATE OR REPLACE TABLE CAM_1746_MARKETABILITY_FLAG AS
+select *,
+CASE 
+    WHEN email_marketability_flag = 'Y' OR sms_marketability_flag = 'Y' OR App_Marketability_Flag = 'Y' then  'Y' ELSE 'N' END AS MARKETABILITY_FLAG 
+
+FROM(
+SELECT DISTINCT
+b.sndcustomer_key,
+mth_yr,
+txn_dt,
+cm.age,
+TXN_ID,
+sndcountry_code,
+    rcvcountry_code,
+    PAYOUT_TYPE,
+	SUB_PAYIN_TYPE,
+    REVENUE,
+    SNDPRINCIPAL_USD,
+    DIRECTION,
+    channel_group,
+    PPT_bucket,
+    CASE
+        WHEN COUNT(CASE WHEN PAYOUT_TYPE = 'ACCOUNT' THEN 1 END)
+             OVER (PARTITION BY SNDCUSTOMER_KEY) >= 1
+        THEN 1
+        ELSE 0
+    END AS APN_CUSTOMER_FLAG,
+
+ -- Marketability Flags
+    CASE 
+        WHEN cm.marketing_flag = 'Y' AND cm.email_address_on_file_flag = 'Y' AND cm.opt_email = 'I' THEN 'Y'
+        ELSE 'N'
+    END AS email_marketability_flag,
+
+    CASE 
+        WHEN cm.marketing_flag = 'Y' AND cm.mobile_number_on_file_flag = 'Y' AND cm.opt_sms = 'I' THEN 'Y'
+        ELSE 'N'
+    END AS sms_marketability_flag,
+
+    CASE WHEN APP_TXNS > 0 THEN 'Y' ELSE 'N' END AS App_Marketability_Flag,
+FROM CAM_1746_BASE b
+JOIN SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
+  ON b.SNDCUSTOMER_KEY = cm.customer_key 
+);
+
+CREATE OR REPLACE TABLE CAM_1746_CUSTOMERS_WITH_ATLEAST1_APN AS
+SELECT
+    SNDCUSTOMER_KEY,
+    TXN_ID,
+    mth_yr,
+    txn_dt,
+    sndcountry_code,
+    rcvcountry_code,
+    channel_group,
+    PAYOUT_TYPE,
+	SUB_PAYIN_TYPE,
+    age,
+    REVENUE,
+    SNDPRINCIPAL_USD,
+    DIRECTION,
+    APN_CUSTOMER_FLAG,
+    MARKETABILITY_FLAG,
+    PPT_bucket
+FROM CAM_1746_MARKETABILITY_FLAG
+WHERE APN_CUSTOMER_FLAG = 1;
+
+CREATE OR REPLACE TABLE CAM1746_DOMINANT_CORRIDOR AS
+SELECT *
+FROM (
+    SELECT
+        SNDCUSTOMER_KEY,
+        CONCAT(sndcountry_code, '-', rcvcountry_code) AS corridor,
+        sndcountry_code,
+        rcvcountry_code,
+        COUNT(DISTINCT TXN_ID) AS txn_count,
+        SUM(SNDPRINCIPAL_USD) AS total_principal_usd,
+        ROW_NUMBER() OVER (
+            PARTITION BY SNDCUSTOMER_KEY
+            ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
+        ) AS rnk
+    FROM CAM_1746_CUSTOMERS_WITH_ATLEAST1_APN
+    GROUP BY ALL
+)
+WHERE rnk = 1;
+
+CREATE OR REPLACE TABLE CAM_1746_DOMINANT_PAYOUT AS
+SELECT *
+FROM (
+    SELECT
+        SNDCUSTOMER_KEY,
+        PAYOUT_TYPE,
+        COUNT(DISTINCT TXN_ID) AS txn_count,
+        SUM(SNDPRINCIPAL_USD) AS total_principal_usd,
+        ROW_NUMBER() OVER (
+            PARTITION BY SNDCUSTOMER_KEY
+            ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
+        ) AS rnk
+    FROM CAM_1746_CUSTOMERS_WITH_ATLEAST1_APN
+    GROUP BY SNDCUSTOMER_KEY, PAYOUT_TYPE
+)
+WHERE rnk = 1;
+
+CREATE OR REPLACE TABLE CAM_1746_DOMINANT_PPT_BUCKET AS
+SELECT *
+FROM (
+    SELECT
+        SNDCUSTOMER_KEY,
+        PPT_bucket,
+        COUNT(DISTINCT TXN_ID) AS txn_count,
+        SUM(SNDPRINCIPAL_USD) AS total_principal_usd,
+        ROW_NUMBER() OVER (
+            PARTITION BY SNDCUSTOMER_KEY
+            ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
+        ) AS rnk
+    FROM CAM_1746_CUSTOMERS_WITH_ATLEAST1_APN
+    GROUP BY SNDCUSTOMER_KEY, PPT_bucket
+)
+WHERE rnk = 1;
+
+APN sender customer profiling:
+
+ Requirement : To conduct APN sender customer profiling for the US market.
+
+ Objective : To identify and understand patterns, behaviors, and trends within the APN customer base, 
+using attributes such as dominant corridor, channel,  TPC/PPC/PPT/RPT, RFM, age group, new/existing flag, marketability, 
+dominant funds‑in source, IMT/DMT, and loyalty status.
+so for dominant corridor ,  dominant payout type as well i have created however now i also want to create for dominant funds in for
+which SUB_PAYIN_TYPE will be used. for dominant channel , RPT bucket also we need dominancy so create it 
+the same way it was done for others and then we need to get RFM persona from WUDNA.CEX_SANDBOX.SK_CONSOLIDATED_PROPENSITY_SCORES Table
+JOIN using sndcustomer_key and MTH_YR where MTH_YR = '2026-01-01' and use RFM_Persona column.
+For new/ existing flag use WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL JOIN using sndcustomer_key and MTH_YR where MTH_YR = '2026-01-01'
+and use column MYWU_STATUS for Loyalty Status and NEW_EXISTING_FLAG for new and existing flag.
+Then create TPC, PPC the same way it was created in the first script. 
