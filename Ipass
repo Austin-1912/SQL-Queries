@@ -1,3 +1,33 @@
+Here’s my understanding of the AUNZSG SSS/Pag‑IBIG Fulfillment requirement from the ticket:
+Scope & Timeframe
+ 
+Markets: Australia (AU), New Zealand (NZ), Singapore (SG).
+Window: 1 Dec 2025 to 31 Jan 2026.
+ 
+Channel Inclusion
+ 
+AU & NZ: Include both Digital and Retail transactions.
+SG: Include Digital-only transactions (exclude Retail).
+ 
+Evaluate transactions in local currency:
+ 
+AU: AUD
+NZ: NZD
+SG: SGD
+ 
+ 
+A customer qualifies if they have at least 2 transactions during the window that meet one of the amount tiers based on per-transaction amount:
+ 
+Qualifier 1 Tier 500: >= 2 transactions ≥ 500 in local currency ELSE 
+Tier 300: 2 transactions ≥ 300 in local currency ELSE 'DONT INCLUDE'.
+
+ 
+Example: Two AUD 400 → qualifies for AUD 300 tier.
+Example: AUD 400 + AUD 600 → qualifies for AUD 300 tier
+(By extension: Two ≥500 transactions → qualifies for 500 tier.)
+Use the below query as a base and then create the checks in the subsequent tables, so if a customer is already qualifying for the 500 criteria 
+then dont include them in the 300 one, if they are not falling under 500 one then check if it falls under 300 if it does include it there and if a customer does not fall
+in any of the two criterias then do not include them anywhere. 
 CREATE OR REPLACE TABLE CAR_855_AU_PH_CUSTS1
 SELECT
     t.SNDCUSTOMER_KEY,  -- 19-digit GID
