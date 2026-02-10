@@ -1,33 +1,15 @@
-Hi Austin/Naveen,
-
-As discussed, Please add 'USER_ID' in the amplitude dataset which required to get Customer-UMN, once added, join the account summary on USER_ID = MD5(CUSTOMER_UMN) to get UMN/GID mapping against the Amplitude-ID.
-
-Please find the code logic below: 
-1.	Replicate below code with your amplitude source table to add USER_ID in your dataset.
-
-    create or replace table SP_AMPLITUDE_NC_FUNNEL_CNTRY_EVENT_T9 as
-    select
-        a.*,
-        b.user_id 
-    from
-        SP_AMPLITUDE_NC_FUNNEL_CNTRY_EVENT_T8 A
-    LEFT JOIN
-        (select  amplitude_id, Max(user_id) as user_id from             SP_AMPLITUDE_RAW_DATA_NOV_DEC_2025 group by 1) B
-ON
-    A.amplitude_id=b.amplitude_id;
-
-
-2.	Here in the below code, we have joined the account summary on USER_ID = MD5(CUSTOMER_UMN) to get UMN/GID mapping against the Amplitude-ID.
-
-    create or replace table SP_AMPLITUDE_NC_FUNNEL_CNTRY_EVENT_T10 as
-    select
-        a.*,
-        b.customer_key as GID, 
-        b.customer_umn,
-   
-    from
-        SP_AMPLITUDE_NC_FUNNEL_CNTRY_EVENT_T9 A
-    LEFT JOIN
-        WUDNA.SUMMARY_GEN.WUDNA_ACCOUNT_MASTER_VW B
-    ON
-        A.USER_ID=MD5(B.CUSTOMER_UMN);
+CREATE OR REPLACE TABLE CAR_855_AU_PH_CUSTS1
+SELECT
+    t.SNDCUSTOMER_KEY,  -- 19-digit GID
+    COUNT(t.txn_id) AS Total_Txns,
+    COUNT(CASE WHEN t.PRICING_CHANNEL = 'APP' THEN t.txn_id END) AS APP_TXNS,
+    Pricing_channel,
+    SNDPRINCIPAL_AMOUNT,
+    UPPER(t.SNDCOUNTRY_CODE) AS sndcountry_code,
+    UPPER(t.RCVCOUNTRY_CODE) AS rcvcountry_code
+FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
+WHERE UPPER(t.SNDCOUNTRY_CODE) = 'AU'
+  AND UPPER(t.RCVCOUNTRY_CODE) = 'PH'
+  AND DATE(t.RCVPAYING_DATETIME) >= '2025-12-01' AND 
+  DATE(t.RCVPAYING_DATETIME) <= '2026-01-31'
+GROUP BY all;
