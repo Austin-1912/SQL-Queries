@@ -1,30 +1,28 @@
-Here's the complete script with all the dominant attributes, RFM persona, loyalty status, and customer-level metrics:
-
-```sql
 -- ============================================================================
 -- STEP 1: CREATE BASE TABLE - APN CUSTOMERS
+-- ============================================================================
+-- Purpose: Identify customers who have had at least one APN transaction
 -- ============================================================================
 CREATE OR REPLACE TABLE CAM_1746_Cust_Base AS 
 SELECT 
     SNDCUSTOMER_KEY,
     TXN_ID,
-    DATE_TRUNC('MONTH', rcvpaying_datetime) AS mth_yr,
+    DATE('2026-01-01') AS mth_yr,
     RCVPAYING_DATETIME AS txn_dt,
     sndcountry_code,
     rcvcountry_code,
     PAYOUT_TYPE,
     SUB_PAYIN_TYPE,
-    PRICING_CHANNEL,
+    Pricing_Channel,
     REVENUE,
     SNDPRINCIPAL_USD,
-    COUNT(CASE WHEN PRICING_CHANNEL = 'APP' THEN txn_id END) OVER (PARTITION BY SNDCUSTOMER_KEY) AS APP_TXNS,
     DIRECTION,
+
     CASE
         WHEN PRICING_CHANNEL IN ('WEB', 'APP') THEN 'DIGITAL'
         WHEN PRICING_CHANNEL IN ('POS', 'TMT', 'AIR') THEN 'RETAIL'
         ELSE 'OTHER'
     END AS channel_group,
-    -- PPT Bucket (per transaction)
     CASE
         WHEN SNDPRINCIPAL_USD < 100 THEN 'A.<$100'
         WHEN SNDPRINCIPAL_USD >= 100 AND SNDPRINCIPAL_USD < 500 THEN 'B.$100-$500'
@@ -34,14 +32,14 @@ SELECT
         WHEN SNDPRINCIPAL_USD >= 5000 THEN 'F.$5,000+'
         ELSE 'Unknown'
     END AS PPT_bucket,
-    -- RPT Bucket (per transaction)
     CASE
-        WHEN REVENUE < 100 THEN 'A.<$100'
-        WHEN REVENUE >= 100 AND REVENUE < 500 THEN 'B.$100-$500'
-        WHEN REVENUE >= 500 AND REVENUE < 1000 THEN 'C.$500-$1,000'
-        WHEN REVENUE >= 1000 AND REVENUE < 2000 THEN 'D.$1,000-$2,000'
-        WHEN REVENUE >= 2000 AND REVENUE < 5000 THEN 'E.$2,000-$5,000'
-        WHEN REVENUE >= 5000 THEN 'F.$5,000+'
+        WHEN REVENUE < 5 THEN 'A.<$5'
+        WHEN REVENUE >= 5 AND REVENUE < 10 THEN 'B.$5-$10'
+        WHEN REVENUE >= 10 AND REVENUE < 15 THEN 'C.$10-$15'
+        WHEN REVENUE >= 15 AND REVENUE < 20 THEN 'D.$15-$20'
+        WHEN REVENUE >= 20 AND REVENUE < 40 THEN 'E.$20-$40'
+        WHEN REVENUE >= 40 AND REVENUE < 80 THEN 'F.$40-$80'
+        WHEN REVENUE >= 80 THEN 'G.$80+'
         ELSE 'Unknown'
     END AS RPT_bucket
 FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
@@ -51,83 +49,88 @@ WHERE SNDCOUNTRY_CODE = 'US'
     AND sndcustomer_key IS NOT NULL;
 
 -- ============================================================================
--- STEP 2: ADD MARKETABILITY FLAGS
+-- STEP 2: ADD MARKETABILITY FLAGS (WITH APP_TXNS CTE)
 -- ============================================================================
-CREATE OR REPLACE TABLE CAM_1746_MARKETABILITY_FLAG AS
-SELECT *,
-    CASE 
-        WHEN email_marketability_flag = 'Y' OR sms_marketability_flag = 'Y' OR App_Marketability_Flag = 'Y' 
-        THEN 'Y' 
-        ELSE 'N' 
-    END AS MARKETABILITY_FLAG 
-FROM (
-    SELECT DISTINCT
+CREATE OR REPLACE TABLE CAM_1746_APN_MARKETABILITY_FLAG AS
+WITH APN_Flag AS (
+    -- Calculate APN transaction count per customer
+    SELECT
+        SNDCUSTOMER_KEY,
+        COUNT(CASE WHEN Payout_type = 'ACCOUNT' THEN TXN_ID END) AS APN_TXNS
+    FROM CAM_1746_Cust_Base 
+    GROUP BY SNDCUSTOMER_KEY 
+    ),
+app_txn_counts AS (
+    -- Calculate APP transaction count per customer
+    SELECT
+        SNDCUSTOMER_KEY,
+        COUNT(CASE WHEN PRICING_CHANNEL = 'APP' THEN TXN_ID END) AS APP_TXNS
+    FROM CAM_1746_Cust_Base 
+    GROUP BY SNDCUSTOMER_KEY
+),
+base_with_flags AS (
+    SELECT
         b.sndcustomer_key,
-        mth_yr,
-        txn_dt,
-        cm.age,
-        TXN_ID,
-        sndcountry_code,
-        rcvcountry_code,
-        PAYOUT_TYPE,
-        SUB_PAYIN_TYPE,
-        PRICING_CHANNEL,
-        REVENUE,
-        SNDPRINCIPAL_USD,
-        DIRECTION,
-        channel_group,
-        PPT_bucket,
-        RPT_bucket,
-        APP_TXNS,
+        b.mth_yr,
+        b.txn_dt,
         CASE
-            WHEN COUNT(CASE WHEN PAYOUT_TYPE = 'ACCOUNT' THEN 1 END)
-                 OVER (PARTITION BY b.SNDCUSTOMER_KEY) >= 1
-            THEN 1
-            ELSE 0
-        END AS APN_CUSTOMER_FLAG,
+    WHEN cm.age ILIKE '%less than 18%' THEN '<18'
+    WHEN cm.age ILIKE 'age 18 - age 20' 
+      OR cm.age ILIKE 'age 21 - age 25' THEN '18 - 25'
+    WHEN cm.age ILIKE 'age 26 - age 30'
+      OR cm.age ILIKE 'age 31 - age 35'
+      OR cm.age ILIKE 'age 36 - age 40' THEN '25 - 40'   -- effectively 26–40
+    WHEN cm.age ILIKE 'age 41 - age 45'
+      OR cm.age ILIKE 'age 46 - age 50'
+      OR cm.age ILIKE 'age 51 - age 55'
+      OR cm.age ILIKE 'age 56 - age 60' THEN '40 - 60'
+    WHEN cm.age ILIKE 'age 61 - age 65'
+      OR cm.age ILIKE '%65 above%' THEN '60 +'
+    WHEN cm.age IS NULL OR TRIM(cm.age) IN ('', '(blank)') THEN 'Unknown'
+    ELSE 'Unknown'
+END AS AGE_GROUP,
+        b.TXN_ID,
+        apn.APN_TXNS,
+        b.sndcountry_code,
+        b.rcvcountry_code,
+        b.PAYOUT_TYPE,
+        b.SUB_PAYIN_TYPE,
+        b.REVENUE,
+        b.SNDPRINCIPAL_USD,
+        b.DIRECTION,
+        b.channel_group,
+        b.PPT_bucket,
+        b.RPT_bucket,
+        app.APP_TXNS,
         -- Marketability Flags
-        CASE 
+        CASE
             WHEN cm.marketing_flag = 'Y' AND cm.email_address_on_file_flag = 'Y' AND cm.opt_email = 'I' THEN 'Y'
             ELSE 'N'
         END AS email_marketability_flag,
-        CASE 
+        CASE
             WHEN cm.marketing_flag = 'Y' AND cm.mobile_number_on_file_flag = 'Y' AND cm.opt_sms = 'I' THEN 'Y'
             ELSE 'N'
-        END AS sms_marketability_flag,
-        CASE WHEN APP_TXNS > 0 THEN 'Y' ELSE 'N' END AS App_Marketability_Flag
+        END AS sms_marketability_flag
     FROM CAM_1746_Cust_Base b
-    JOIN SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
-        ON b.SNDCUSTOMER_KEY = cm.customer_key 
-);
-
--- ============================================================================
--- STEP 3: FILTER TO APN CUSTOMERS ONLY
--- ============================================================================
-CREATE OR REPLACE TABLE CAM_1746_CUSTOMERS_WITH_ATLEAST1_APN AS
+    JOIN APN_Flag apn
+        ON b.sndcustomer_key = apn.sndcustomer_key
+    LEFT JOIN app_txn_counts app
+        ON b.SNDCUSTOMER_KEY = app.SNDCUSTOMER_KEY
+    LEFT JOIN SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
+        ON b.SNDCUSTOMER_KEY = cm.customer_key
+)
 SELECT
-    SNDCUSTOMER_KEY,
-    TXN_ID,
-    mth_yr,
-    txn_dt,
-    sndcountry_code,
-    rcvcountry_code,
-    channel_group,
-    PAYOUT_TYPE,
-    SUB_PAYIN_TYPE,
-    age,
-    REVENUE,
-    SNDPRINCIPAL_USD,
-    DIRECTION,
-    APN_CUSTOMER_FLAG,
-    MARKETABILITY_FLAG,
-    PPT_bucket,
-    RPT_bucket
-FROM CAM_1746_MARKETABILITY_FLAG
-WHERE APN_CUSTOMER_FLAG = 1;
+    *,
+    CASE WHEN APP_TXNS > 0 THEN 'Y' ELSE 'N' END AS App_Marketability_Flag,
+    CASE
+        WHEN email_marketability_flag = 'Y' OR sms_marketability_flag = 'Y' OR APP_TXNS > 0
+        THEN 'Y'
+        ELSE 'N'
+    END AS MARKETABILITY_FLAG
+FROM base_with_flags
+where APN_TXNS >= 1
+;
 
--- ============================================================================
--- STEP 4: CREATE DOMINANT CORRIDOR
--- ============================================================================
 CREATE OR REPLACE TABLE CAM1746_DOMINANT_CORRIDOR AS
 SELECT *
 FROM (
@@ -142,74 +145,33 @@ FROM (
             PARTITION BY SNDCUSTOMER_KEY
             ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
         ) AS rnk
-    FROM CAM_1746_CUSTOMERS_WITH_ATLEAST1_APN
-    GROUP BY SNDCUSTOMER_KEY, sndcountry_code, rcvcountry_code
+    FROM CAM_1746_APN_MARKETABILITY_FLAG
+    GROUP BY ALL
 )
 WHERE rnk = 1;
 
--- ============================================================================
--- STEP 5: CREATE DOMINANT PAYOUT TYPE
--- ============================================================================
+select Count(distinct sndcustomer_key), count(sndcustomer_key) from CAM1746_DOMINANT_CORRIDOR;--3,723,729	3,723,729
+
 CREATE OR REPLACE TABLE CAM_1746_DOMINANT_PAYOUT AS
 SELECT *
 FROM (
     SELECT
         SNDCUSTOMER_KEY,
         PAYOUT_TYPE,
-        COUNT(DISTINCT TXN_ID) AS txn_count,
-        SUM(SNDPRINCIPAL_USD) AS total_principal_usd,
+        --COUNT(DISTINCT TXN_ID) AS txn_count,
+        --SUM(SNDPRINCIPAL_USD) AS total_principal_usd,
         ROW_NUMBER() OVER (
             PARTITION BY SNDCUSTOMER_KEY
             ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
         ) AS rnk
-    FROM CAM_1746_CUSTOMERS_WITH_ATLEAST1_APN
+    FROM CAM_1746_APN_MARKETABILITY_FLAG
     GROUP BY SNDCUSTOMER_KEY, PAYOUT_TYPE
 )
 WHERE rnk = 1;
 
--- ============================================================================
--- STEP 6: CREATE DOMINANT FUNDS IN (SUB_PAYIN_TYPE)
--- ============================================================================
-CREATE OR REPLACE TABLE CAM_1746_DOMINANT_FUNDS_IN AS
-SELECT *
-FROM (
-    SELECT
-        SNDCUSTOMER_KEY,
-        SUB_PAYIN_TYPE AS DOMINANT_FUNDS_IN,
-        COUNT(DISTINCT TXN_ID) AS txn_count,
-        SUM(SNDPRINCIPAL_USD) AS total_principal_usd,
-        ROW_NUMBER() OVER (
-            PARTITION BY SNDCUSTOMER_KEY
-            ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
-        ) AS rnk
-    FROM CAM_1746_CUSTOMERS_WITH_ATLEAST1_APN
-    GROUP BY SNDCUSTOMER_KEY, SUB_PAYIN_TYPE
-)
-WHERE rnk = 1;
+select Count(distinct sndcustomer_key), count(sndcustomer_key) from 
+CAM_1746_DOMINANT_PAYOUT;--3,723,729	3,723,729
 
--- ============================================================================
--- STEP 7: CREATE DOMINANT CHANNEL
--- ============================================================================
-CREATE OR REPLACE TABLE CAM_1746_DOMINANT_CHANNEL AS
-SELECT *
-FROM (
-    SELECT
-        SNDCUSTOMER_KEY,
-        channel_group AS DOMINANT_CHANNEL,
-        COUNT(DISTINCT TXN_ID) AS txn_count,
-        SUM(SNDPRINCIPAL_USD) AS total_principal_usd,
-        ROW_NUMBER() OVER (
-            PARTITION BY SNDCUSTOMER_KEY
-            ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
-        ) AS rnk
-    FROM CAM_1746_CUSTOMERS_WITH_ATLEAST1_APN
-    GROUP BY SNDCUSTOMER_KEY, channel_group
-)
-WHERE rnk = 1;
-
--- ============================================================================
--- STEP 8: CREATE DOMINANT PPT BUCKET
--- ============================================================================
 CREATE OR REPLACE TABLE CAM_1746_DOMINANT_PPT_BUCKET AS
 SELECT *
 FROM (
@@ -222,14 +184,54 @@ FROM (
             PARTITION BY SNDCUSTOMER_KEY
             ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
         ) AS rnk
-    FROM CAM_1746_CUSTOMERS_WITH_ATLEAST1_APN
+    FROM CAM_1746_APN_MARKETABILITY_FLAG
     GROUP BY SNDCUSTOMER_KEY, PPT_bucket
 )
 WHERE rnk = 1;
 
--- ============================================================================
--- STEP 9: CREATE DOMINANT RPT BUCKET
--- ============================================================================
+select Count(distinct sndcustomer_key), count(sndcustomer_key) from 
+CAM_1746_DOMINANT_PPT_BUCKET;--3,723,729	3,723,729
+
+CREATE OR REPLACE TABLE CAM_1746_DOMINANT_FUNDS_IN AS
+SELECT *
+FROM (
+    SELECT
+        SNDCUSTOMER_KEY,
+        SUB_PAYIN_TYPE AS DOMINANT_FUNDS_IN,
+        COUNT(DISTINCT TXN_ID) AS txn_count,
+        SUM(SNDPRINCIPAL_USD) AS total_principal_usd,
+        ROW_NUMBER() OVER (
+            PARTITION BY SNDCUSTOMER_KEY
+            ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
+        ) AS rnk
+    FROM CAM_1746_APN_MARKETABILITY_FLAG
+    GROUP BY SNDCUSTOMER_KEY, SUB_PAYIN_TYPE
+)
+WHERE rnk = 1;
+
+select Count(distinct sndcustomer_key), count(sndcustomer_key) from 
+CAM_1746_DOMINANT_FUNDS_IN;--3,723,729	3,723,729
+
+CREATE OR REPLACE TABLE CAM_1746_DOMINANT_CHANNEL AS
+SELECT *
+FROM (
+    SELECT
+        SNDCUSTOMER_KEY,
+        channel_group AS DOMINANT_CHANNEL,
+        COUNT(DISTINCT TXN_ID) AS txn_count,
+        SUM(SNDPRINCIPAL_USD) AS total_principal_usd,
+        ROW_NUMBER() OVER (
+            PARTITION BY SNDCUSTOMER_KEY
+            ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
+        ) AS rnk
+    FROM CAM_1746_APN_MARKETABILITY_FLAG
+    GROUP BY SNDCUSTOMER_KEY, channel_group
+)
+WHERE rnk = 1;
+
+select Count(distinct sndcustomer_key), count(sndcustomer_key) from 
+CAM_1746_DOMINANT_CHANNEL;--3,723,729	3,723,729
+
 CREATE OR REPLACE TABLE CAM_1746_DOMINANT_RPT_BUCKET AS
 SELECT *
 FROM (
@@ -242,14 +244,31 @@ FROM (
             PARTITION BY SNDCUSTOMER_KEY
             ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
         ) AS rnk
-    FROM CAM_1746_CUSTOMERS_WITH_ATLEAST1_APN
+    FROM CAM_1746_APN_MARKETABILITY_FLAG
     GROUP BY SNDCUSTOMER_KEY, RPT_bucket
 )
 WHERE rnk = 1;
 
--- ============================================================================
--- STEP 10: CREATE CUSTOMER-LEVEL METRICS (TPC, PPC, PPT, RPT)
--- ============================================================================
+CREATE OR REPLACE TABLE CAM_1746_DOMINANT_DIRECTION_BUCKET AS
+SELECT *
+FROM (
+    SELECT
+        SNDCUSTOMER_KEY,
+        Direction,
+        COUNT(DISTINCT TXN_ID) AS txn_count,
+        SUM(REVENUE) AS total_revenue,
+        ROW_NUMBER() OVER (
+            PARTITION BY SNDCUSTOMER_KEY
+            ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
+        ) AS rnk
+    FROM CAM_1746_APN_MARKETABILITY_FLAG
+    GROUP BY SNDCUSTOMER_KEY, Direction
+)
+WHERE rnk = 1;
+
+ select Count(distinct sndcustomer_key), count(sndcustomer_key) from 
+CAM_1746_DOMINANT_RPT_BUCKET;--3,723,729	3,723,729
+
 CREATE OR REPLACE TABLE CAM_1746_CUSTOMER_LEVEL_METRICS AS
 SELECT
     SNDCUSTOMER_KEY,
@@ -257,20 +276,6 @@ SELECT
     COUNT(DISTINCT TXN_ID) AS TOTAL_TXN_COUNT,
     SUM(SNDPRINCIPAL_USD) AS TOTAL_PRINCIPAL,
     SUM(REVENUE) AS TOTAL_REVENUE,
-    
-    -- Calculate actual metrics
-    COUNT(DISTINCT TXN_ID) AS TPC_VALUE,
-    SUM(SNDPRINCIPAL_USD) AS PPC_VALUE,
-    CASE 
-        WHEN COUNT(DISTINCT TXN_ID) > 0 
-        THEN SUM(SNDPRINCIPAL_USD) / COUNT(DISTINCT TXN_ID)
-        ELSE 0 
-    END AS PPT_VALUE,
-    CASE 
-        WHEN COUNT(DISTINCT TXN_ID) > 0 
-        THEN SUM(REVENUE) / COUNT(DISTINCT TXN_ID)
-        ELSE 0 
-    END AS RPT_VALUE,
     
     -- TPC Bucket
     CASE
@@ -292,51 +297,20 @@ SELECT
         WHEN SUM(SNDPRINCIPAL_USD) >= 10000 THEN 'G.$10,000+'
         ELSE 'Unknown'
     END AS PPC_BUCKET,
-    
-    -- PPT Bucket (average per transaction)
+
     CASE
-        WHEN (SUM(SNDPRINCIPAL_USD) / NULLIF(COUNT(DISTINCT TXN_ID), 0)) < 100 THEN 'A.<$100'
-        WHEN (SUM(SNDPRINCIPAL_USD) / NULLIF(COUNT(DISTINCT TXN_ID), 0)) >= 100
-             AND (SUM(SNDPRINCIPAL_USD) / NULLIF(COUNT(DISTINCT TXN_ID), 0)) < 500 THEN 'B.$100-$500'
-        WHEN (SUM(SNDPRINCIPAL_USD) / NULLIF(COUNT(DISTINCT TXN_ID), 0)) >= 500
-             AND (SUM(SNDPRINCIPAL_USD) / NULLIF(COUNT(DISTINCT TXN_ID), 0)) < 1000 THEN 'C.$500-$1,000'
-        WHEN (SUM(SNDPRINCIPAL_USD) / NULLIF(COUNT(DISTINCT TXN_ID), 0)) >= 1000
-             AND (SUM(SNDPRINCIPAL_USD) / NULLIF(COUNT(DISTINCT TXN_ID), 0)) < 2000 THEN 'D.$1,000-$2,000'
-        WHEN (SUM(SNDPRINCIPAL_USD) / NULLIF(COUNT(DISTINCT TXN_ID), 0)) >= 2000
-             AND (SUM(SNDPRINCIPAL_USD) / NULLIF(COUNT(DISTINCT TXN_ID), 0)) < 5000 THEN 'E.$2,000-$5,000'
-        WHEN (SUM(SNDPRINCIPAL_USD) / NULLIF(COUNT(DISTINCT TXN_ID), 0)) >= 5000 THEN 'F.$5,000+'
-        ELSE 'Unknown'
-    END AS PPT_BUCKET_CALC,
-    
-    -- RPC Bucket (Revenue Per Customer)
-    CASE
-        WHEN SUM(REVENUE) < 50 THEN 'A.<$50'
-        WHEN SUM(REVENUE) >= 50 AND SUM(REVENUE) < 100 THEN 'B.$50-$100'
-        WHEN SUM(REVENUE) >= 100 AND SUM(REVENUE) < 200 THEN 'C.$100-$200'
-        WHEN SUM(REVENUE) >= 200 AND SUM(REVENUE) < 500 THEN 'D.$200-$500'
-        WHEN SUM(REVENUE) >= 500 THEN 'E.$500+'
-        ELSE 'Unknown'
-    END AS RPC_BUCKET,
-    
-    -- RPT Bucket (average revenue per transaction)
-    CASE
-        WHEN (SUM(REVENUE) / NULLIF(COUNT(DISTINCT TXN_ID), 0)) < 10 THEN 'A.<$10'
-        WHEN (SUM(REVENUE) / NULLIF(COUNT(DISTINCT TXN_ID), 0)) >= 10
-             AND (SUM(REVENUE) / NULLIF(COUNT(DISTINCT TXN_ID), 0)) < 20 THEN 'B.$10-$20'
-        WHEN (SUM(REVENUE) / NULLIF(COUNT(DISTINCT TXN_ID), 0)) >= 20
-             AND (SUM(REVENUE) / NULLIF(COUNT(DISTINCT TXN_ID), 0)) < 50 THEN 'C.$20-$50'
-        WHEN (SUM(REVENUE) / NULLIF(COUNT(DISTINCT TXN_ID), 0)) >= 50
-             AND (SUM(REVENUE) / NULLIF(COUNT(DISTINCT TXN_ID), 0)) < 100 THEN 'D.$50-$100'
-        WHEN (SUM(REVENUE) / NULLIF(COUNT(DISTINCT TXN_ID), 0)) >= 100 THEN 'E.$100+'
-        ELSE 'Unknown'
-    END AS RPT_BUCKET_CALC
-    
-FROM CAM_1746_CUSTOMERS_WITH_ATLEAST1_APN
+    WHEN SUM(REVENUE) < 5 THEN 'A.<$5'
+    WHEN SUM(REVENUE) >= 5 AND SUM(REVENUE) < 15 THEN 'B.$5-$15'
+    WHEN SUM(REVENUE) >= 15 AND SUM(REVENUE) < 30 THEN 'C.$15-$30'
+    WHEN SUM(REVENUE) >= 30 AND SUM(REVENUE) < 50 THEN 'D.$30-$50'
+    WHEN SUM(REVENUE) >= 50 THEN 'E.$50+'
+    ELSE 'Unknown'
+END AS RPC_BUCKET
+
+
+FROM CAM_1746_APN_MARKETABILITY_FLAG
 GROUP BY SNDCUSTOMER_KEY, mth_yr;
 
--- ============================================================================
--- STEP 11: JOIN RFM PERSONA
--- ============================================================================
 CREATE OR REPLACE TABLE CAM_1746_WITH_RFM AS
 SELECT
     m.*,
@@ -347,9 +321,11 @@ LEFT JOIN WUDNA.CEX_SANDBOX.SK_CONSOLIDATED_PROPENSITY_SCORES rfm
     AND m.mth_yr = rfm.MTH_YR
 WHERE rfm.MTH_YR = '2026-01-01';
 
--- ============================================================================
--- STEP 12: JOIN LOYALTY STATUS AND NEW/EXISTING FLAG
--- ============================================================================
+ select Count(distinct sndcustomer_key), count(sndcustomer_key) from 
+CAM_1746_WITH_RFM;--3,722,156	3,722,156
+
+-- JOIN LOYALTY STATUS AND NEW/EXISTING FLAG
+
 CREATE OR REPLACE TABLE CAM_1746_WITH_LOYALTY AS
 SELECT
     r.*,
@@ -361,16 +337,17 @@ LEFT JOIN WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL kpi
     AND r.mth_yr = kpi.MTH_YR
 WHERE kpi.MTH_YR = '2026-01-01';
 
--- ============================================================================
--- STEP 13: CREATE FINAL PROFILING TABLE
--- ============================================================================
+ select Count(distinct sndcustomer_key), count(sndcustomer_key) from 
+CAM_1746_WITH_LOYALTY;--3,722,156	3,722,156
+
+-- CREATE FINAL PROFILING TABLE
 CREATE OR REPLACE TABLE CAM_1746_FINAL_APN_PROFILING AS
 SELECT
-    l.MTH_YR,
+    DISTINCT
     l.SNDCUSTOMER_KEY,
-    
+    -- l.MTH_YR,
     -- Customer Attributes
-    cust.age AS AGE_GROUP,
+    cust.AGE_GROUP,
     l.LOYALTY_STATUS,
     l.NEW_EXISTING_FLAG,
     cust.MARKETABILITY_FLAG,
@@ -378,8 +355,6 @@ SELECT
     
     -- Dominant Attributes
     corr.corridor AS DOMINANT_CORRIDOR,
-    corr.sndcountry_code,
-    corr.rcvcountry_code,
     payout.PAYOUT_TYPE AS DOMINANT_PAYOUT_TYPE,
     funds.DOMINANT_FUNDS_IN,
     chan.DOMINANT_CHANNEL,
@@ -388,20 +363,14 @@ SELECT
     l.TOTAL_TXN_COUNT,
     l.TOTAL_PRINCIPAL,
     l.TOTAL_REVENUE,
-    l.TPC_VALUE,
-    l.PPC_VALUE,
-    l.PPT_VALUE,
-    l.RPT_VALUE,
+
     
     -- Buckets
     l.TPC_BUCKET,
     l.PPC_BUCKET,
-    l.PPT_BUCKET_CALC AS PPT_BUCKET,
-    l.RPC_BUCKET,
-    l.RPT_BUCKET_CALC AS RPT_BUCKET,
     ppt_dom.PPT_bucket AS DOMINANT_PPT_BUCKET,
     rpt_dom.RPT_bucket AS DOMINANT_RPT_BUCKET
-
+ 
 FROM CAM_1746_WITH_LOYALTY l
 LEFT JOIN CAM1746_DOMINANT_CORRIDOR corr
     ON l.SNDCUSTOMER_KEY = corr.SNDCUSTOMER_KEY
@@ -421,13 +390,15 @@ LEFT JOIN (
 ) cust
     ON l.SNDCUSTOMER_KEY = cust.SNDCUSTOMER_KEY;
 
+ select Count(distinct sndcustomer_key), count(sndcustomer_key) from 
+CAM_1746_FINAL_APN_PROFILING;--3,722,156	3,722,156
+
 -- ============================================================================
 -- STEP 14: CREATE AGGREGATED COUNTS
 -- ============================================================================
 CREATE OR REPLACE TABLE CAM_1746_APN_COUNTS AS
 SELECT
-    MTH_YR,
-    sndcountry_code AS COUNTRY_CODE,
+    -- MTH_YR,
     LOYALTY_STATUS,
     NEW_EXISTING_FLAG,
     MARKETABILITY_FLAG,
@@ -439,44 +410,17 @@ SELECT
     AGE_GROUP,
     TPC_BUCKET,
     PPC_BUCKET,
-    PPT_BUCKET,
-    RPC_BUCKET,
-    RPT_BUCKET,
     DOMINANT_PPT_BUCKET,
     DOMINANT_RPT_BUCKET,
     COUNT(DISTINCT SNDCUSTOMER_KEY) AS DISTINCT_CUSTOMERS,
     SUM(TOTAL_TXN_COUNT) AS TOTAL_TXNS,
     SUM(TOTAL_PRINCIPAL) AS TOTAL_PRINCIPAL,
     SUM(TOTAL_REVENUE) AS TOTAL_REVENUE,
-    AVG(PPT_VALUE) AS AVG_PPT,
-    AVG(RPT_VALUE) AS AVG_RPT
 FROM CAM_1746_FINAL_APN_PROFILING
 GROUP BY ALL
-ORDER BY MTH_YR, COUNTRY_CODE, DOMINANT_CHANNEL, RFM_Persona;
-
+ORDER BY DOMINANT_CHANNEL, RFM_Persona;
+ 
 SELECT * FROM CAM_1746_APN_COUNTS;
-```
-
-This script now includes:
-
-1. **All Dominant Attributes**:
-   - Dominant Corridor
-   - Dominant Payout Type
-   - Dominant Funds In (SUB_PAYIN_TYPE)
-   - Dominant Channel
-   - Dominant PPT Bucket
-   - Dominant RPT Bucket
-
-2. **Customer-Level Metrics**:
-   - TPC (Transactions Per Customer) with bucket
-   - PPC (Principal Per Customer) with bucket
-   - PPT (Principal Per Transaction) - calculated average with bucket
-   - RPC (Revenue Per Customer) with bucket
-   - RPT (Revenue Per Transaction) - calculated average with bucket
-
-3. **External Attributes**:
-   - RFM Persona from propensity scores table
-   - Loyalty Status (MYWU_STATUS)
-   - New/Existing Flag
-
-4. **Final Output**: Aggregated counts by all profiling dimensions
+Please check the script i have written i have updated and added a few things , also make sure since i have removed the table
+CAM_1746_CUSTOMERS_WITH_ATLEAST1_APN that it is not being used in the script and the flow of data is correct. 
+All the new columns added are being brought in correctly . Now give me only the patches that you have made corrections to and where and why.
