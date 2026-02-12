@@ -1,85 +1,187 @@
+I'll help you break down the CTEs into separate tables and add the 3-month and 6-month RNT flags. Here's the refactored code:
+
+```sql
+-- Step 1: Create base months table
+CREATE OR REPLACE TABLE CAR_853_BASE_MONTHS AS
+SELECT DISTINCT DATE_TRUNC('MONTH', MTH_YR) AS ref_date
+FROM WUDNA.CEX_SANDBOX.VA_KPI_2020_2
+WHERE MTH_YR >= TO_DATE('2025-08-01')
+  AND MTH_YR < DATE_TRUNC('MONTH', CURRENT_DATE);
+
+-- Step 2: Create registered customers table with marketability flags
+CREATE OR REPLACE TABLE CAR_853_REGISTERED_CUSTOMERS AS
+SELECT
+  c.customer_key,
+  DATE_TRUNC('MONTH', c.first_registration_date) AS reg_month,
+  c.first_registration_date,
+  c.country_code,
+  CASE
+    WHEN c.email_address_on_file_flag = 'Y'
+     AND c.opt_email = 'I'
+     AND c.marketing_flag = 'Y'
+    THEN 'Y'
+    ELSE 'N'
+  END AS email_marketable,
+  CASE
+    WHEN (c.opt_sms = 'I'
+      AND c.mobile_number_on_file_flag = 'Y'
+      AND c.marketing_flag = 'Y'
+      AND c.country_code NOT IN ('US','CA'))
+    OR (c.mobile_number_on_file_flag = 'Y'
+      AND c.opt_sms = 'I'
+      AND c.double_opt_sms = 'I'
+      AND c.marketing_flag = 'Y'
+      AND c.country_code IN ('US','CA'))
+    THEN 'Y'
+    ELSE 'N'
+  END AS sms_marketable
+FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
+JOIN SUMMARY_GEN.COUNTRY_VW cnt
+  ON c.country_code = cnt.country_code
+ AND cnt.country_code = 'IN'
+WHERE c.first_registration_date IS NOT NULL;
+
+-- Step 3: Create all transactions table
+CREATE OR REPLACE TABLE CAR_853_ALL_TRANSACTIONS AS
+SELECT DISTINCT
+  t.sndcustomer_key AS customer_key,
+  DATE(t.rcvpaying_datetime) AS txn_date
+FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
+WHERE t.sndcountry_code = 'IN'
+  AND t.rcvpaying_datetime >= '2021-01-01';
+
+-- Step 4: Create RNT customers with period flags
 CREATE OR REPLACE TABLE CAR_853_RNT_CUST1 AS
 WITH 
--- Generate months from Jan 2024 up to the last completed month
-months AS (
-  SELECT DISTINCT DATE_TRUNC('MONTH', MTH_YR) AS ref_date
-  FROM WUDNA.CEX_SANDBOX.VA_KPI_2020_2
-  WHERE MTH_YR >= TO_DATE('2025-08-01')
-    AND MTH_YR < DATE_TRUNC('MONTH', CURRENT_DATE)
+-- Get the latest reference date (Jan 2026 based on your example)
+latest_month AS (
+  SELECT MAX(ref_date) AS latest_ref_date
+  FROM CAR_853_BASE_MONTHS
 ),
 
--- Registered LACA customers with marketability flags
-cust_reg AS (
-  SELECT
-    c.customer_key,
-    DATE_TRUNC('MONTH', c.first_registration_date) AS reg_month,
-    c.country_code,
-    CASE
-      WHEN c.email_address_on_file_flag = 'Y'
-       AND c.opt_email = 'I'
-       AND c.marketing_flag = 'Y'
-      THEN 'Y'
-      ELSE 'N'
-    END AS email_marketable,
-    CASE
-      WHEN (c.opt_sms = 'I'
-        AND c.mobile_number_on_file_flag = 'Y'
-        AND c.marketing_flag = 'Y'
-        AND c.country_code NOT IN ('US','CA'))
-      OR (c.mobile_number_on_file_flag = 'Y'
-        AND c.opt_sms = 'I'
-        AND c.double_opt_sms = 'I'
-        AND c.marketing_flag = 'Y'
-        AND c.country_code IN ('US','CA'))
-      THEN 'Y'
-      ELSE 'N'
-    END AS sms_marketable
-  FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
-  JOIN SUMMARY_GEN.COUNTRY_VW cnt
-    ON c.country_code = cnt.country_code
-   AND cnt.country_code = 'IN'
-  WHERE c.first_registration_date IS NOT NULL
-),
-
--- All LACA transactions from 2021 onwards
-all_txns AS (
+-- R3 check: Registered in last 3 months, no txn in last 12 months
+r3_customers AS (
   SELECT DISTINCT
-    t.sndcustomer_key AS customer_key,
-    DATE(t.rcvpaying_datetime) AS txn_date
-  FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
-  WHERE t.sndcountry_code = 'IN'
-    AND t.rcvpaying_datetime >= '2021-01-01' 
+    r.customer_key,
+    r.country_code,
+    r.reg_month,
+    r.email_marketable,
+    r.sms_marketable,
+    lm.latest_ref_date
+  FROM CAR_853_REGISTERED_CUSTOMERS r
+  CROSS JOIN latest_month lm
+  WHERE r.reg_month >= DATEADD(MONTH, -2, lm.latest_ref_date)  -- Last 3 months (inclusive)
+    AND r.reg_month <= lm.latest_ref_date
+    AND NOT EXISTS (
+      SELECT 1
+      FROM CAR_853_ALL_TRANSACTIONS t
+      WHERE t.customer_key = r.customer_key
+        AND t.txn_date >= DATEADD(MONTH, -11, lm.latest_ref_date)  -- R12 start
+        AND t.txn_date <= LAST_DAY(lm.latest_ref_date)              -- R12 end
+    )
+),
+
+-- R6 check: Registered in last 6 months (but NOT in last 3), no txn in last 24 months
+r6_customers AS (
+  SELECT DISTINCT
+    r.customer_key,
+    r.country_code,
+    r.reg_month,
+    r.email_marketable,
+    r.sms_marketable,
+    lm.latest_ref_date
+  FROM CAR_853_REGISTERED_CUSTOMERS r
+  CROSS JOIN latest_month lm
+  WHERE r.reg_month >= DATEADD(MONTH, -5, lm.latest_ref_date)  -- Last 6 months (inclusive)
+    AND r.reg_month < DATEADD(MONTH, -2, lm.latest_ref_date)   -- Exclude last 3 months
+    AND NOT EXISTS (
+      SELECT 1
+      FROM CAR_853_ALL_TRANSACTIONS t
+      WHERE t.customer_key = r.customer_key
+        AND t.txn_date >= DATEADD(MONTH, -23, lm.latest_ref_date)  -- R24 start
+        AND t.txn_date <= LAST_DAY(lm.latest_ref_date)              -- R24 end
+    )
 )
 
--- Final RNT: Registered in R12, No transactions in R48
-SELECT DISTINCT
-  m.ref_date,
-  r.customer_key,
-  r.country_code,
-  r.reg_month,
-  'Y' AS rnt_flag,
-  r.email_marketable,
-  r.sms_marketable
-FROM months m
-JOIN cust_reg r
-  ON r.reg_month >= DATEADD(MONTH, -11, m.ref_date)  -- R12 start
- AND r.reg_month <= m.ref_date                       -- R12 end
-LEFT JOIN all_txns t
-  ON r.customer_key = t.customer_key
- AND t.txn_date >= DATEADD(MONTH, -47, m.ref_date)  -- R48 start
- AND t.txn_date <= LAST_DAY(m.ref_date)            -- R48 end
-WHERE t.customer_key IS NULL;
+-- Combine both groups with distinct flags
+SELECT
+  customer_key,
+  country_code,
+  reg_month,
+  email_marketable,
+  sms_marketable,
+  latest_ref_date AS ref_date,
+  'Y' AS rnt_3m_flag,
+  'Y' AS rnt_6m_flag,  -- 3M customers are also 6M by definition
+  '3M' AS rnt_period
+FROM r3_customers
 
+UNION ALL
 
+SELECT
+  customer_key,
+  country_code,
+  reg_month,
+  email_marketable,
+  sms_marketable,
+  latest_ref_date AS ref_date,
+  'N' AS rnt_3m_flag,
+  'Y' AS rnt_6m_flag,
+  '6M' AS rnt_period
+FROM r6_customers;
+
+-- Step 5: Create aggregated summary table
 CREATE OR REPLACE TABLE CAR_853_RNT_CUSTOMERS_AGG AS
 SELECT
   r.ref_date,
   r.country_code,
+  r.rnt_period,
   r.email_marketable,
   r.sms_marketable,
-  COUNT(DISTINCT r.customer_key) AS customer_count,
+  COUNT(DISTINCT r.customer_key) AS customer_count
 FROM CAR_853_RNT_CUST1 r
-GROUP BY r.ref_date,
+GROUP BY 
+  r.ref_date,
   r.country_code,
+  r.rnt_period,
   r.email_marketable,
   r.sms_marketable;
+
+-- Step 6: Validation queries
+-- Check for duplicates
+SELECT 
+  customer_key,
+  COUNT(*) AS cnt
+FROM CAR_853_RNT_CUST1
+GROUP BY customer_key
+HAVING COUNT(*) > 1;
+
+-- Summary by period
+SELECT 
+  rnt_period,
+  COUNT(DISTINCT customer_key) AS unique_customers
+FROM CAR_853_RNT_CUST1
+GROUP BY rnt_period;
+
+-- Check overlap (should return 0 rows if no overlap)
+SELECT 
+  '3M customers appearing in 6M-only' AS check_type,
+  COUNT(*) AS issue_count
+FROM CAR_853_RNT_CUST1
+WHERE rnt_3m_flag = 'Y' AND rnt_period = '6M';
+```
+
+**Key Changes:**
+
+1. **Separated CTEs into tables** for easier validation and faster processing
+2. **Added RNT period logic:**
+   - **3M RNT**: Registered in last 3 months (months -2 to 0), no transactions in last 12 months
+   - **6M RNT**: Registered in months -5 to -3, no transactions in last 24 months
+   - No overlap: 3M and 6M are mutually exclusive based on registration period
+3. **Added flags:**
+   - `rnt_3m_flag`: 'Y' only for 3M customers
+   - `rnt_6m_flag`: 'Y' for both 3M and 6M customers
+   - `rnt_period`: '3M' or '6M' for easy filtering
+4. **Included validation queries** to check for duplicates and overlaps
+
+The logic ensures that each customer appears only once with the appropriate period flag, and 3M customers are automatically included in the 6M count via the flag.
