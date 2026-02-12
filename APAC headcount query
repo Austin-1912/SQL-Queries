@@ -1,224 +1,27 @@
-You're absolutely right! The flow has some issues. Let me fix the structure and logic:
+Parameter = {
+    ("REGION", NAMEOF('SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[REGION]), 1),
+    ("MARKET", NAMEOF('SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[COUNTRY_NAME]), 3),
+    ("ACTIVITY STATUS", NAMEOF('SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[ACTIVITY_STATUS]), 13),
+    ("DOMINANT CHANNEL", NAMEOF('SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[CHANNEL_DOMINANCE]), 11),
+    ("COMM. CHANNEL", NAMEOF('SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[CHANNELS]), 2),
+    ("CONTACTABILITY", NAMEOF('SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[Contactability]), 11),
+    ("MARKETABILITY", NAMEOF('SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[Marketability]), 12),
+    //("RFM PERSONA", NAMEOF('SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[RFM_PERSONA]), 8),
+    ("NEW/EXISTING FLAG", NAMEOF('SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[TENURE_STATUS]), 19),
+    ("NATIVE CHANNEL", NAMEOF('SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[TXN_CHANNEL]), 17),
+    ("YEAR",NAMEOF(DATETABLE[MONTH].[Year]),5),
+    ("MONTH",NAMEOF(DATETABLE[MONTH].[Month]),7),
+    ("LOYALTY STATUS",NAMEOF(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[LOYALTY_FLAG]),15),
+    ("CAMPAIGN LEVEL",NAMEOF(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[CAMPAIGN_NAME]),20),
+    ("COMM. CHANNEL TYPE",NAMEOF(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[CHANNEL_TYPE]),4),
+    //("CUSTOM SEGMENT",NAMEOF(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[Custom Segment]),18),
+    ("SEASONAL",NAMEOF(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[SEASONAL]),18),
+    ("TPC FLAG", NAMEOF(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[TPC_FLAG]),9),
+    ("JOURNEY-CAMPAIGN SEGMENT",NAMEOF(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[JOURNEY]),6),
+    ("PROMO/NON-PROMO", NAMEOF(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[PRO_NONPROMO]),8),
+    ("OFFER SEGMENT", NAMEOF(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[OFFER_SEGMENT]),10),
+    ("CTA", NAMEOF(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[CTA]),12),
+    ("PRODUCT", NAMEOF(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[PRODUCT]),14),
+    ("JOURNEY SEGMENT", NAMEOF(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[JOURNEY_SEGMENT]),16)
 
-```sql
--- Step 1: Create base months table
-CREATE OR REPLACE TABLE CAR_853_BASE_MONTHS AS
-SELECT DISTINCT DATE_TRUNC('MONTH', MTH_YR) AS ref_date
-FROM WUDNA.CEX_SANDBOX.VA_KPI_2020_2
-WHERE MTH_YR >= TO_DATE('2025-08-01')
-  AND MTH_YR < DATE_TRUNC('MONTH', CURRENT_DATE);
-
--- Step 2: Create all transactions table (needed before customer filtering)
-CREATE OR REPLACE TABLE CAR_853_ALL_TRANSACTIONS AS
-SELECT DISTINCT
-  t.sndcustomer_key AS customer_key,
-  DATE(t.rcvpaying_datetime) AS txn_date,
-  t.PRICING_CHANNEL
-FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
-WHERE t.sndcountry_code = 'IN'
-  AND DATE(t.rcvpaying_datetime) >= '2021-01-01';
-
--- Step 3: Create registered customers table with marketability flags
-CREATE OR REPLACE TABLE CAR_853_REGISTERED_CUSTOMERS AS
-WITH 
-app_txn_counts AS (
-    -- Calculate APP transaction count per customer
-    SELECT
-        customer_key,
-        COUNT(CASE WHEN PRICING_CHANNEL = 'APP' THEN 1 END) AS APP_TXNS
-    FROM CAR_853_ALL_TRANSACTIONS
-    GROUP BY customer_key
-),
-base_customers AS (
-  SELECT
-    c.customer_key,
-    DATE_TRUNC('MONTH', c.first_registration_date) AS reg_month,
-    c.first_registration_date,
-    c.country_code,
-    CASE
-      WHEN c.email_address_on_file_flag = 'Y'
-       AND c.opt_email = 'I'
-       AND c.marketing_flag = 'Y'
-      THEN 'Y'
-      ELSE 'N'
-    END AS email_marketable,
-    CASE
-      WHEN (c.opt_sms = 'I'
-        AND c.mobile_number_on_file_flag = 'Y'
-        AND c.marketing_flag = 'Y'
-        AND c.country_code NOT IN ('US','CA'))
-      OR (c.mobile_number_on_file_flag = 'Y'
-        AND c.opt_sms = 'I'
-        AND c.double_opt_sms = 'I'
-        AND c.marketing_flag = 'Y'
-        AND c.country_code IN ('US','CA'))
-      THEN 'Y'
-      ELSE 'N'
-    END AS sms_marketable
-  FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
-  JOIN SUMMARY_GEN.COUNTRY_VW cnt
-    ON c.country_code = cnt.country_code
-   AND cnt.country_code = 'IN'
-  WHERE c.first_registration_date IS NOT NULL
-)
-SELECT
-    bc.*,
-    COALESCE(atc.APP_TXNS, 0) AS APP_TXNS,
-    CASE WHEN COALESCE(atc.APP_TXNS, 0) > 0 THEN 'Y' ELSE 'N' END AS app_marketable,
-    CASE
-        WHEN bc.email_marketable = 'Y' 
-          OR bc.sms_marketable = 'Y' 
-          OR COALESCE(atc.APP_TXNS, 0) > 0
-        THEN 'Y'
-        ELSE 'N'
-    END AS MARKETABILITY_FLAG
-FROM base_customers bc
-LEFT JOIN app_txn_counts atc
-  ON bc.customer_key = atc.customer_key;
-
--- Step 4: Create RNT customers with period flags
--- RNT = Registered but NEVER transacted (not just in lookback period)
-CREATE OR REPLACE TABLE CAR_853_RNT_CUST1 AS
-WITH 
--- Get the latest reference date (Jan 2026)
-latest_month AS (
-  SELECT MAX(ref_date) AS latest_ref_date
-  FROM CAR_853_BASE_MONTHS
-),
-
--- R3 check: Registered in last 3 months, NEVER transacted
-r3_customers AS (
-  SELECT DISTINCT
-    r.customer_key,
-    r.country_code,
-    r.reg_month,
-    r.first_registration_date,
-    r.email_marketable,
-    r.sms_marketable,
-    r.app_marketable,
-    r.MARKETABILITY_FLAG,
-    lm.latest_ref_date
-  FROM CAR_853_REGISTERED_CUSTOMERS r
-  CROSS JOIN latest_month lm
-  WHERE r.reg_month >= DATEADD(MONTH, -2, lm.latest_ref_date)  -- Last 3 months (inclusive)
-    AND r.reg_month <= lm.latest_ref_date
-    AND NOT EXISTS (
-      SELECT 1
-      FROM CAR_853_ALL_TRANSACTIONS t
-      WHERE t.customer_key = r.customer_key  -- NEVER transacted (no date filter)
-    )
-),
-
--- R6 check: Registered in last 6 months (but NOT in last 3), NEVER transacted
-r6_customers AS (
-  SELECT DISTINCT
-    r.customer_key,
-    r.country_code,
-    r.reg_month,
-    r.first_registration_date,
-    r.email_marketable,
-    r.sms_marketable,
-    r.app_marketable,
-    r.MARKETABILITY_FLAG,
-    lm.latest_ref_date
-  FROM CAR_853_REGISTERED_CUSTOMERS r
-  CROSS JOIN latest_month lm
-  WHERE r.reg_month >= DATEADD(MONTH, -5, lm.latest_ref_date)  -- Last 6 months (inclusive)
-    AND r.reg_month < DATEADD(MONTH, -2, lm.latest_ref_date)   -- Exclude last 3 months
-    AND NOT EXISTS (
-      SELECT 1
-      FROM CAR_853_ALL_TRANSACTIONS t
-      WHERE t.customer_key = r.customer_key  -- NEVER transacted (no date filter)
-    )
-)
-
--- Combine both groups with distinct flags
-SELECT
-  customer_key,
-  country_code,
-  reg_month,
-  first_registration_date,
-  email_marketable,
-  sms_marketable,
-  app_marketable,
-  MARKETABILITY_FLAG,
-  latest_ref_date AS ref_date,
-  'Y' AS rnt_3m_flag,
-  'Y' AS rnt_6m_flag,  -- 3M customers are also 6M by definition
-  '3M' AS rnt_period
-FROM r3_customers
-
-UNION ALL
-
-SELECT
-  customer_key,
-  country_code,
-  reg_month,
-  first_registration_date,
-  email_marketable,
-  sms_marketable,
-  app_marketable,
-  MARKETABILITY_FLAG,
-  latest_ref_date AS ref_date,
-  'N' AS rnt_3m_flag,
-  'Y' AS rnt_6m_flag,
-  '6M' AS rnt_period
-FROM r6_customers;
-
--- Step 5: Create aggregated summary table
-CREATE OR REPLACE TABLE CAR_853_RNT_CUSTOMERS_AGG AS
-SELECT
-  r.ref_date,
-  r.country_code,
-  r.rnt_period,
-  r.email_marketable,
-  r.sms_marketable,
-  r.app_marketable,
-  r.MARKETABILITY_FLAG,
-  COUNT(DISTINCT r.customer_key) AS customer_count
-FROM CAR_853_RNT_CUST1 r
-GROUP BY ALL;
-
--- Step 6: Validation queries
--- Check total RNT customers
-SELECT 
-  rnt_period,
-  MARKETABILITY_FLAG,
-  COUNT(DISTINCT customer_key) AS unique_customers
-FROM CAR_853_RNT_CUST1
-GROUP BY rnt_period, MARKETABILITY_FLAG
-ORDER BY rnt_period, MARKETABILITY_FLAG;
-
--- Check for duplicates (should return 0 rows)
-SELECT 
-  customer_key,
-  COUNT(*) AS cnt
-FROM CAR_853_RNT_CUST1
-GROUP BY customer_key
-HAVING COUNT(*) > 1;
-
--- Check registration month distribution
-SELECT 
-  rnt_period,
-  reg_month,
-  COUNT(DISTINCT customer_key) AS customers
-FROM CAR_853_RNT_CUST1
-GROUP BY rnt_period, reg_month
-ORDER BY rnt_period, reg_month;
-```
-
-**Key Corrections:**
-
-1. **Reordered Steps**: Created `CAR_853_ALL_TRANSACTIONS` BEFORE `CAR_853_REGISTERED_CUSTOMERS` so the APP transaction counts can be calculated properly
-
-2. **Fixed RNT Logic**: Changed from "no transactions in lookback period" to "NEVER transacted" - removed the date filters in the NOT EXISTS clauses since RNT means registered but never transacted at all
-
-3. **Preserved All Marketability Flags**: Kept `email_marketable`, `sms_marketable`, and `app_marketable` separate, plus the combined `MARKETABILITY_FLAG`
-
-4. **Added `first_registration_date`**: Included in the final table for better traceability
-
-5. **Fixed Column References**: Changed from `email_marketability_flag` to `email_marketable` for consistency
-
-6. **Enhanced Validation**: Added queries to check the registration month distribution to verify the 3M/6M split is working correctly
-
-This flow is now logical: Base months → All transactions → Registered customers with marketability → RNT customers → Aggregated summary.
+}
