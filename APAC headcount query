@@ -1,153 +1,63 @@
-Great! To add the qualification date, we need to track when each customer hit their 2nd qualifying transaction. Here's the updated query:
-
-```sql
--- Step 1: Base transaction data with amount filtering
-CREATE OR REPLACE TABLE CAR_855_AUNZSG_BASE_TXNS AS
-SELECT
-    t.SNDCUSTOMER_KEY,
-    t.txn_id,
-    t.PRICING_CHANNEL,
-    TO_DECIMAL(t.SNDPRINCIPAL_AMOUNT,18,2) as SNDPRINCIPAL_AMOUNT,
-    t.sndcurrency_code,
-    UPPER(t.SNDCOUNTRY_CODE) AS sndcountry_code,
-    UPPER(t.RCVCOUNTRY_CODE) AS rcvcountry_code,
-    t.RECORD_DATETIME,
-    t.RCVPAYING_DATETIME,
-    -- Flag transactions by tier eligibility
-    CASE
-        WHEN TO_DECIMAL(t.SNDPRINCIPAL_AMOUNT,18,2) >= 500 THEN '500'
-        WHEN TO_DECIMAL(t.SNDPRINCIPAL_AMOUNT,18,2) >= 300 THEN '300'
-        ELSE 'BELOW_THRESHOLD'
-    END AS tier_flag
-FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
-WHERE
-    -- Geographic filters
-    UPPER(t.SNDCOUNTRY_CODE) IN ('AU', 'NZ', 'SG')
-    AND UPPER(t.RCVCOUNTRY_CODE) = 'PH'
-    -- Date window
-    AND DATE(t.RECORD_DATETIME) >= '2025-12-01'
-    AND DATE(t.RECORD_DATETIME) <= '2026-01-31'
-    -- Channel filters: AU/NZ both channels, SG digital only
-    AND (
-        (UPPER(t.SNDCOUNTRY_CODE) IN ('AU', 'NZ'))
-        OR
-        (UPPER(t.SNDCOUNTRY_CODE) = 'SG' AND UPPER(t.PRICING_CHANNEL) IN ('WEB', 'APP') )
-    )
-    -- Only transactions >= 300 (minimum threshold)
-    AND TO_DECIMAL(t.SNDPRINCIPAL_AMOUNT,18,2) >= 300;
-
-
--- Step 1.5: Add row numbers to identify when qualification occurred
-CREATE OR REPLACE TABLE CAR_855_AUNZSG_BASE_TXNS_RANKED AS
-SELECT
-    *,
-    -- Row number for tier 500 transactions
-    ROW_NUMBER() OVER (
-        PARTITION BY SNDCUSTOMER_KEY 
-        ORDER BY CASE WHEN tier_flag = '500' THEN RECORD_DATETIME END NULLS LAST
-    ) AS rn_500,
-    -- Row number for all 300+ transactions
-    ROW_NUMBER() OVER (
-        PARTITION BY SNDCUSTOMER_KEY 
-        ORDER BY CASE WHEN SNDPRINCIPAL_AMOUNT >= 300 THEN RECORD_DATETIME END NULLS LAST
-    ) AS rn_300_plus
-FROM CAR_855_AUNZSG_BASE_TXNS;
-
-
--- Step 2: Get qualification dates
-CREATE OR REPLACE TABLE CAR_855_AUNZSG_QUALIFICATION_DATES AS
-SELECT
-    SNDCUSTOMER_KEY,
-    -- Date when 2nd transaction >= 500 occurred (for Tier 500 qualification)
-    MAX(CASE WHEN tier_flag = '500' AND rn_500 = 2 THEN RECORD_DATETIME END) AS tier_500_qualification_date,
-    -- Date when 2nd transaction >= 300 occurred (for Tier 300 qualification)
-    MAX(CASE WHEN SNDPRINCIPAL_AMOUNT >= 300 AND rn_300_plus = 2 THEN RECORD_DATETIME END) AS tier_300_qualification_date
-FROM CAR_855_AUNZSG_BASE_TXNS_RANKED
-GROUP BY SNDCUSTOMER_KEY;
-
-
--- Step 3: Customer-level aggregation with tier qualification
-CREATE OR REPLACE TABLE CAR_855_AUNZSG_CUSTOMER_QUALIFICATION AS
-SELECT
-    b.SNDCUSTOMER_KEY,
-    b.sndcountry_code,
-    b.rcvcountry_code,
-    
-    -- Count transactions by tier
-    COUNT(CASE WHEN b.tier_flag = '500' THEN b.txn_id END) AS txns_500_tier,
-    COUNT(CASE WHEN b.tier_flag = '300' THEN b.txn_id END) AS txns_300_tier,
-    COUNT(CASE WHEN b.SNDPRINCIPAL_AMOUNT >= 300 THEN b.txn_id END) AS txns_300_plus,
-    COUNT(b.txn_id) AS total_qualifying_txns,
-    
-    -- Determine qualification tier
-    CASE
-        WHEN COUNT(CASE WHEN b.tier_flag = '500' THEN b.txn_id END) >= 2 THEN 'TIER_500'
-        WHEN COUNT(CASE WHEN b.SNDPRINCIPAL_AMOUNT >= 300 THEN b.txn_id END) >= 2 THEN 'TIER_300'
-        ELSE 'NOT_QUALIFIED'
-    END AS qualification_tier,
-    
-    -- Qualification date based on tier
-    CASE
-        WHEN COUNT(CASE WHEN b.tier_flag = '500' THEN b.txn_id END) >= 2 THEN qd.tier_500_qualification_date
-        WHEN COUNT(CASE WHEN b.SNDPRINCIPAL_AMOUNT >= 300 THEN b.txn_id END) >= 2 THEN qd.tier_300_qualification_date
-        ELSE NULL
-    END AS qualification_date,
-    
-    -- Channel breakdown
-    COUNT(CASE WHEN UPPER(b.PRICING_CHANNEL) IN ('APP', 'WEB') THEN b.txn_id END) AS digital_txns,
-    COUNT(CASE WHEN UPPER(b.PRICING_CHANNEL) IN ('POS', 'TMT') THEN b.txn_id END) AS retail_txns,
-    
-    -- First and last transaction dates for reference
-    MIN(b.RECORD_DATETIME) AS first_txn_date,
-    MAX(b.RECORD_DATETIME) AS last_txn_date
- 
-FROM CAR_855_AUNZSG_BASE_TXNS b
-LEFT JOIN CAR_855_AUNZSG_QUALIFICATION_DATES qd
-    ON b.SNDCUSTOMER_KEY = qd.SNDCUSTOMER_KEY
-GROUP BY
-    b.SNDCUSTOMER_KEY,
-    b.sndcountry_code,
-    b.rcvcountry_code,
-    qd.tier_500_qualification_date,
-    qd.tier_300_qualification_date;
-
-
--- Final Pull - Ordered by qualification date
+CREATE OR REPLACE TABLE CAR_853_REGISTERED_CUSTOMERS_R6_PERIOD_IN as 
 SELECT 
-    '@' || sndcustomer_key as GID,
-    sndcountry_code,
-    rcvcountry_code,
-    qualification_tier,
-    qualification_date,
-    DATE(qualification_date) AS qualification_date_only,
-    total_qualifying_txns,
-    digital_txns,
-    retail_txns
-FROM CAR_855_AUNZSG_CUSTOMER_QUALIFICATION
-WHERE qualification_tier IN ('TIER_500', 'TIER_300')
-ORDER BY 
-    qualification_date ASC,  -- Earliest qualifiers first
-    sndcountry_code,
-    GID;
-```
+      customer_key,
+      customer_umn,
+      first_registration_date,
+      first_registration_channel,
+      case when date(first_registration_date)>='2025-11-01' and date(first_registration_date)<='2026-01-31' then '0-3MONTHS'
+      when date(first_registration_date)>='2025-08-01' and date(first_registration_date)<='2025-10-31' then '4-6MONTHS'
+      ELSE 'OTHERS'
+      END AS REGISTRATION_SLOT,
+      country_code,
+      CASE WHEN MARKETING_FLAG = 'Y' AND EMAIL_ADDRESS_ON_FILE_FLAG = 'Y' AND OPT_EMAIL = 'I' THEN 'YES'
+         ELSE 'NO'
+    END AS EMAIL_MARKETABLE_FLAG,
+    CASE WHEN MARKETING_FLAG = 'Y' AND MOBILE_NUMBER_ON_FILE_FLAG = 'Y' AND OPT_SMS = 'I' THEN 'YES'
+         ELSE 'NO'
+    END AS SMS_MARKETABLE_FLAG,
+    case when APP_REGISTRATION_DATE is not null then 'YES' ELSE 'NO' END AS APP_REGISTRATION_FLAG,
+    case when (SMS_MARKETABLE_FLAG='YES' or EMAIL_MARKETABLE_FLAG='YES' or APP_REGISTRATION_FLAG='YES') then 'YES' ELSE 'NO' END AS MARKETING_FLAG,
+    GLOBAL_HOLDOUT,
+    case when EMAIL_MARKETABLE_FLAG='YES' and SMS_MARKETABLE_FLAG='NO' and APP_REGISTRATION_FLAG='NO' THEN 'EMAIL_ONLY'
+    when EMAIL_MARKETABLE_FLAG='NO' and SMS_MARKETABLE_FLAG='YES' and APP_REGISTRATION_FLAG='NO' THEN 'SMS_ONLY'
+    when EMAIL_MARKETABLE_FLAG='NO' and SMS_MARKETABLE_FLAG='NO' and APP_REGISTRATION_FLAG='YES' THEN 'APP_ONLY'
+    when EMAIL_MARKETABLE_FLAG='YES' and SMS_MARKETABLE_FLAG='YES' and APP_REGISTRATION_FLAG='NO' THEN 'EMAIL_SMS'
+    when EMAIL_MARKETABLE_FLAG='YES' and SMS_MARKETABLE_FLAG='NO' and APP_REGISTRATION_FLAG='YES' THEN 'EMAIL_APP'
+    when EMAIL_MARKETABLE_FLAG='NO' and SMS_MARKETABLE_FLAG='YES' and APP_REGISTRATION_FLAG='YES' THEN 'SMS_APP'
+    when EMAIL_MARKETABLE_FLAG='YES' and SMS_MARKETABLE_FLAG='YES' and APP_REGISTRATION_FLAG='YES' THEN 'EMAIL_SMS_APP'
+    ELSE 'OTHERS'
+    END MARKETING_COMBINATION,
+    FROM 
+        SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW
+    WHERE 
+        first_registration_date IS NOT NULL
+      AND COUNTRY_CODE in ('IN')
+      AND DATE(first_registration_date) >= '2025-08-01'
+      AND DATE(first_registration_date) <= '2026-01-31';
 
-**Key Changes:**
+create or replace table CAR_853_RNT_CUSTOMERS_R6_PERIOD_IN as 
+select
+    a.*,
+    --b.rcvpaying_datetime
+FROM
+   (select * from CAR_853_REGISTERED_CUSTOMERS_R6_PERIOD_IN where MARKETING_FLAG='YES') A
+LEFT JOIN
+   (select sndcustomer_key, rcvpaying_datetime from SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW) B
+ON
+  a.customer_key=b.sndcustomer_key
+where
+    b.sndcustomer_key is null;
 
-1. **Added Row Numbering**: The `CAR_855_AUNZSG_BASE_TXNS_RANKED` table assigns row numbers to transactions ordered by date, separately for:
-   - Tier 500 transactions (≥500)
-   - All 300+ transactions (for Tier 300 qualification)
+select * from CAR_853_RNT_CUSTOMERS_R6_PERIOD_IN; 
 
-2. **Extracted Qualification Dates**: The `CAR_855_AUNZSG_QUALIFICATION_DATES` table captures the exact timestamp when the 2nd qualifying transaction occurred for each tier
-
-3. **Assigned Correct Qualification Date**: In the final qualification table, each customer gets the qualification date matching their tier:
-   - Tier 500 customers: Date of their 2nd transaction ≥500
-   - Tier 300 customers: Date of their 2nd transaction ≥300
-
-4. **Ordered Output**: Final results are ordered by `qualification_date` ascending, so customers who qualified earliest appear first
-
-**Example:**
-- Customer has txns: Dec 5 (400), Dec 10 (600), Dec 15 (350)
-- They qualify for Tier 300 on Dec 10 (2nd txn ≥300)
-- Their qualification_date = Dec 10 timestamp
-
-This way stakeholders can send promos in order of who qualified first!
+However there are some customers who have registered through CSC and POS which are retail channels
+which are select count(distinct customer_key) , count(customer_key) from CAR_853_TESTING where first_registration_channel IN ('CSC', 'POS');--4,142
+out of which 
+select COUNT(DISTINCT a.customer_key) as total_custs
+from CAR_853_TESTING a 
+JOIN SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW b
+on a.customer_key = b.rcvcustomer_key
+where a.first_registration_channel IN ('CSC', 'POS');--4,106 are receivers 
+however the remaining 36 customers i want to remove from CAR_853_RNT_CUSTOMERS_R6_PERIOD_IN since they are 
+RNT however not from digital channel which should be the case and are not even recievers even though 
+they have registered through retail. help me exclude them and make the final export.
