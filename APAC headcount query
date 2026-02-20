@@ -4,6 +4,7 @@ SELECT
     sndcountry_code,
     rcvcountry_code,
     pricing_channel,
+    TXN_ID,
     CASE 
     WHEN  PRICING_CHANNEL in ('WEB','APP') THEN 'DIGITAL'
     WHEN PRICING_CHANNEL in ('POS','AIR','TMT') THEN 'RETAIL'
@@ -14,3 +15,64 @@ WHERE sndcountry_code IN ('AE', 'BH', 'JO', 'QA', 'SA', 'KW')
     AND sub_channel NOT IN ('DIGITAL MASTER AGENT')
     AND DATE(rcvpaying_datetime) >= '2024-01-01'
     AND DATE(rcvpaying_datetime) <= '2025-12-31';
+
+CREATE OR REPLACE TABLE CAR_861_MARKETABILITY
+SELECT 
+CASE WHEN MARKETING_FLAG = 'Y' AND EMAIL_ADDRESS_ON_FILE_FLAG = 'Y' AND OPT_EMAIL = 'I' THEN 'YES'
+         ELSE 'NO'
+    END AS EMAIL_MARKETABLE_FLAG,
+    CASE WHEN MARKETING_FLAG = 'Y' AND MOBILE_NUMBER_ON_FILE_FLAG = 'Y' AND OPT_SMS = 'I' THEN 'YES'
+         ELSE 'NO'
+    END AS SMS_MARKETABLE_FLAG,
+    case when (SMS_MARKETABLE_FLAG='YES' or EMAIL_MARKETABLE_FLAG='YES') then 'YES' ELSE 'NO' END AS MARKETING_FLAG,
+    GLOBAL_HOLDOUT,
+    case when EMAIL_MARKETABLE_FLAG='YES' and SMS_MARKETABLE_FLAG='NO' THEN 'EMAIL_ONLY'
+    when EMAIL_MARKETABLE_FLAG='NO' and SMS_MARKETABLE_FLAG='YES' THEN 'SMS_ONLY'
+    when EMAIL_MARKETABLE_FLAG='YES' and SMS_MARKETABLE_FLAG='YES' THEN 'EMAIL_SMS'
+    ELSE 'OTHERS'
+    END MARKETING_COMBINATION,
+    FROM 
+        SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW
+    WHERE 
+        first_registration_date IS NOT NULL
+
+
+CREATE OR REPLACE TABLE CAR_861_DOMINANT_CORRIDOR AS
+SELECT *
+FROM (
+    SELECT
+        SNDCUSTOMER_KEY,
+        CONCAT(snd_country, '-', rcv_country) AS corridor,
+        snd_country,
+        rcv_country,
+        COUNT(DISTINCT TXN_ID) AS txn_count,
+        ROW_NUMBER() OVER (
+            PARTITION BY SNDCUSTOMER_KEY
+            ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
+        ) AS rnk
+    FROM CAR_861_TXN_BASE
+    GROUP BY SNDCUSTOMER_KEY, snd_country, rcv_country
+)
+WHERE rnk = 1;
+
+I would need Top 10 corridors where R2D Conversion month wise is the highest.
+R2D is retail to digital for eg. a customer has done digital transaction in the month of Jan 2026 
+but had retail transaction Previous 12 months from Jan 2024 to Dec 2024 then they are R2D converted.
+Conversion will be calculated by taking the newly converted digital customers by the total digital customers 
+in the previous 12 months.
+Please exclude ABMT agent in the above calculation.(Already filtered out in the first table
+sub_channel NOT IN ('DIGITAL MASTER AGENT'))
+also the Corridor should have sizable Marketable Count. (Both Email and SMS)
+After this is done monthly i also want a same on yearly. like first digital transaction in the year
+2025 but had retail transaction in 2024. for each market(AE BH JO QA SA KW) get the corridors with 
+highest conversion rate before and after including marketability. like in the final table 
+corridors R2D conversion should be done only for customers who are marketable.  Also corridor should be 
+dominant corridor.
+
+ 
+
+Region MEPA
+
+Markets - AE BH JO QA SA KW
+
+Year - 2025
