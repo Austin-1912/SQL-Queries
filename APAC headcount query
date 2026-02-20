@@ -1,63 +1,16 @@
-CREATE OR REPLACE TABLE CAR_853_REGISTERED_CUSTOMERS_R6_PERIOD_IN as 
+CREATE OR REPLACE TABLE CAR_861_TXN_BASE AS
 SELECT 
-      customer_key,
-      customer_umn,
-      first_registration_date,
-      first_registration_channel,
-      case when date(first_registration_date)>='2025-11-01' and date(first_registration_date)<='2026-01-31' then '0-3MONTHS'
-      when date(first_registration_date)>='2025-08-01' and date(first_registration_date)<='2025-10-31' then '4-6MONTHS'
-      ELSE 'OTHERS'
-      END AS REGISTRATION_SLOT,
-      country_code,
-      CASE WHEN MARKETING_FLAG = 'Y' AND EMAIL_ADDRESS_ON_FILE_FLAG = 'Y' AND OPT_EMAIL = 'I' THEN 'YES'
-         ELSE 'NO'
-    END AS EMAIL_MARKETABLE_FLAG,
-    CASE WHEN MARKETING_FLAG = 'Y' AND MOBILE_NUMBER_ON_FILE_FLAG = 'Y' AND OPT_SMS = 'I' THEN 'YES'
-         ELSE 'NO'
-    END AS SMS_MARKETABLE_FLAG,
-    case when APP_REGISTRATION_DATE is not null then 'YES' ELSE 'NO' END AS APP_REGISTRATION_FLAG,
-    case when (SMS_MARKETABLE_FLAG='YES' or EMAIL_MARKETABLE_FLAG='YES' or APP_REGISTRATION_FLAG='YES') then 'YES' ELSE 'NO' END AS MARKETING_FLAG,
-    GLOBAL_HOLDOUT,
-    case when EMAIL_MARKETABLE_FLAG='YES' and SMS_MARKETABLE_FLAG='NO' and APP_REGISTRATION_FLAG='NO' THEN 'EMAIL_ONLY'
-    when EMAIL_MARKETABLE_FLAG='NO' and SMS_MARKETABLE_FLAG='YES' and APP_REGISTRATION_FLAG='NO' THEN 'SMS_ONLY'
-    when EMAIL_MARKETABLE_FLAG='NO' and SMS_MARKETABLE_FLAG='NO' and APP_REGISTRATION_FLAG='YES' THEN 'APP_ONLY'
-    when EMAIL_MARKETABLE_FLAG='YES' and SMS_MARKETABLE_FLAG='YES' and APP_REGISTRATION_FLAG='NO' THEN 'EMAIL_SMS'
-    when EMAIL_MARKETABLE_FLAG='YES' and SMS_MARKETABLE_FLAG='NO' and APP_REGISTRATION_FLAG='YES' THEN 'EMAIL_APP'
-    when EMAIL_MARKETABLE_FLAG='NO' and SMS_MARKETABLE_FLAG='YES' and APP_REGISTRATION_FLAG='YES' THEN 'SMS_APP'
-    when EMAIL_MARKETABLE_FLAG='YES' and SMS_MARKETABLE_FLAG='YES' and APP_REGISTRATION_FLAG='YES' THEN 'EMAIL_SMS_APP'
-    ELSE 'OTHERS'
-    END MARKETING_COMBINATION,
-    FROM 
-        SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW
-    WHERE 
-        first_registration_date IS NOT NULL
-      AND COUNTRY_CODE in ('IN')
-      AND DATE(first_registration_date) >= '2025-08-01'
-      AND DATE(first_registration_date) <= '2026-01-31';
-
-create or replace table CAR_853_RNT_CUSTOMERS_R6_PERIOD_IN as 
-select
-    a.*,
-    --b.rcvpaying_datetime
-FROM
-   (select * from CAR_853_REGISTERED_CUSTOMERS_R6_PERIOD_IN where MARKETING_FLAG='YES') A
-LEFT JOIN
-   (select sndcustomer_key, rcvpaying_datetime from SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW) B
-ON
-  a.customer_key=b.sndcustomer_key
-where
-    b.sndcustomer_key is null;
-
-select * from CAR_853_RNT_CUSTOMERS_R6_PERIOD_IN; 
-
-However there are some customers who have registered through CSC and POS which are retail channels
-which are select count(distinct customer_key) , count(customer_key) from CAR_853_TESTING where first_registration_channel IN ('CSC', 'POS');--4,142
-out of which 
-select COUNT(DISTINCT a.customer_key) as total_custs
-from CAR_853_TESTING a 
-JOIN SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW b
-on a.customer_key = b.rcvcustomer_key
-where a.first_registration_channel IN ('CSC', 'POS');--4,106 are receivers 
-however the remaining 36 customers i want to remove from CAR_853_RNT_CUSTOMERS_R6_PERIOD_IN since they are 
-RNT however not from digital channel which should be the case and are not even recievers even though 
-they have registered through retail. help me exclude them and make the final export.
+    sndcustomer_key,
+    sndcountry_code,
+    rcvcountry_code,
+    pricing_channel,
+    CASE 
+    WHEN  PRICING_CHANNEL in ('WEB','APP') THEN 'DIGITAL'
+    WHEN PRICING_CHANNEL in ('POS','AIR','TMT') THEN 'RETAIL'
+    ELSE 'OTHERS' END AS RETAIL_DIGITAL_FLAG,
+    sub_channel
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+WHERE sndcountry_code IN ('AE', 'BH', 'JO', 'QA', 'SA', 'KW') 
+    AND sub_channel NOT IN ('DIGITAL MASTER AGENT')
+    AND DATE(rcvpaying_datetime) >= '2024-01-01'
+    AND DATE(rcvpaying_datetime) <= '2025-12-31';
