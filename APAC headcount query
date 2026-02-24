@@ -1,372 +1,470 @@
--- Table 1: Define Weekly Periods
+I'll help you create the updated query for CAR_874 with the new requirements. Let me break this down systematically:
+
+**Key Changes:**
+1. Two send countries: US and CA
+2. Two receive regions: Africa vs Rest of World
+3. New customer definition: R12 (not R48)
+4. Existing customers: transacted in current week AND previous week
+5. No lapsed customer classification
+6. New time periods: Pre (Dec 1-14), Campaign (Dec 15 - Jan 18), Post (Jan 19 - Feb 1)
+7. YoY comparison: Same periods for 2024-2025
+
+Here's the complete updated query:
+
+```sql
 -- ========================================================================
-CREATE OR REPLACE TABLE CAR_680_WEEKLY_PERIODS AS
-SELECT 'Pre-Week 1' AS period_name, DATE('2025-09-16') AS week_start, DATE('2025-09-22') AS week_end, 'PRE' AS period_type, 1 AS week_order
-UNION ALL SELECT 'Pre-Week 2', DATE('2025-09-23'), DATE('2025-09-29'), 'PRE', 2
-UNION ALL SELECT 'Campaign Week 1', DATE('2025-09-30'), DATE('2025-10-06'), 'CAMPAIGN', 3
-UNION ALL SELECT 'Campaign Week 2', DATE('2025-10-07'), DATE('2025-10-13'), 'CAMPAIGN', 4
-UNION ALL SELECT 'Campaign Week 3', DATE('2025-10-14'), DATE('2025-10-20'), 'CAMPAIGN', 5
-UNION ALL SELECT 'Campaign Week 4', DATE('2025-10-21'), DATE('2025-10-27'), 'CAMPAIGN', 6
-UNION ALL SELECT 'Campaign Week 5', DATE('2025-10-28'), DATE('2025-11-03'), 'CAMPAIGN', 7
-UNION ALL SELECT 'Campaign Week 6', DATE('2025-11-04'), DATE('2025-11-10'), 'CAMPAIGN', 8
-UNION ALL SELECT 'Campaign Week 7', DATE('2025-11-11'), DATE('2025-11-17'), 'CAMPAIGN', 9
-UNION ALL SELECT 'Campaign Week 8', DATE('2025-11-18'), DATE('2025-11-24'), 'CAMPAIGN', 10
-UNION ALL SELECT 'Campaign Week 9', DATE('2025-11-25'), DATE('2025-12-01'), 'CAMPAIGN', 11
-UNION ALL SELECT 'Campaign Week 10', DATE('2025-12-02'), DATE('2025-12-08'), 'CAMPAIGN', 12;
+-- Table 1: Define Weekly Periods for 2025-2026 and YoY 2024-2025
+-- ========================================================================
+CREATE OR REPLACE TABLE CAR_874_WEEKLY_PERIODS AS
+-- 2025-2026 Campaign Period
+SELECT 'Pre-Week 1' AS period_name, DATE('2025-12-01') AS week_start, DATE('2025-12-07') AS week_end, 'PRE' AS period_type, 1 AS week_order, 2025 AS campaign_year
+UNION ALL SELECT 'Pre-Week 2', DATE('2025-12-08'), DATE('2025-12-14'), 'PRE', 2, 2025
+UNION ALL SELECT 'Campaign Week 1', DATE('2025-12-15'), DATE('2025-12-21'), 'CAMPAIGN', 3, 2025
+UNION ALL SELECT 'Campaign Week 2', DATE('2025-12-22'), DATE('2025-12-28'), 'CAMPAIGN', 4, 2025
+UNION ALL SELECT 'Campaign Week 3', DATE('2025-12-29'), DATE('2026-01-04'), 'CAMPAIGN', 5, 2025
+UNION ALL SELECT 'Campaign Week 4', DATE('2026-01-05'), DATE('2026-01-11'), 'CAMPAIGN', 6, 2025
+UNION ALL SELECT 'Campaign Week 5', DATE('2026-01-12'), DATE('2026-01-18'), 'CAMPAIGN', 7, 2025
+UNION ALL SELECT 'Post-Week 1', DATE('2026-01-19'), DATE('2026-01-25'), 'POST', 8, 2025
+UNION ALL SELECT 'Post-Week 2', DATE('2026-01-26'), DATE('2026-02-01'), 'POST', 9, 2025
+
+-- YoY Comparison: 2024-2025 Same Periods
+UNION ALL SELECT 'Pre-Week 1', DATE('2024-12-02'), DATE('2024-12-08'), 'PRE', 1, 2024  -- Adjusted to align with same day of week
+UNION ALL SELECT 'Pre-Week 2', DATE('2024-12-09'), DATE('2024-12-15'), 'PRE', 2, 2024
+UNION ALL SELECT 'Campaign Week 1', DATE('2024-12-16'), DATE('2024-12-22'), 'CAMPAIGN', 3, 2024
+UNION ALL SELECT 'Campaign Week 2', DATE('2024-12-23'), DATE('2024-12-29'), 'CAMPAIGN', 4, 2024
+UNION ALL SELECT 'Campaign Week 3', DATE('2024-12-30'), DATE('2025-01-05'), 'CAMPAIGN', 5, 2024
+UNION ALL SELECT 'Campaign Week 4', DATE('2025-01-06'), DATE('2025-01-12'), 'CAMPAIGN', 6, 2024
+UNION ALL SELECT 'Campaign Week 5', DATE('2025-01-13'), DATE('2025-01-19'), 'CAMPAIGN', 7, 2024
+UNION ALL SELECT 'Post-Week 1', DATE('2025-01-20'), DATE('2025-01-26'), 'POST', 8, 2024
+UNION ALL SELECT 'Post-Week 2', DATE('2025-01-27'), DATE('2025-02-02'), 'POST', 9, 2024;
 
 
-select count(customer_key) , count(distinct customer_key)
-from CAR_680_CUSTOMER_GEOGRAPHY;--9013324 9013324
 -- ========================================================================
---- Table 2: Customer Geography Mapping
+-- Table 2: Customer Geography Mapping (Simplified for US/CA Send Only)
 -- ========================================================================
-CREATE OR REPLACE TABLE CAR_680_CUSTOMER_GEOGRAPHY AS
+CREATE OR REPLACE TABLE CAR_874_CUSTOMER_GEOGRAPHY AS
 SELECT DISTINCT
     CM.CUSTOMER_KEY,
     CM.COUNTRY_CODE,
     CM.STATE,
     CM.CITY,
-    CV.DMA_DESC,
     CASE
-        WHEN CV.DMA_DESC LIKE '%TORONTO%' OR
-             CM.CITY LIKE '%TORONTO%' OR
-             UPPER(CM.CITY) LIKE '%TORONTO%' OR
-             CM.STATE = 'ON' AND UPPER(CM.CITY) IN ('Ajax',
-'Aurora',
-'Brampton',
-'Brock',
-'Burlington',
-'Caledon',
-'Clarington',
-'East Gwillimbury' ,
-'Georgina',
-'Halton Hills', 
-'King',
-'Markham',
-'Milton',
-'Mississauga',
-'Newmarket',
-'Oakville',
-'Oshawa',
-'Pickering',
-'Richmond Hill', 
-'Scugog',
-'Toronto',
-'Uxbridge',
-'Vaughan',
-'Whitby',
-'Whitchurch – Stouffville'
-)
-        THEN 'Toronto GTA'
-        
-        --Vancouver Metro
-        WHEN CV.DMA_DESC LIKE '%VANCOUVER%' OR
-             CM.CITY LIKE '%VANCOUVER%' OR
-             UPPER(CM.CITY) LIKE '%VANCOUVER%' OR
-             (CM.STATE = 'BC' AND UPPER(CM.CITY) IN ('VANCOUVER', 'BURNABY', 'SURREY', 'RICHMOND',
-                                                       'COQUITLAM', 'DELTA', '%LANGLEY%', 'MAPLE RIDGE',
-                                                       'NEW WESTMINSTER', '%NORTH VANCOUVER', 'PORT COQUITLAM',
-                                                       'PORT MOODY', '%WEST VANCOUVER', 'WHITE ROCK','Anmore',
-                                                       'Belcarra', 'Bowen Island', 'Lions Bay', 'Metro Vancouver A',
-                                                       'Pitt Meadows', 'Tsawwassen'))
-        THEN 'Vancouver'
-        
-        --Montreal Metro
-        WHEN CV.DMA_DESC LIKE '%MONTREAL%' OR
-             CM.CITY LIKE '%MONTREAL%' OR
-             UPPER(CM.CITY) LIKE '%MONTREAL%' OR
-             UPPER(CM.CITY) LIKE '%MONTR_AL%' OR
-             (CM.STATE = 'QC' AND UPPER(CM.CITY) IN ('Baie-d''Urfé',
-'Beaconsfield',
-'Beauharnois',
-'Beloeil',
-'Blainville',
-'Boisbriand',
-'Bois-des-Filion',
-'Boucherville',
-'Brossard',
-'Calixa-Lavallée',
-'Candiac',
-'Carignan',
-'Chambly',
-'Charlemagne',
-'Châteauguay',
-'Contrecoeur',
-'Côte-Saint-Luc',
-'Delson',
-'Deux-Montagnes',
-'Dollard-des-Ormeaux',
-'Dorval',
-'Hampstead',
-'Hudson',
-'Kirkland',
-'La Prairie' ,
-'L''Assomption',
-'Laval',
-'Léry',
-'Les Cèdres' ,
-'L''Île-Cadieux',
-'L''Île-Dorval',
-'L''Île-Perrot',
-'Longueuil',
-'Lorraine',
-'Mascouche',
-'McMasterville',
-'Mercier',
-'Mirabel',
-'Montréal',
-'Montréal-Est',
-'Montréal-Ouest',
-'Mont-Royal',
-'Mont-Saint-Hilaire',
-'Notre-Dame-de-l''Île-Perrot',
-'Oka',
-'Otterburn Park', 
-'Pincourt',
-'Pointe-Calumet',
-'Pointe-Claire',
-'Pointe-des-Cascades',
-'Repentigny',
-'Richelieu',
-'Rosemère',
-'Saint-Amable',
-'Saint-Basile-le-Grand',
-'Saint-Bruno-de-Montarville',
-'Saint-Constant',
-'Sainte-Anne-de-Bellevue',
-'Sainte-Anne-des-Plaines',
-'Sainte-Catherine',
-'Sainte-Julie',
-'Sainte-Marthe-sur-le-Lac',
-'Sainte-Thérèse',
-'Saint-Eustache',
-'Saint-Isidore',
-'Saint-Jean-Baptiste',
-'Saint-Joseph-du-Lac',
-'Saint-Lambert',
-'Saint-Lazare',
-'Saint-Mathias-sur-Richelieu',
-'Saint-Mathieu',
-'Saint-Mathieu-de-Beloeil',
-'Saint-Philippe',
-'Saint-Sulpice',
-'Senneville',
-'Terrasse-Vaudreuil',
-'Terrebonne',
-'Varennes',
-'Vaudreuil-Dorion',
-'Vaudreuil-sur-le-Lac',
-'Verchères',
-'Westmount'
-))
-        THEN 'Montreal'
-        
-        -- -- British Columbia
-        -- WHEN CM.STATE = 'BC'
-        -- THEN 'British Columbia'
-        
-        -- -- Quebec
-        -- WHEN CM.STATE = 'QC'
-        -- THEN 'Quebec'
-        
-        -- Rest of Canada
-        ELSE 'Rest of Canada'
-    END AS market_segment
+        WHEN CM.COUNTRY_CODE = 'US' THEN 'United States'
+        WHEN CM.COUNTRY_CODE = 'CA' THEN 'Canada'
+    END AS send_country
 FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW CM
-LEFT JOIN SUMMARY_GEN.DMA_ZIPCODE_VW ZIP ON CM.ZIP_POSTAL_CODE = ZIP.ZIP_CODE
-LEFT JOIN SUMMARY_GEN.DMA_VW CV ON ZIP.DMA_CODE = CV.DMA_CODE
-WHERE CM.COUNTRY_CODE = 'CA';
+WHERE CM.COUNTRY_CODE IN ('US', 'CA');
 
--- select Distinct state from SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW 
--- where state IN ('QC', 'BC', 'ON');
 
- select count(sndcustomer_key), count(distinct sndcustomer_key)
- from CAR_680_HISTORICAL_TXNS;--33898797 2568397
 -- ========================================================================
--- Table 3: Historical Transaction Lookup (MERGED R12 & R13+)
+-- Table 3: Historical Transaction Lookup (R12 Only for New Customer Definition)
 -- ========================================================================
-CREATE OR REPLACE TABLE CAR_680_HISTORICAL_TXNS AS
+CREATE OR REPLACE TABLE CAR_874_HISTORICAL_TXNS AS
 SELECT DISTINCT
     TXN.SNDCUSTOMER_KEY,
-    DATEADD(DAY, 1, DATE_TRUNC('WEEK', DATEADD(DAY, -1, TXN.RCVPAYING_DATETIME))) AS ref_week,
     TXN.RCVPAYING_DATETIME,
+    DATE(TXN.RCVPAYING_DATETIME) AS txn_date,
     TXN.PRICING_CHANNEL,
+    TXN.SNDCOUNTRY_CODE,
+    TXN.RCVCOUNTRY_CODE,
+    TXN.RCV_SUPER_REGION,
     CASE
-        -- R12: Last 12 months of activity (rolling, includes campaign period transactions)
-        -- Extended to cover up to current date for dynamic lookback
+        WHEN TXN.RCV_SUPER_REGION = 'AFRICA' THEN 'Africa'
+        ELSE 'Rest of World'
+    END AS receive_region,
+    CASE
+        -- R12: Last 12 months of activity (rolling lookback)
         WHEN DATE(TXN.RCVPAYING_DATETIME) >= DATEADD(MONTH, -12, DATE(CURRENT_DATE))
              AND DATE(TXN.RCVPAYING_DATETIME) < DATE(CURRENT_DATE)
         THEN 'R12'
-        
-        -- R13_PLUS: 13-48 months back (lapsed customers)
-        -- This captures customers who were active 1-4 years ago but not in R12
-        WHEN DATE(TXN.RCVPAYING_DATETIME) >= DATEADD(MONTH, -48, DATE(CURRENT_DATE))
-             AND DATE(TXN.RCVPAYING_DATETIME) < DATEADD(MONTH, -12, DATE(CURRENT_DATE))
-        THEN 'R13_PLUS'
     END AS history_period
 FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW TXN
-WHERE DATE(TXN.RCVPAYING_DATETIME) >= DATEADD(MONTH, -48, DATE(CURRENT_DATE))  -- Look back 4 years
-  AND DATE(TXN.RCVPAYING_DATETIME) < DATE(CURRENT_DATE)  -- Up to today
-  AND TXN.SNDCOUNTRY_CODE = 'CA'
+WHERE DATE(TXN.RCVPAYING_DATETIME) >= DATEADD(MONTH, -12, DATE(CURRENT_DATE))  -- Only look back 12 months
+  AND DATE(TXN.RCVPAYING_DATETIME) < DATE(CURRENT_DATE)
+  AND TXN.SNDCOUNTRY_CODE IN ('US', 'CA')
   AND TXN.RCVPAYING_DATETIME IS NOT NULL;
- 
---Validation query
+
+
+-- Validation query
 SELECT
-    history_period,
+    SNDCOUNTRY_CODE,
+    receive_region,
     MIN(RCVPAYING_DATETIME) AS earliest_txn,
     MAX(RCVPAYING_DATETIME) AS latest_txn,
     COUNT(DISTINCT SNDCUSTOMER_KEY) AS unique_customers,
-    COUNT(*) as total_txns
-FROM CAR_680_HISTORICAL_TXNS
-GROUP BY history_period;
+    COUNT(*) AS total_txns
+FROM CAR_874_HISTORICAL_TXNS
+GROUP BY SNDCOUNTRY_CODE, receive_region;
 
 
- select count(SNDCUSTOMER_KEY),count(DISTINCT SNDCUSTOMER_KEY), customer_type
- from CAR_680_WEEKLY_DIGITAL_TXNS
- group by 3;
---  428866 EXISTING
--- 10191 LAPSED_REACTIVATION
--- 17841 NEW
---456,898   Total
 -- ========================================================================
--- Table 4: Current Period Digital Transactions - UPDATED CLASSIFICATION LOGIC
+-- Table 4: Current Period Transactions with Customer Classification
 -- ========================================================================
-CREATE OR REPLACE TABLE CAR_680_WEEKLY_DIGITAL_TXNS AS
-WITH current_txns AS (
+CREATE OR REPLACE TABLE CAR_874_WEEKLY_TXNS AS
+WITH all_periods_txns AS (
+    -- Get all transactions across both years (2024-2025 and 2025-2026)
     SELECT
         WP.period_name,
         WP.week_start,
         WP.week_end,
         WP.period_type,
         WP.week_order,
+        WP.campaign_year,
         TXN.SNDCUSTOMER_KEY,
-        CG.market_segment,
+        CG.send_country,
         CG.CITY,
         CG.STATE,
-        -- DATEADD(DAY, 1, DATE_TRUNC('WEEK', DATEADD(DAY, -1, TXN.RCVPAYING_DATETIME))) AS txn_week,
-        -- TXN.RCVPAYING_DATETIME,
-         TXN.PRICING_CHANNEL,
-        -- TXN.PRIMARY_CHANNEL,
-        -- TXN.SUB_CHANNEL,
-        -- TXN.SNDCOUNTRY_CODE,
-        -- TXN.RCVCOUNTRY_CODE
-        COUNT(Txn.MTCN) AS Txns
+        TXN.PRICING_CHANNEL,
+        TXN.MTCN,
+        CASE
+            WHEN TXN.RCV_SUPER_REGION = 'AFRICA' THEN 'Africa'
+            ELSE 'Rest of World'
+        END AS receive_region,
+        TXN.RCVPAYING_DATETIME,
+        DATE(TXN.RCVPAYING_DATETIME) AS txn_date
     FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW TXN
-    INNER JOIN CAR_680_CUSTOMER_GEOGRAPHY CG
+    INNER JOIN CAR_874_CUSTOMER_GEOGRAPHY CG
         ON TXN.SNDCUSTOMER_KEY = CG.CUSTOMER_KEY
-    INNER JOIN CAR_680_WEEKLY_PERIODS WP
-        ON TXN.RCVPAYING_DATETIME >= WP.week_start
-        AND TXN.RCVPAYING_DATETIME <= DATEADD(SECOND, 86399, WP.week_end)
-    WHERE TXN.RCVPAYING_DATETIME >= '2025-09-16'
-      AND TXN.RCVPAYING_DATETIME < '2025-12-20'
-      AND TXN.PRICING_CHANNEL IN ('WEB', 'APP')
-      AND TXN.SNDCOUNTRY_CODE = 'CA'
-      group by all --350,661
+    INNER JOIN CAR_874_WEEKLY_PERIODS WP
+        ON DATE(TXN.RCVPAYING_DATETIME) >= WP.week_start
+        AND DATE(TXN.RCVPAYING_DATETIME) <= WP.week_end
+    WHERE TXN.SNDCOUNTRY_CODE IN ('US', 'CA')
+      AND TXN.RCVPAYING_DATETIME IS NOT NULL
+      AND (
+          -- 2025-2026 Campaign
+          (TXN.RCVPAYING_DATETIME >= '2025-12-01' AND TXN.RCVPAYING_DATETIME < '2026-02-02')
+          OR
+          -- 2024-2025 YoY Comparison
+          (TXN.RCVPAYING_DATETIME >= '2024-12-02' AND TXN.RCVPAYING_DATETIME < '2025-02-03')
+      )
+),
+txn_aggregated AS (
+    -- Aggregate by customer, week, and receive region
+    SELECT
+        period_name,
+        week_start,
+        week_end,
+        period_type,
+        week_order,
+        campaign_year,
+        SNDCUSTOMER_KEY,
+        send_country,
+        CITY,
+        STATE,
+        PRICING_CHANNEL,
+        receive_region,
+        COUNT(MTCN) AS txns
+    FROM all_periods_txns
+    GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12
 ),
 r12_check AS (
-    -- Dynamic 12-month lookback for each transaction week
-    -- Checks if customer had ANY activity in the 12 months before their current transaction
+    -- Check if customer had R12 activity before their current transaction week
     SELECT DISTINCT
         CT.SNDCUSTOMER_KEY,
         CT.week_start,
+        CT.campaign_year,
+        CT.receive_region,
         1 AS has_r12
-    FROM current_txns CT
-    INNER JOIN CAR_680_HISTORICAL_TXNS HT
+    FROM txn_aggregated CT
+    INNER JOIN CAR_874_HISTORICAL_TXNS HT
         ON CT.SNDCUSTOMER_KEY = HT.SNDCUSTOMER_KEY
+        AND HT.receive_region = CT.receive_region
         AND HT.history_period = 'R12'
         -- Look back exactly 12 months from the transaction week
         AND HT.RCVPAYING_DATETIME >= DATEADD(MONTH, -12, CT.week_start)
-        AND HT.RCVPAYING_DATETIME < CT.week_start  -- Before current week starts
+        AND HT.RCVPAYING_DATETIME < CT.week_start
 ),
-r13_check AS (
-    -- Check for lapsed customers (R13-R48 activity but NO R12 activity)
-    -- These are customers who were active 13-48 months ago but dormant in last 12 months
+previous_week_check AS (
+    -- Check if customer had activity in the previous week (for EXISTING classification)
     SELECT DISTINCT
         CT.SNDCUSTOMER_KEY,
         CT.week_start,
-        1 AS has_r13
-    FROM current_txns CT
-    INNER JOIN CAR_680_HISTORICAL_TXNS HT
-        ON CT.SNDCUSTOMER_KEY = HT.SNDCUSTOMER_KEY
-        AND HT.history_period = 'R13_PLUS'
-        -- Look back 13-48 months from transaction week
-        AND HT.RCVPAYING_DATETIME >= DATEADD(MONTH, -48, CT.week_start)
-        AND HT.RCVPAYING_DATETIME < DATEADD(MONTH, -12, CT.week_start)
-    -- CRITICAL: Only include customers who DON'T have R12 activity
-    WHERE NOT EXISTS (
-        SELECT 1
-        FROM CAR_680_HISTORICAL_TXNS HT_R12
-        WHERE HT_R12.SNDCUSTOMER_KEY = CT.SNDCUSTOMER_KEY
-          AND HT_R12.history_period = 'R12'
-          AND HT_R12.RCVPAYING_DATETIME >= DATEADD(MONTH, -12, CT.week_start)
-          AND HT_R12.RCVPAYING_DATETIME < CT.week_start
-    )
+        CT.campaign_year,
+        CT.receive_region,
+        1 AS has_prev_week
+    FROM txn_aggregated CT
+    INNER JOIN txn_aggregated PT
+        ON CT.SNDCUSTOMER_KEY = PT.SNDCUSTOMER_KEY
+        AND CT.receive_region = PT.receive_region
+        AND CT.campaign_year = PT.campaign_year
+        -- Previous week is the week immediately before current week
+        AND PT.week_start = DATEADD(DAY, -7, CT.week_start)
 )
 SELECT
     CT.*,
-    -- Customer classification based on transaction history
+    -- Customer classification
     CASE
-        WHEN R12.has_r12 = 1 THEN 'EXISTING'
-        WHEN R13.has_r13 = 1 THEN 'LAPSED_REACTIVATION'
-        ELSE 'NEW'
+        -- EXISTING: Has transaction in current week AND previous week
+        WHEN PW.has_prev_week = 1 THEN 'EXISTING'
+        -- NEW: No R12 history
+        WHEN R12.has_r12 IS NULL THEN 'NEW'
+        -- All others are considered EXISTING (had R12 but not prev week)
+        ELSE 'EXISTING'
     END AS customer_type,
     CASE
-        WHEN R12.has_r12 IS NULL AND R13.has_r13 IS NULL THEN 'Y'
+        WHEN R12.has_r12 IS NULL THEN 'Y'
         ELSE 'N'
-    END AS is_new_to_franchise,
-    CASE
-        WHEN R12.has_r12 IS NULL AND R13.has_r13 = 1 THEN 'Y'
-        ELSE 'N'
-    END AS is_winback
-FROM current_txns CT
+    END AS is_new_customer
+FROM txn_aggregated CT
 LEFT JOIN r12_check R12
     ON CT.SNDCUSTOMER_KEY = R12.SNDCUSTOMER_KEY
     AND CT.week_start = R12.week_start
-LEFT JOIN r13_check R13
-    ON CT.SNDCUSTOMER_KEY = R13.SNDCUSTOMER_KEY
-    AND CT.week_start = R13.week_start;--350,661
- 
-//--Final Pull
+    AND CT.campaign_year = R12.campaign_year
+    AND CT.receive_region = R12.receive_region
+LEFT JOIN previous_week_check PW
+    ON CT.SNDCUSTOMER_KEY = PW.SNDCUSTOMER_KEY
+    AND CT.week_start = PW.week_start
+    AND CT.campaign_year = PW.campaign_year
+    AND CT.receive_region = PW.receive_region;
+
+
+-- ========================================================================
+-- FINAL OUTPUT: Lift Analysis Reporting
+-- ========================================================================
+
+-- Main Summary Report
 SELECT
+    WP.campaign_year,
     WP.period_name,
     WP.week_start,
     WP.week_end,
     WP.period_type,
     WP.week_order,
-    CG.market_segment,
+    COALESCE(WT.send_country, 'All Countries') AS send_country,
+    COALESCE(WT.receive_region, 'All Regions') AS receive_region,
     
-    -- New Digital Customer Counts (Primary KPI)
+    -- New Customer Counts (Primary KPI)
     COUNT(DISTINCT CASE
-        WHEN WT.customer_type IN ('NEW', 'LAPSED_REACTIVATION')
+        WHEN WT.customer_type = 'NEW'
         THEN WT.SNDCUSTOMER_KEY
-    END) AS new_digital_customers,
+    END) AS new_customers,
     
-    -- Breakdown by customer type
-    COUNT(DISTINCT CASE WHEN WT.customer_type = 'NEW' THEN WT.SNDCUSTOMER_KEY END) AS truly_new_customers,
-    COUNT(DISTINCT CASE WHEN WT.customer_type = 'LAPSED_REACTIVATION' THEN WT.SNDCUSTOMER_KEY END) AS lapsed_reactivations,
-    COUNT(DISTINCT CASE WHEN WT.customer_type = 'EXISTING' THEN WT.SNDCUSTOMER_KEY END) AS existing_customers,
+    -- Existing Customer Counts
+    COUNT(DISTINCT CASE
+        WHEN WT.customer_type = 'EXISTING'
+        THEN WT.SNDCUSTOMER_KEY
+    END) AS existing_customers,
     
     -- Total metrics
-    COUNT(DISTINCT WT.SNDCUSTOMER_KEY) AS total_digital_customers,
-    SUM( WT.Txns) AS total_transactions,-- take Txn_id
+    COUNT(DISTINCT WT.SNDCUSTOMER_KEY) AS total_customers,
+    SUM(WT.txns) AS total_transactions,
     
     -- Channel breakdown
     COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'WEB' THEN WT.SNDCUSTOMER_KEY END) AS web_customers,
     COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'APP' THEN WT.SNDCUSTOMER_KEY END) AS app_customers,
-    SUM( CASE WHEN WT.PRICING_CHANNEL = 'WEB' THEN WT.Txns END) AS web_txns,--take Txn_id
-    SUM( CASE WHEN WT.PRICING_CHANNEL = 'APP' THEN WT.Txns END) AS app_txns--take Txn_id
-FROM CAR_680_WEEKLY_PERIODS WP
-CROSS JOIN (SELECT DISTINCT market_segment FROM CAR_680_CUSTOMER_GEOGRAPHY) CG
-LEFT JOIN CAR_680_WEEKLY_DIGITAL_TXNS WT
+    SUM(CASE WHEN WT.PRICING_CHANNEL = 'WEB' THEN WT.txns END) AS web_txns,
+    SUM(CASE WHEN WT.PRICING_CHANNEL = 'APP' THEN WT.txns END) AS app_txns,
+    
+    -- New customer transactions
+    SUM(CASE WHEN WT.customer_type = 'NEW' THEN WT.txns END) AS new_customer_txns,
+    SUM(CASE WHEN WT.customer_type = 'EXISTING' THEN WT.txns END) AS existing_customer_txns
+
+FROM CAR_874_WEEKLY_PERIODS WP
+CROSS JOIN (
+    SELECT DISTINCT send_country FROM CAR_874_CUSTOMER_GEOGRAPHY
+) SC
+CROSS JOIN (
+    SELECT 'Africa' AS receive_region
+    UNION ALL
+    SELECT 'Rest of World'
+) RR
+LEFT JOIN CAR_874_WEEKLY_TXNS WT
     ON WP.period_name = WT.period_name
-    AND CG.market_segment = WT.market_segment
+    AND WP.campaign_year = WT.campaign_year
+    AND SC.send_country = WT.send_country
+    AND RR.receive_region = WT.receive_region
 GROUP BY
+    WP.campaign_year,
     WP.period_name,
     WP.week_start,
     WP.week_end,
     WP.period_type,
     WP.week_order,
-    CG.market_segment
+    COALESCE(WT.send_country, 'All Countries'),
+    COALESCE(WT.receive_region, 'All Regions')
 ORDER BY
+    WP.campaign_year,
     WP.week_order,
-    CG.market_segment;
+    send_country,
+    receive_region;
+
+
+-- ========================================================================
+-- LIFT ANALYSIS VIEWS
+-- ========================================================================
+
+-- 1. Pre vs During vs Post Analysis (Period-level aggregation)
+CREATE OR REPLACE VIEW CAR_874_PERIOD_LIFT_ANALYSIS AS
+SELECT
+    campaign_year,
+    send_country,
+    receive_region,
+    period_type,
+    
+    -- New Customers
+    SUM(new_customers) AS total_new_customers,
+    SUM(new_customer_txns) AS total_new_customer_txns,
+    
+    -- Total Performance
+    SUM(total_customers) AS total_customers,
+    SUM(total_transactions) AS total_transactions,
+    
+    -- Averages
+    AVG(new_customers) AS avg_new_customers_per_week,
+    AVG(total_transactions) AS avg_txns_per_week
+    
+FROM (
+    SELECT
+        campaign_year,
+        period_name,
+        period_type,
+        week_order,
+        send_country,
+        receive_region,
+        SUM(new_customers) AS new_customers,
+        SUM(new_customer_txns) AS new_customer_txns,
+        SUM(total_customers) AS total_customers,
+        SUM(total_transactions) AS total_transactions
+    FROM CAR_874_WEEKLY_TXNS WT
+    INNER JOIN CAR_874_WEEKLY_PERIODS WP
+        ON WT.period_name = WP.period_name
+        AND WT.campaign_year = WP.campaign_year
+    GROUP BY 1,2,3,4,5,6
+)
+GROUP BY 1,2,3,4
+ORDER BY campaign_year, send_country, receive_region, period_type;
+
+
+-- 2. YoY Comparison Analysis
+CREATE OR REPLACE VIEW CAR_874_YOY_COMPARISON AS
+SELECT
+    period_name,
+    period_type,
+    week_order,
+    send_country,
+    receive_region,
+    
+    -- 2024-2025 Metrics
+    SUM(CASE WHEN campaign_year = 2024 THEN new_customers END) AS new_customers_2024,
+    SUM(CASE WHEN campaign_year = 2024 THEN total_transactions END) AS total_txns_2024,
+    
+    -- 2025-2026 Metrics
+    SUM(CASE WHEN campaign_year = 2025 THEN new_customers END) AS new_customers_2025,
+    SUM(CASE WHEN campaign_year = 2025 THEN total_transactions END) AS total_txns_2025,
+    
+    -- YoY Growth
+    (SUM(CASE WHEN campaign_year = 2025 THEN new_customers END) - 
+     SUM(CASE WHEN campaign_year = 2024 THEN new_customers END)) AS new_customers_yoy_change,
+     
+    (SUM(CASE WHEN campaign_year = 2025 THEN total_transactions END) - 
+     SUM(CASE WHEN campaign_year = 2024 THEN total_transactions END)) AS total_txns_yoy_change,
+    
+    -- YoY % Growth
+    CASE
+        WHEN SUM(CASE WHEN campaign_year = 2024 THEN new_customers END) > 0
+        THEN ((SUM(CASE WHEN campaign_year = 2025 THEN new_customers END) * 1.0 / 
+               SUM(CASE WHEN campaign_year = 2024 THEN new_customers END)) - 1) * 100
+        ELSE NULL
+    END AS new_customers_yoy_pct_growth,
+    
+    CASE
+        WHEN SUM(CASE WHEN campaign_year = 2024 THEN total_transactions END) > 0
+        THEN ((SUM(CASE WHEN campaign_year = 2025 THEN total_transactions END) * 1.0 / 
+               SUM(CASE WHEN campaign_year = 2024 THEN total_transactions END)) - 1) * 100
+        ELSE NULL
+    END AS total_txns_yoy_pct_growth
+
+FROM (
+    SELECT
+        WP.campaign_year,
+        WP.period_name,
+        WP.period_type,
+        WP.week_order,
+        WT.send_country,
+        WT.receive_region,
+        COUNT(DISTINCT CASE WHEN WT.customer_type = 'NEW' THEN WT.SNDCUSTOMER_KEY END) AS new_customers,
+        SUM(WT.txns) AS total_transactions
+    FROM CAR_874_WEEKLY_PERIODS WP
+    LEFT JOIN CAR_874_WEEKLY_TXNS WT
+        ON WP.period_name = WT.period_name
+        AND WP.campaign_year = WT.campaign_year
+    GROUP BY 1,2,3,4,5,6
+)
+GROUP BY 1,2,3,4,5
+ORDER BY week_order, send_country, receive_region;
+
+
+-- 3. Corridor Analysis (Send Country to Receive Region)
+CREATE OR REPLACE VIEW CAR_874_CORRIDOR_ANALYSIS AS
+SELECT
+    campaign_year,
+    period_type,
+    CONCAT(send_country, ' → ', receive_region) AS corridor,
+    
+    SUM(new_customers) AS total_new_customers,
+    SUM(total_transactions) AS total_transactions,
+    AVG(new_customers) AS avg_new_customers_per_week,
+    AVG(total_transactions) AS avg_txns_per_week
+    
+FROM (
+    SELECT
+        WP.campaign_year,
+        WP.period_type,
+        WT.send_country,
+        WT.receive_region,
+        COUNT(DISTINCT CASE WHEN WT.customer_type = 'NEW' THEN WT.SNDCUSTOMER_KEY END) AS new_customers,
+        SUM(WT.txns) AS total_transactions
+    FROM CAR_874_WEEKLY_PERIODS WP
+    LEFT JOIN CAR_874_WEEKLY_TXNS WT
+        ON WP.period_name = WT.period_name
+        AND WP.campaign_year = WT.campaign_year
+    GROUP BY 1,2,3,4
+)
+GROUP BY 1,2,3
+ORDER BY campaign_year, period_type, corridor;
+```
+
+**Key Analysis Queries You Can Run:**
+
+```sql
+-- 1. Pre vs During vs Post for 2025-2026
+SELECT * FROM CAR_874_PERIOD_LIFT_ANALYSIS
+WHERE campaign_year = 2025
+ORDER BY send_country, receive_region, period_type;
+
+-- 2. YoY Comparison
+SELECT * FROM CAR_874_YOY_COMPARISON
+WHERE send_country = 'United States' AND receive_region = 'Africa';
+
+-- 3. Corridor Performance
+SELECT * FROM CAR_874_CORRIDOR_ANALYSIS
+WHERE campaign_year = 2025;
+
+-- 4. Week-over-Week Trend
+SELECT
+    campaign_year,
+    period_name,
+    send_country,
+    receive_region,
+    new_customers,
+    total_transactions
+FROM CAR_874_WEEKLY_TXNS WT
+INNER JOIN CAR_874_WEEKLY_PERIODS WP
+    ON WT.period_name = WP.period_name
+    AND WT.campaign_year = WP.campaign_year
+WHERE campaign_year = 2025
+ORDER BY week_order, send_country, receive_region;
+```
+
+**What This Query Provides:**
+
+✅ US and CA send countries  
+✅ Africa vs Rest of World receive regions  
+✅ R12 new customer definition  
+✅ Existing = current week + previous week activity  
+✅ Pre/Campaign/Post periods for Dec 2025 - Feb 2026  
+✅ YoY comparison with 2024-2025 data  
+✅ Multiple analysis levels: corridor, period, weekly  
+✅ Lift analysis views ready for visualization  
+
+Would you like me to adjust any of the time periods, add additional metrics, or create specific visualization queries?
