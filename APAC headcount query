@@ -1,17 +1,3 @@
-I'll help you create the updated query for CAR_874 with the new requirements. Let me break this down systematically:
-
-**Key Changes:**
-1. Two send countries: US and CA
-2. Two receive regions: Africa vs Rest of World
-3. New customer definition: R12 (not R48)
-4. Existing customers: transacted in current week AND previous week
-5. No lapsed customer classification
-6. New time periods: Pre (Dec 1-14), Campaign (Dec 15 - Jan 18), Post (Jan 19 - Feb 1)
-7. YoY comparison: Same periods for 2024-2025
-
-Here's the complete updated query:
-
-```sql
 -- ========================================================================
 -- Table 1: Define Weekly Periods for 2025-2026 and YoY 2024-2025
 -- ========================================================================
@@ -46,12 +32,6 @@ CREATE OR REPLACE TABLE CAR_874_CUSTOMER_GEOGRAPHY AS
 SELECT DISTINCT
     CM.CUSTOMER_KEY,
     CM.COUNTRY_CODE,
-    CM.STATE,
-    CM.CITY,
-    CASE
-        WHEN CM.COUNTRY_CODE = 'US' THEN 'United States'
-        WHEN CM.COUNTRY_CODE = 'CA' THEN 'Canada'
-    END AS send_country
 FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW CM
 WHERE CM.COUNTRY_CODE IN ('US', 'CA');
 
@@ -110,10 +90,8 @@ WITH all_periods_txns AS (
         WP.period_type,
         WP.week_order,
         WP.campaign_year,
+        CG.Country_code,
         TXN.SNDCUSTOMER_KEY,
-        CG.send_country,
-        CG.CITY,
-        CG.STATE,
         TXN.PRICING_CHANNEL,
         TXN.MTCN,
         CASE
@@ -148,14 +126,11 @@ txn_aggregated AS (
         week_order,
         campaign_year,
         SNDCUSTOMER_KEY,
-        send_country,
-        CITY,
-        STATE,
         PRICING_CHANNEL,
         receive_region,
         COUNT(MTCN) AS txns
     FROM all_periods_txns
-    GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12
+    GROUP BY ALL
 ),
 r12_check AS (
     -- Check if customer had R12 activity before their current transaction week
@@ -171,8 +146,8 @@ r12_check AS (
         AND HT.receive_region = CT.receive_region
         AND HT.history_period = 'R12'
         -- Look back exactly 12 months from the transaction week
-        AND HT.RCVPAYING_DATETIME >= DATEADD(MONTH, -12, CT.week_start)
-        AND HT.RCVPAYING_DATETIME < CT.week_start
+        AND DATE(HT.RCVPAYING_DATETIME) >= DATEADD(MONTH, -12, CT.week_start)
+        AND DATE(HT.RCVPAYING_DATETIME) < CT.week_start
 ),
 previous_week_check AS (
     -- Check if customer had activity in the previous week (for EXISTING classification)
@@ -230,7 +205,7 @@ SELECT
     WP.week_end,
     WP.period_type,
     WP.week_order,
-    COALESCE(WT.send_country, 'All Countries') AS send_country,
+    COALESCE(WT.Country_code, 'All Countries') AS send_country,
     COALESCE(WT.receive_region, 'All Regions') AS receive_region,
     
     -- New Customer Counts (Primary KPI)
@@ -249,19 +224,13 @@ SELECT
     COUNT(DISTINCT WT.SNDCUSTOMER_KEY) AS total_customers,
     SUM(WT.txns) AS total_transactions,
     
-    -- Channel breakdown
-    COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'WEB' THEN WT.SNDCUSTOMER_KEY END) AS web_customers,
-    COUNT(DISTINCT CASE WHEN WT.PRICING_CHANNEL = 'APP' THEN WT.SNDCUSTOMER_KEY END) AS app_customers,
-    SUM(CASE WHEN WT.PRICING_CHANNEL = 'WEB' THEN WT.txns END) AS web_txns,
-    SUM(CASE WHEN WT.PRICING_CHANNEL = 'APP' THEN WT.txns END) AS app_txns,
-    
     -- New customer transactions
     SUM(CASE WHEN WT.customer_type = 'NEW' THEN WT.txns END) AS new_customer_txns,
     SUM(CASE WHEN WT.customer_type = 'EXISTING' THEN WT.txns END) AS existing_customer_txns
 
 FROM CAR_874_WEEKLY_PERIODS WP
 CROSS JOIN (
-    SELECT DISTINCT send_country FROM CAR_874_CUSTOMER_GEOGRAPHY
+    SELECT DISTINCT COUNTRY_CODE FROM CAR_874_CUSTOMER_GEOGRAPHY
 ) SC
 CROSS JOIN (
     SELECT 'Africa' AS receive_region
@@ -271,7 +240,7 @@ CROSS JOIN (
 LEFT JOIN CAR_874_WEEKLY_TXNS WT
     ON WP.period_name = WT.period_name
     AND WP.campaign_year = WT.campaign_year
-    AND SC.send_country = WT.send_country
+    AND SC.COUNTRY_CODE = WT.COUNTRY_CODE
     AND RR.receive_region = WT.receive_region
 GROUP BY
     WP.campaign_year,
@@ -280,191 +249,8 @@ GROUP BY
     WP.week_end,
     WP.period_type,
     WP.week_order,
-    COALESCE(WT.send_country, 'All Countries'),
     COALESCE(WT.receive_region, 'All Regions')
 ORDER BY
     WP.campaign_year,
     WP.week_order,
-    send_country,
     receive_region;
-
-
--- ========================================================================
--- LIFT ANALYSIS VIEWS
--- ========================================================================
-
--- 1. Pre vs During vs Post Analysis (Period-level aggregation)
-CREATE OR REPLACE VIEW CAR_874_PERIOD_LIFT_ANALYSIS AS
-SELECT
-    campaign_year,
-    send_country,
-    receive_region,
-    period_type,
-    
-    -- New Customers
-    SUM(new_customers) AS total_new_customers,
-    SUM(new_customer_txns) AS total_new_customer_txns,
-    
-    -- Total Performance
-    SUM(total_customers) AS total_customers,
-    SUM(total_transactions) AS total_transactions,
-    
-    -- Averages
-    AVG(new_customers) AS avg_new_customers_per_week,
-    AVG(total_transactions) AS avg_txns_per_week
-    
-FROM (
-    SELECT
-        campaign_year,
-        period_name,
-        period_type,
-        week_order,
-        send_country,
-        receive_region,
-        SUM(new_customers) AS new_customers,
-        SUM(new_customer_txns) AS new_customer_txns,
-        SUM(total_customers) AS total_customers,
-        SUM(total_transactions) AS total_transactions
-    FROM CAR_874_WEEKLY_TXNS WT
-    INNER JOIN CAR_874_WEEKLY_PERIODS WP
-        ON WT.period_name = WP.period_name
-        AND WT.campaign_year = WP.campaign_year
-    GROUP BY 1,2,3,4,5,6
-)
-GROUP BY 1,2,3,4
-ORDER BY campaign_year, send_country, receive_region, period_type;
-
-
--- 2. YoY Comparison Analysis
-CREATE OR REPLACE VIEW CAR_874_YOY_COMPARISON AS
-SELECT
-    period_name,
-    period_type,
-    week_order,
-    send_country,
-    receive_region,
-    
-    -- 2024-2025 Metrics
-    SUM(CASE WHEN campaign_year = 2024 THEN new_customers END) AS new_customers_2024,
-    SUM(CASE WHEN campaign_year = 2024 THEN total_transactions END) AS total_txns_2024,
-    
-    -- 2025-2026 Metrics
-    SUM(CASE WHEN campaign_year = 2025 THEN new_customers END) AS new_customers_2025,
-    SUM(CASE WHEN campaign_year = 2025 THEN total_transactions END) AS total_txns_2025,
-    
-    -- YoY Growth
-    (SUM(CASE WHEN campaign_year = 2025 THEN new_customers END) - 
-     SUM(CASE WHEN campaign_year = 2024 THEN new_customers END)) AS new_customers_yoy_change,
-     
-    (SUM(CASE WHEN campaign_year = 2025 THEN total_transactions END) - 
-     SUM(CASE WHEN campaign_year = 2024 THEN total_transactions END)) AS total_txns_yoy_change,
-    
-    -- YoY % Growth
-    CASE
-        WHEN SUM(CASE WHEN campaign_year = 2024 THEN new_customers END) > 0
-        THEN ((SUM(CASE WHEN campaign_year = 2025 THEN new_customers END) * 1.0 / 
-               SUM(CASE WHEN campaign_year = 2024 THEN new_customers END)) - 1) * 100
-        ELSE NULL
-    END AS new_customers_yoy_pct_growth,
-    
-    CASE
-        WHEN SUM(CASE WHEN campaign_year = 2024 THEN total_transactions END) > 0
-        THEN ((SUM(CASE WHEN campaign_year = 2025 THEN total_transactions END) * 1.0 / 
-               SUM(CASE WHEN campaign_year = 2024 THEN total_transactions END)) - 1) * 100
-        ELSE NULL
-    END AS total_txns_yoy_pct_growth
-
-FROM (
-    SELECT
-        WP.campaign_year,
-        WP.period_name,
-        WP.period_type,
-        WP.week_order,
-        WT.send_country,
-        WT.receive_region,
-        COUNT(DISTINCT CASE WHEN WT.customer_type = 'NEW' THEN WT.SNDCUSTOMER_KEY END) AS new_customers,
-        SUM(WT.txns) AS total_transactions
-    FROM CAR_874_WEEKLY_PERIODS WP
-    LEFT JOIN CAR_874_WEEKLY_TXNS WT
-        ON WP.period_name = WT.period_name
-        AND WP.campaign_year = WT.campaign_year
-    GROUP BY 1,2,3,4,5,6
-)
-GROUP BY 1,2,3,4,5
-ORDER BY week_order, send_country, receive_region;
-
-
--- 3. Corridor Analysis (Send Country to Receive Region)
-CREATE OR REPLACE VIEW CAR_874_CORRIDOR_ANALYSIS AS
-SELECT
-    campaign_year,
-    period_type,
-    CONCAT(send_country, ' → ', receive_region) AS corridor,
-    
-    SUM(new_customers) AS total_new_customers,
-    SUM(total_transactions) AS total_transactions,
-    AVG(new_customers) AS avg_new_customers_per_week,
-    AVG(total_transactions) AS avg_txns_per_week
-    
-FROM (
-    SELECT
-        WP.campaign_year,
-        WP.period_type,
-        WT.send_country,
-        WT.receive_region,
-        COUNT(DISTINCT CASE WHEN WT.customer_type = 'NEW' THEN WT.SNDCUSTOMER_KEY END) AS new_customers,
-        SUM(WT.txns) AS total_transactions
-    FROM CAR_874_WEEKLY_PERIODS WP
-    LEFT JOIN CAR_874_WEEKLY_TXNS WT
-        ON WP.period_name = WT.period_name
-        AND WP.campaign_year = WT.campaign_year
-    GROUP BY 1,2,3,4
-)
-GROUP BY 1,2,3
-ORDER BY campaign_year, period_type, corridor;
-```
-
-**Key Analysis Queries You Can Run:**
-
-```sql
--- 1. Pre vs During vs Post for 2025-2026
-SELECT * FROM CAR_874_PERIOD_LIFT_ANALYSIS
-WHERE campaign_year = 2025
-ORDER BY send_country, receive_region, period_type;
-
--- 2. YoY Comparison
-SELECT * FROM CAR_874_YOY_COMPARISON
-WHERE send_country = 'United States' AND receive_region = 'Africa';
-
--- 3. Corridor Performance
-SELECT * FROM CAR_874_CORRIDOR_ANALYSIS
-WHERE campaign_year = 2025;
-
--- 4. Week-over-Week Trend
-SELECT
-    campaign_year,
-    period_name,
-    send_country,
-    receive_region,
-    new_customers,
-    total_transactions
-FROM CAR_874_WEEKLY_TXNS WT
-INNER JOIN CAR_874_WEEKLY_PERIODS WP
-    ON WT.period_name = WP.period_name
-    AND WT.campaign_year = WP.campaign_year
-WHERE campaign_year = 2025
-ORDER BY week_order, send_country, receive_region;
-```
-
-**What This Query Provides:**
-
-✅ US and CA send countries  
-✅ Africa vs Rest of World receive regions  
-✅ R12 new customer definition  
-✅ Existing = current week + previous week activity  
-✅ Pre/Campaign/Post periods for Dec 2025 - Feb 2026  
-✅ YoY comparison with 2024-2025 data  
-✅ Multiple analysis levels: corridor, period, weekly  
-✅ Lift analysis views ready for visualization  
-
-Would you like me to adjust any of the time periods, add additional metrics, or create specific visualization queries?
