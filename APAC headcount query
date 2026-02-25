@@ -1,8 +1,10 @@
+**Excellent idea!** Breaking it into separate tables will make validation and debugging much easier. Here's a logical breakdown:
+
+```sql
 -- ========================================================================
--- Table 1: Define Weekly Periods for 2025-2026 and YoY 2024-2025
+-- Table 1: Define Weekly Periods (Keep as-is)
 -- ========================================================================
 CREATE OR REPLACE TABLE CAR_874_WEEKLY_PERIODS AS
--- 2025-2026 Campaign Period
 SELECT 'Pre-Week 1' AS period_name, DATE('2025-12-01') AS week_start, DATE('2025-12-07') AS week_end, 'PRE' AS period_type, 1 AS week_order, 2025 AS campaign_year
 UNION ALL SELECT 'Pre-Week 2', DATE('2025-12-08'), DATE('2025-12-14'), 'PRE', 2, 2025
 UNION ALL SELECT 'Campaign Week 1', DATE('2025-12-15'), DATE('2025-12-21'), 'CAMPAIGN', 3, 2025
@@ -12,9 +14,7 @@ UNION ALL SELECT 'Campaign Week 4', DATE('2026-01-05'), DATE('2026-01-11'), 'CAM
 UNION ALL SELECT 'Campaign Week 5', DATE('2026-01-12'), DATE('2026-01-18'), 'CAMPAIGN', 7, 2025
 UNION ALL SELECT 'Post-Week 1', DATE('2026-01-19'), DATE('2026-01-25'), 'POST', 8, 2025
 UNION ALL SELECT 'Post-Week 2', DATE('2026-01-26'), DATE('2026-02-01'), 'POST', 9, 2025
-
--- YoY Comparison: 2024-2025 Same Periods
-UNION ALL SELECT 'Pre-Week 1', DATE('2024-12-02'), DATE('2024-12-08'), 'PRE', 1, 2024  -- Adjusted to align with same day of week
+UNION ALL SELECT 'Pre-Week 1', DATE('2024-12-02'), DATE('2024-12-08'), 'PRE', 1, 2024
 UNION ALL SELECT 'Pre-Week 2', DATE('2024-12-09'), DATE('2024-12-15'), 'PRE', 2, 2024
 UNION ALL SELECT 'Campaign Week 1', DATE('2024-12-16'), DATE('2024-12-22'), 'CAMPAIGN', 3, 2024
 UNION ALL SELECT 'Campaign Week 2', DATE('2024-12-23'), DATE('2024-12-29'), 'CAMPAIGN', 4, 2024
@@ -26,178 +26,244 @@ UNION ALL SELECT 'Post-Week 2', DATE('2025-01-27'), DATE('2025-02-02'), 'POST', 
 
 
 -- ========================================================================
--- Table 2: Customer Geography Mapping (Simplified for US/CA Send Only)
+-- Table 2: RAW Transactions (All transactions in analysis period)
 -- ========================================================================
-CREATE OR REPLACE TABLE CAR_874_CUSTOMER_GEOGRAPHY AS
-SELECT DISTINCT
-    CM.CUSTOMER_KEY,
-    CM.COUNTRY_CODE,
-FROM SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW CM
-WHERE CM.COUNTRY_CODE IN ('US', 'CA');
-
-
--- ========================================================================
--- Table 3: Historical Transaction Lookup (R12 Only for New Customer Definition)
--- ========================================================================
-CREATE OR REPLACE TABLE CAR_874_HISTORICAL_TXNS AS
-SELECT DISTINCT
+CREATE OR REPLACE TABLE CAR_874_RAW_TXNS AS
+SELECT
+    WP.period_name,
+    WP.week_start,
+    WP.week_end,
+    WP.period_type,
+    WP.week_order,
+    WP.campaign_year,
+    TXN.SNDCOUNTRY_CODE AS COUNTRY_CODE,
     TXN.SNDCUSTOMER_KEY,
-    TXN.RCVPAYING_DATETIME,
-    DATE(TXN.RCVPAYING_DATETIME) AS txn_date,
     TXN.PRICING_CHANNEL,
-    TXN.SNDCOUNTRY_CODE,
-    TXN.RCVCOUNTRY_CODE,
-    TXN.RCV_SUPER_REGION,
+    TXN.MTCN,
     CASE
         WHEN TXN.RCV_SUPER_REGION = 'AFRICA' THEN 'Africa'
         ELSE 'Rest of World'
     END AS receive_region,
-    CASE
-        -- R12: Last 12 months of activity (rolling lookback)
-        WHEN DATE(TXN.RCVPAYING_DATETIME) >= DATEADD(MONTH, -12, DATE(CURRENT_DATE))
-             AND DATE(TXN.RCVPAYING_DATETIME) < DATE(CURRENT_DATE)
-        THEN 'R12'
-    END AS history_period
+    TXN.RCVPAYING_DATETIME,
+    DATE(TXN.RCVPAYING_DATETIME) AS txn_date
 FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW TXN
-WHERE DATE(TXN.RCVPAYING_DATETIME) >= DATEADD(MONTH, -12, DATE(CURRENT_DATE))  -- Only look back 12 months
-  AND DATE(TXN.RCVPAYING_DATETIME) < DATE(CURRENT_DATE)
-  AND TXN.SNDCOUNTRY_CODE IN ('US', 'CA')
-  AND TXN.RCVPAYING_DATETIME IS NOT NULL;
+INNER JOIN CAR_874_WEEKLY_PERIODS WP
+    ON DATE(TXN.RCVPAYING_DATETIME) >= WP.week_start
+    AND DATE(TXN.RCVPAYING_DATETIME) <= WP.week_end
+WHERE TXN.SNDCOUNTRY_CODE IN ('US', 'CA')
+  AND TXN.RCVPAYING_DATETIME IS NOT NULL
+  AND (
+      (TXN.RCVPAYING_DATETIME >= '2025-12-01' AND TXN.RCVPAYING_DATETIME < '2026-02-02')
+      OR
+      (TXN.RCVPAYING_DATETIME >= '2024-12-02' AND TXN.RCVPAYING_DATETIME < '2025-02-03')
+  );
 
-
--- Validation query
-SELECT
-    SNDCOUNTRY_CODE,
+-- Validation: Check raw transaction counts
+SELECT 
+    campaign_year,
+    period_type,
+    COUNTRY_CODE,
     receive_region,
-    MIN(RCVPAYING_DATETIME) AS earliest_txn,
-    MAX(RCVPAYING_DATETIME) AS latest_txn,
-    COUNT(DISTINCT SNDCUSTOMER_KEY) AS unique_customers,
-    COUNT(*) AS total_txns
-FROM CAR_874_HISTORICAL_TXNS
-GROUP BY SNDCOUNTRY_CODE, receive_region;
+    COUNT(*) AS total_txns,
+    COUNT(DISTINCT SNDCUSTOMER_KEY) AS unique_customers
+FROM CAR_874_RAW_TXNS
+GROUP BY 1,2,3,4
+ORDER BY 1,2,3,4;
 
 
 -- ========================================================================
--- Table 4: Current Period Transactions with Customer Classification
+-- Table 3: AGGREGATED Transactions (Customer-Week-Region level)
 -- ========================================================================
-CREATE OR REPLACE TABLE CAR_874_WEEKLY_TXNS AS
-WITH all_periods_txns AS (
-    -- Get all transactions across both years (2024-2025 and 2025-2026)
-    SELECT
-        WP.period_name,
-        WP.week_start,
-        WP.week_end,
-        WP.period_type,
-        WP.week_order,
-        WP.campaign_year,
-        CG.Country_code,
-        TXN.SNDCUSTOMER_KEY,
-        TXN.PRICING_CHANNEL,
-        TXN.MTCN,
-        CASE
-            WHEN TXN.RCV_SUPER_REGION = 'AFRICA' THEN 'Africa'
-            ELSE 'Rest of World'
-        END AS receive_region,
-        TXN.RCVPAYING_DATETIME,
-        DATE(TXN.RCVPAYING_DATETIME) AS txn_date
-    FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW TXN
-    INNER JOIN CAR_874_CUSTOMER_GEOGRAPHY CG
-        ON TXN.SNDCUSTOMER_KEY = CG.CUSTOMER_KEY
-    INNER JOIN CAR_874_WEEKLY_PERIODS WP
-        ON DATE(TXN.RCVPAYING_DATETIME) >= WP.week_start
-        AND DATE(TXN.RCVPAYING_DATETIME) <= WP.week_end
-    WHERE TXN.SNDCOUNTRY_CODE IN ('US', 'CA')
-      AND TXN.RCVPAYING_DATETIME IS NOT NULL
-      AND (
-          -- 2025-2026 Campaign
-          (TXN.RCVPAYING_DATETIME >= '2025-12-01' AND TXN.RCVPAYING_DATETIME < '2026-02-02')
-          OR
-          -- 2024-2025 YoY Comparison
-          (TXN.RCVPAYING_DATETIME >= '2024-12-02' AND TXN.RCVPAYING_DATETIME < '2025-02-03')
-      )
-),
-txn_aggregated AS (
-    -- Aggregate by customer, week, and receive region
-    SELECT
-        period_name,
-        week_start,
-        week_end,
-        period_type,
-        week_order,
-        campaign_year,
-        SNDCUSTOMER_KEY,
-        PRICING_CHANNEL,
-        receive_region,
-        COUNT(MTCN) AS txns
-    FROM all_periods_txns
-    GROUP BY ALL
-),
-r12_check AS (
-    -- Check if customer had R12 activity before their current transaction week
-    SELECT DISTINCT
-        CT.SNDCUSTOMER_KEY,
-        CT.week_start,
-        CT.campaign_year,
-        CT.receive_region,
-        1 AS has_r12
-    FROM txn_aggregated CT
-    INNER JOIN CAR_874_HISTORICAL_TXNS HT
-        ON CT.SNDCUSTOMER_KEY = HT.SNDCUSTOMER_KEY
-        AND HT.receive_region = CT.receive_region
-        AND HT.history_period = 'R12'
-        -- Look back exactly 12 months from the transaction week
-        AND DATE(HT.RCVPAYING_DATETIME) >= DATEADD(MONTH, -12, CT.week_start)
-        AND DATE(HT.RCVPAYING_DATETIME) < CT.week_start
-),
-previous_week_check AS (
-    -- Check if customer had activity in the previous week (for EXISTING classification)
-    SELECT DISTINCT
-        CT.SNDCUSTOMER_KEY,
-        CT.week_start,
-        CT.campaign_year,
-        CT.receive_region,
-        1 AS has_prev_week
-    FROM txn_aggregated CT
-    INNER JOIN txn_aggregated PT
-        ON CT.SNDCUSTOMER_KEY = PT.SNDCUSTOMER_KEY
-        AND CT.receive_region = PT.receive_region
-        AND CT.campaign_year = PT.campaign_year
-        -- Previous week is the week immediately before current week
-        AND PT.week_start = DATEADD(DAY, -7, CT.week_start)
-)
+CREATE OR REPLACE TABLE CAR_874_AGGREGATED_TXNS AS
 SELECT
-    CT.*,
+    period_name,
+    week_start,
+    week_end,
+    period_type,
+    week_order,
+    campaign_year,
+    COUNTRY_CODE,
+    SNDCUSTOMER_KEY,
+    PRICING_CHANNEL,
+    receive_region,
+    COUNT(MTCN) AS txns,
+    MIN(txn_date) AS first_txn_date,
+    MAX(txn_date) AS last_txn_date
+FROM CAR_874_RAW_TXNS
+GROUP BY 
+    period_name,
+    week_start,
+    week_end,
+    period_type,
+    week_order,
+    campaign_year,
+    COUNTRY_CODE,
+    SNDCUSTOMER_KEY,
+    PRICING_CHANNEL,
+    receive_region;
+
+-- Validation: Should match raw counts when aggregated
+SELECT 
+    campaign_year,
+    period_type,
+    COUNT(DISTINCT SNDCUSTOMER_KEY) AS unique_customers,
+    SUM(txns) AS total_txns
+FROM CAR_874_AGGREGATED_TXNS
+GROUP BY 1,2
+ORDER BY 1,2;
+
+
+-- ========================================================================
+-- Table 4: R12 CHECK (Customers with R12 history)
+-- ========================================================================
+CREATE OR REPLACE TABLE CAR_874_R12_CHECK AS
+SELECT DISTINCT
+    CT.SNDCUSTOMER_KEY,
+    CT.week_start,
+    CT.campaign_year,
+    CT.COUNTRY_CODE,
+    CT.receive_region,
+    1 AS has_r12,
+    COUNT(DISTINCT HT.MTCN) AS r12_txn_count,
+    MIN(DATE(HT.RCVPAYING_DATETIME)) AS r12_first_txn,
+    MAX(DATE(HT.RCVPAYING_DATETIME)) AS r12_last_txn
+FROM CAR_874_AGGREGATED_TXNS CT
+INNER JOIN SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW HT
+    ON CT.SNDCUSTOMER_KEY = HT.SNDCUSTOMER_KEY
+    AND CT.COUNTRY_CODE = HT.SNDCOUNTRY_CODE
+    AND CASE
+          WHEN HT.RCV_SUPER_REGION = 'AFRICA' THEN 'Africa'
+          ELSE 'Rest of World'
+        END = CT.receive_region
+    AND DATE(HT.RCVPAYING_DATETIME) >= DATEADD(MONTH, -12, CT.week_start)
+    AND DATE(HT.RCVPAYING_DATETIME) < CT.week_start
+    AND HT.RCVPAYING_DATETIME IS NOT NULL
+GROUP BY 1,2,3,4,5;
+
+-- Validation: Check R12 customers by period
+SELECT 
+    campaign_year,
+    period_type,
+    COUNTRY_CODE,
+    receive_region,
+    COUNT(DISTINCT SNDCUSTOMER_KEY) AS customers_with_r12_history
+FROM CAR_874_R12_CHECK R12
+INNER JOIN CAR_874_WEEKLY_PERIODS WP
+    ON R12.week_start = WP.week_start
+    AND R12.campaign_year = WP.campaign_year
+GROUP BY 1,2,3,4
+ORDER BY 1,2,3,4;
+
+
+-- ========================================================================
+-- Table 5: PREVIOUS WEEK CHECK (Customers active in previous week)
+-- ========================================================================
+CREATE OR REPLACE TABLE CAR_874_PREV_WEEK_CHECK AS
+SELECT DISTINCT
+    CT.SNDCUSTOMER_KEY,
+    CT.week_start,
+    CT.campaign_year,
+    CT.COUNTRY_CODE,
+    CT.receive_region,
+    1 AS has_prev_week,
+    PT.week_start AS prev_week_start,
+    PT.txns AS prev_week_txns
+FROM CAR_874_AGGREGATED_TXNS CT
+INNER JOIN CAR_874_AGGREGATED_TXNS PT
+    ON CT.SNDCUSTOMER_KEY = PT.SNDCUSTOMER_KEY
+    AND CT.COUNTRY_CODE = PT.COUNTRY_CODE
+    AND CT.receive_region = PT.receive_region
+    AND CT.campaign_year = PT.campaign_year
+    AND PT.week_start = DATEADD(DAY, -7, CT.week_start);
+
+-- Validation: Check customers with previous week activity
+SELECT 
+    campaign_year,
+    period_name,
+    COUNTRY_CODE,
+    receive_region,
+    COUNT(DISTINCT SNDCUSTOMER_KEY) AS customers_with_prev_week_activity
+FROM CAR_874_PREV_WEEK_CHECK PW
+INNER JOIN CAR_874_WEEKLY_PERIODS WP
+    ON PW.week_start = WP.week_start
+    AND PW.campaign_year = WP.campaign_year
+GROUP BY 1,2,3,4
+ORDER BY 1,2,3,4;
+
+
+-- ========================================================================
+-- Table 6: CUSTOMER CLASSIFICATION (Final classification logic)
+-- ========================================================================
+CREATE OR REPLACE TABLE CAR_874_CUSTOMER_CLASSIFICATION AS
+SELECT
+    CT.period_name,
+    CT.week_start,
+    CT.week_end,
+    CT.period_type,
+    CT.week_order,
+    CT.campaign_year,
+    CT.COUNTRY_CODE,
+    CT.SNDCUSTOMER_KEY,
+    CT.PRICING_CHANNEL,
+    CT.receive_region,
+    CT.txns,
+    CT.first_txn_date,
+    CT.last_txn_date,
+    
+    -- R12 flags
+    COALESCE(R12.has_r12, 0) AS has_r12,
+    R12.r12_txn_count,
+    R12.r12_first_txn,
+    R12.r12_last_txn,
+    
+    -- Previous week flags
+    COALESCE(PW.has_prev_week, 0) AS has_prev_week,
+    PW.prev_week_start,
+    PW.prev_week_txns,
+    
     -- Customer classification
     CASE
-        -- EXISTING: Has transaction in current week AND previous week
         WHEN PW.has_prev_week = 1 THEN 'EXISTING'
-        -- NEW: No R12 history
         WHEN R12.has_r12 IS NULL THEN 'NEW'
-        -- All others are considered EXISTING (had R12 but not prev week)
         ELSE 'EXISTING'
     END AS customer_type,
+    
     CASE
         WHEN R12.has_r12 IS NULL THEN 'Y'
         ELSE 'N'
     END AS is_new_customer
-FROM txn_aggregated CT
-LEFT JOIN r12_check R12
+    
+FROM CAR_874_AGGREGATED_TXNS CT
+LEFT JOIN CAR_874_R12_CHECK R12
     ON CT.SNDCUSTOMER_KEY = R12.SNDCUSTOMER_KEY
     AND CT.week_start = R12.week_start
     AND CT.campaign_year = R12.campaign_year
+    AND CT.COUNTRY_CODE = R12.COUNTRY_CODE
     AND CT.receive_region = R12.receive_region
-LEFT JOIN previous_week_check PW
+LEFT JOIN CAR_874_PREV_WEEK_CHECK PW
     ON CT.SNDCUSTOMER_KEY = PW.SNDCUSTOMER_KEY
     AND CT.week_start = PW.week_start
     AND CT.campaign_year = PW.campaign_year
+    AND CT.COUNTRY_CODE = PW.COUNTRY_CODE
     AND CT.receive_region = PW.receive_region;
+
+-- Validation: Check customer type distribution
+SELECT 
+    campaign_year,
+    period_type,
+    COUNTRY_CODE,
+    receive_region,
+    customer_type,
+    COUNT(DISTINCT SNDCUSTOMER_KEY) AS unique_customers,
+    SUM(txns) AS total_txns
+FROM CAR_874_CUSTOMER_CLASSIFICATION
+GROUP BY 1,2,3,4,5
+ORDER BY 1,2,3,4,5;
 
 
 -- ========================================================================
 -- FINAL OUTPUT: Lift Analysis Reporting
 -- ========================================================================
-
--- Main Summary Report
 SELECT
     WP.campaign_year,
     WP.period_name,
@@ -205,43 +271,39 @@ SELECT
     WP.week_end,
     WP.period_type,
     WP.week_order,
-    COALESCE(WT.Country_code, 'All Countries') AS send_country,
-    COALESCE(WT.receive_region, 'All Regions') AS receive_region,
+    COALESCE(CC.COUNTRY_CODE, SC.COUNTRY_CODE) AS send_country,
+    COALESCE(CC.receive_region, RR.receive_region) AS receive_region,
     
-    -- New Customer Counts (Primary KPI)
-    COUNT(DISTINCT CASE
-        WHEN WT.customer_type = 'NEW'
-        THEN WT.SNDCUSTOMER_KEY
-    END) AS new_customers,
+    -- New Customer Counts
+    COUNT(DISTINCT CASE WHEN CC.customer_type = 'NEW' THEN CC.SNDCUSTOMER_KEY END) AS new_customers,
     
     -- Existing Customer Counts
-    COUNT(DISTINCT CASE
-        WHEN WT.customer_type = 'EXISTING'
-        THEN WT.SNDCUSTOMER_KEY
-    END) AS existing_customers,
+    COUNT(DISTINCT CASE WHEN CC.customer_type = 'EXISTING' THEN CC.SNDCUSTOMER_KEY END) AS existing_customers,
     
     -- Total metrics
-    COUNT(DISTINCT WT.SNDCUSTOMER_KEY) AS total_customers,
-    SUM(WT.txns) AS total_transactions,
+    COUNT(DISTINCT CC.SNDCUSTOMER_KEY) AS total_customers,
+    SUM(CC.txns) AS total_transactions,
     
     -- New customer transactions
-    SUM(CASE WHEN WT.customer_type = 'NEW' THEN WT.txns END) AS new_customer_txns,
-    SUM(CASE WHEN WT.customer_type = 'EXISTING' THEN WT.txns END) AS existing_customer_txns
+    SUM(CASE WHEN CC.customer_type = 'NEW' THEN CC.txns END) AS new_customer_txns,
+    SUM(CASE WHEN CC.customer_type = 'EXISTING' THEN CC.txns END) AS existing_customer_txns
 
 FROM CAR_874_WEEKLY_PERIODS WP
 CROSS JOIN (
-    SELECT DISTINCT COUNTRY_CODE FROM CAR_874_CUSTOMER_GEOGRAPHY
+    SELECT 'US' AS COUNTRY_CODE
+    UNION ALL
+    SELECT 'CA'
 ) SC
 CROSS JOIN (
     SELECT 'Africa' AS receive_region
     UNION ALL
     SELECT 'Rest of World'
 ) RR
-LEFT JOIN CAR_874_WEEKLY_TXNS WT
-    ON WP.period_name = WT.period_name
-    AND WP.campaign_year = WT.campaign_year
-    AND SC.COUNTRY_CODE = WT.COUNTRY_CODE
-    AND RR.receive_region = WT.receive_region
+LEFT JOIN CAR_874_CUSTOMER_CLASSIFICATION CC
+    ON WP.period_name = CC.period_name
+    AND WP.campaign_year = CC.campaign_year
+    AND SC.COUNTRY_CODE = CC.COUNTRY_CODE
+    AND RR.receive_region = CC.receive_region
 GROUP BY
     WP.campaign_year,
     WP.period_name,
@@ -249,8 +311,132 @@ GROUP BY
     WP.week_end,
     WP.period_type,
     WP.week_order,
-    COALESCE(WT.receive_region, 'All Regions')
+    COALESCE(CC.COUNTRY_CODE, SC.COUNTRY_CODE),
+    COALESCE(CC.receive_region, RR.receive_region)
 ORDER BY
     WP.campaign_year,
     WP.week_order,
+    send_country,
     receive_region;
+```
+
+---
+
+## Validation Queries You Can Run
+
+### 1. **Check Raw Transaction Counts**
+```sql
+SELECT 
+    campaign_year,
+    period_name,
+    COUNTRY_CODE,
+    receive_region,
+    COUNT(*) AS txn_count,
+    COUNT(DISTINCT SNDCUSTOMER_KEY) AS customer_count
+FROM CAR_874_RAW_TXNS
+GROUP BY 1,2,3,4
+ORDER BY 1,2,3,4;
+```
+
+### 2. **Spot Check a Specific Customer's Journey**
+```sql
+-- Pick a random new customer
+SELECT SNDCUSTOMER_KEY
+FROM CAR_874_CUSTOMER_CLASSIFICATION
+WHERE customer_type = 'NEW'
+  AND campaign_year = 2025
+LIMIT 1;
+
+-- Then trace their full history
+SELECT 
+    'CURRENT' AS source,
+    period_name,
+    week_start,
+    customer_type,
+    has_r12,
+    has_prev_week,
+    txns
+FROM CAR_874_CUSTOMER_CLASSIFICATION
+WHERE SNDCUSTOMER_KEY = '<customer_key_from_above>'
+  AND campaign_year = 2025
+
+UNION ALL
+
+SELECT 
+    'R12_HISTORY' AS source,
+    NULL AS period_name,
+    DATE(RCVPAYING_DATETIME) AS week_start,
+    NULL AS customer_type,
+    NULL AS has_r12,
+    NULL AS has_prev_week,
+    1 AS txns
+FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+WHERE SNDCUSTOMER_KEY = '<customer_key_from_above>'
+  AND DATE(RCVPAYING_DATETIME) >= DATEADD(MONTH, -12, DATE('2025-12-01'))
+  AND DATE(RCVPAYING_DATETIME) < DATE('2025-12-01')
+ORDER BY week_start;
+```
+
+### 3. **Verify R12 Logic**
+```sql
+-- Compare: How many customers in Week 1 have R12 vs don't
+SELECT 
+    CC.period_name,
+    CC.customer_type,
+    COUNT(DISTINCT CC.SNDCUSTOMER_KEY) AS customer_count,
+    AVG(COALESCE(R12.r12_txn_count, 0)) AS avg_r12_txns
+FROM CAR_874_CUSTOMER_CLASSIFICATION CC
+LEFT JOIN CAR_874_R12_CHECK R12
+    ON CC.SNDCUSTOMER_KEY = R12.SNDCUSTOMER_KEY
+    AND CC.week_start = R12.week_start
+    AND CC.campaign_year = R12.campaign_year
+WHERE CC.period_name = 'Campaign Week 1'
+  AND CC.campaign_year = 2025
+GROUP BY 1,2;
+```
+
+### 4. **Check for Data Issues**
+```sql
+-- Should have NO nulls in classification
+SELECT 
+    COUNT(*) AS total_rows,
+    COUNT(customer_type) AS classified_rows,
+    COUNT(*) - COUNT(customer_type) AS unclassified_rows
+FROM CAR_874_CUSTOMER_CLASSIFICATION;
+
+-- Should NOT have customers classified as NEW who have R12 history
+SELECT 
+    CC.SNDCUSTOMER_KEY,
+    CC.period_name,
+    CC.customer_type,
+    R12.r12_txn_count,
+    R12.r12_first_txn,
+    R12.r12_last_txn
+FROM CAR_874_CUSTOMER_CLASSIFICATION CC
+INNER JOIN CAR_874_R12_CHECK R12
+    ON CC.SNDCUSTOMER_KEY = R12.SNDCUSTOMER_KEY
+    AND CC.week_start = R12.week_start
+    AND CC.campaign_year = R12.campaign_year
+WHERE CC.customer_type = 'NEW'
+LIMIT 100;  -- Should return 0 rows
+```
+
+---
+
+## Table Breakdown Summary
+
+| Table | Purpose | Validation Query |
+|-------|---------|------------------|
+| `CAR_874_RAW_TXNS` | All transactions in analysis period | Count by week/country/region |
+| `CAR_874_AGGREGATED_TXNS` | Customer-week-region aggregates | Sum should match raw |
+| `CAR_874_R12_CHECK` | Customers with 12-month history | Count by period/country |
+| `CAR_874_PREV_WEEK_CHECK` | Customers active in prior week | Compare week-over-week |
+| `CAR_874_CUSTOMER_CLASSIFICATION` | Final customer type assignment | Distribution by type |
+
+This structure makes it easy to:
+- ✅ Debug specific customers
+- ✅ Validate each classification step
+- ✅ Spot data quality issues
+- ✅ Understand the logic flow
+
+Would you like me to add any additional validation queries or explain any specific part?
