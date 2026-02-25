@@ -1,344 +1,271 @@
--- ============================================================================
--- STEP 1: Create Base Customer Channel Monthly Table
--- Using WUDNA_TXN_MASTER_ANALYTICS_VW for actual transaction data
--- ============================================================================
-CREATE OR REPLACE TABLE CAR_717_Customer_Channel_Monthly1 AS
-SELECT
-    DATE_TRUNC('MONTH', TXN.RCVPAYING_DATETIME) AS MTH_YR,
-    TXN.SNDCUSTOMER_KEY,
-    TXN.SNDCOUNTRY_CODE AS COUNTRY_CODE,
-    TXN.SEND_COUNTRY_NAME,
+i have a script:
+CREATE OR REPLACE TABLE AM_BIRD_campaign_wise_sms_communications_TEST AS
+WITH AK_BIRD_CAMPAIGN_WISE_SMS_COMMUNICATIONS as (
 
-    -- CASE 
-    --     WHEN TXN.PRICING_CHANNEL = 'WEB' THEN 'WEB'
-    --     WHEN TXN.PRICING_CHANNEL = 'APP' THEN 'APP'
-    --     ELSE 'Others'
-    -- END AS CURRENT_CHANNEL,
+SELECT 
+A.customer_key,
+NVL(B.ACTIVITY_CODE,'SASAA') ACTIVITY_CODE,
+	upper(A.NAME) campaign_desc,
+    upper(a.NAME) as campaign_desc_1,
+	//date_trunc('DAY', A.ACTIONDATETIME) as release_2_vendor_date,
+    A.ACTIONDATETIME as release_2_vendor_date,
+	country AS country,
+    b.EVENT_CAPTURED_DAY,
+    b.PREV_EVENT_CAPTURED_DT,
+    A.DAYS_BETWEEN_COMMUNICATION,
+    SENT,
+    DELIVERED,
+    UNDELIVERED,
+    ACTIONDATETIME,
+    NAME,
+FROM 
+    //--WUDNA.SUMMARY_GEN.BIRD_WU_MARKETING_SMS_SENT_VW A
+    AK_BIRD_WU_MARKETING_SMS_SENT_BASE A
+LEFT JOIN 
+    (select 
+    a.*,
 
-    COUNT(DISTINCT TXN.TXN_ID) AS R1_TXNS,
-    COUNT(DISTINCT CASE WHEN TXN.PRICING_CHANNEL = 'APP' THEN TXN.TXN_ID END) AS R1_APP_TXNS,
-    COUNT(DISTINCT CASE WHEN TXN.PRICING_CHANNEL = 'WEB' THEN TXN.TXN_ID END) AS R1_WEBSITE_TXNS,
+    from AK_BIRD_SOLICITATION_HISTORY_VW a 
 
-    SUM(NVL(TXN.SNDPRINCIPAL_USD, 0)) AS R1_PRINCIPAL,
-    SUM(NVL(TXN.TOTAL_CHARGES_USD, 0) + NVL(TXN.NET_FOREIGN_EXCHANGE, 0)) AS R1_REVENUE
+    where substr(activity_code,3,1) = 'S'
+    ) b
 
-FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW TXN
-WHERE TXN.RCVPAYING_DATETIME >= '2023-01-01'
-  AND TXN.RCVPAYING_DATETIME <= '2025-10-31'
-  AND TXN.SEND_COUNTRY_NAME = 'INDIA'
-  AND TXN.SNDCUSTOMER_KEY IS NOT NULL
-  AND TXN.VALID_TXN_TYPE_CODE = 'Y'
-  AND TXN.REFUND_TRXN = 'N'
-  AND NVL(TXN.SNDPRINCIPAL_USD, 0) > 0
-GROUP BY 1, 2, 3, 4;
+ON 
+a.customer_key = b.customer_key AND 
+date_trunc('DAY', date(A.ACTIONDATETIME)) = date_trunc('DAY', b.release_2_vendor_date) AND 
+trim(upper(a.NAME)) = upper(b.campaign_desc)
 
--- Validation
-SELECT
-    MTH_YR,
-    COUNT(DISTINCT SNDCUSTOMER_KEY) AS CUSTOMERS,
-    SUM(R1_TXNS) AS TOTAL_TXNS
-FROM CAR_717_Customer_Channel_Monthly1
-where MTH_YR = '2025-01-01 00:00:00.000'
-GROUP BY 1
-ORDER BY 1;-- 3070	4961(JAN 2025)
---Cust R1_txns
---4266 7,776(Total)
--- ============================================================================
--- STEP 1B: Calculate R12 and R2_TO_R13 Metrics Using Window Functions
--- ============================================================================
-CREATE OR REPLACE TABLE CAR_717_Customer_Channel_R12_Metrics1 AS
-SELECT
-    MTH_YR,
-    SNDCUSTOMER_KEY,
-    COUNTRY_CODE,
-    SEND_COUNTRY_NAME,
-    R1_TXNS,
-    R1_APP_TXNS,
-    R1_WEBSITE_TXNS,
-    R1_PRINCIPAL,
-    R1_REVENUE,
-
-     -- Determine current channel based on R1 transactions
-    CASE 
-        WHEN R1_APP_TXNS > 0 AND R1_WEBSITE_TXNS > 0 THEN 'APP+WEB'
-        WHEN R1_APP_TXNS > 0 THEN 'APP'
-        WHEN R1_WEBSITE_TXNS > 0 THEN 'WEB'
-        ELSE 'OTHER'--Other would be R12 INACTIVE CUSTOMERS
-    END AS CURRENT_CHANNEL,
-    
-    -- Calculate R12 metrics (rolling 12 months including current month)
-    SUM(R1_TXNS) OVER (
-        PARTITION BY SNDCUSTOMER_KEY 
-        ORDER BY MTH_YR 
-        ROWS BETWEEN 11 PRECEDING AND CURRENT ROW
-    ) AS R12_TXNS,
-    
-    SUM(R1_APP_TXNS) OVER (
-        PARTITION BY SNDCUSTOMER_KEY 
-        ORDER BY MTH_YR 
-        ROWS BETWEEN 11 PRECEDING AND CURRENT ROW
-    ) AS R12_APP_TXNS,
-    
-    SUM(R1_WEBSITE_TXNS) OVER (
-        PARTITION BY SNDCUSTOMER_KEY 
-        ORDER BY MTH_YR 
-        ROWS BETWEEN 11 PRECEDING AND CURRENT ROW
-    ) AS R12_WEBSITE_TXNS,
-    
-    SUM(R1_PRINCIPAL) OVER (
-        PARTITION BY SNDCUSTOMER_KEY 
-        ORDER BY MTH_YR 
-        ROWS BETWEEN 11 PRECEDING AND CURRENT ROW
-    ) AS R12_PRINCIPAL,
-    
-    SUM(R1_REVENUE) OVER (
-        PARTITION BY SNDCUSTOMER_KEY 
-        ORDER BY MTH_YR 
-        ROWS BETWEEN 11 PRECEDING AND CURRENT ROW
-    ) AS R12_REVENUE,
-    
-    -- Calculate R2_TO_R13 metrics (previous 12 months, excluding current month)
-    SUM(R1_TXNS) OVER (
-        PARTITION BY SNDCUSTOMER_KEY 
-        ORDER BY MTH_YR 
-        ROWS BETWEEN 12 PRECEDING AND 1 PRECEDING
-    ) AS R2_TO_R13_TXNS,
-    
-    SUM(R1_APP_TXNS) OVER (
-        PARTITION BY SNDCUSTOMER_KEY 
-        ORDER BY MTH_YR 
-        ROWS BETWEEN 12 PRECEDING AND 1 PRECEDING
-    ) AS R2_TO_R13_APP_TXNS,
-    
-    SUM(R1_WEBSITE_TXNS) OVER (
-        PARTITION BY SNDCUSTOMER_KEY 
-        ORDER BY MTH_YR 
-        ROWS BETWEEN 12 PRECEDING AND 1 PRECEDING
-    ) AS R2_TO_R13_WEBSITE_TXNS
-    
-FROM CAR_717_Customer_Channel_Monthly1;
-
--- Validation
-SELECT
-    MTH_YR,
-    COUNT(DISTINCT SNDCUSTOMER_KEY) AS CUSTOMERS,
-    SUM(R1_TXNS) AS R1_TXNS,
-    SUM(R12_TXNS) AS R12_TXNS,
-    SUM(R2_TO_R13_TXNS) AS R2_TO_R13_TXNS
-FROM CAR_717_Customer_Channel_R12_Metrics1
-WHERE MTH_YR = '2025-01-01'
-GROUP BY 1
-ORDER BY 1;--3070	4961	23296	19018(Jan 2025)
---Cust  R1_Txns R12_Txns R2_to_r13_txns
---4266	7776	38375	31674
-
--- ============================================================================
--- STEP 2: Determine Customer Type and Apply Channel Logic
--- ============================================================================
-CREATE OR REPLACE TABLE CAR_717_Customer_Channel_Final1 AS
-SELECT
-    MTH_YR,
-    SNDCUSTOMER_KEY,
-    COUNTRY_CODE,
-    SEND_COUNTRY_NAME,
-    
-    -- Determine customer type based on R2_TO_R13 activity
-    CASE 
-        WHEN NVL(R2_TO_R13_TXNS, 0) = 0 AND R12_TXNS > 0 THEN 'NEW'
-        WHEN NVL(R2_TO_R13_TXNS, 0) > 0 AND R12_TXNS > 0 THEN 'EXISTING'
-        WHEN NVL(R2_TO_R13_TXNS, 0) > 0 AND R1_TXNS = 0 THEN 'R1_INACTIVE'
-        WHEN NVL(R2_TO_R13_TXNS, 0) = 0 AND R12_TXNS = 0 THEN 'R13_INACTIVE'
-        ELSE 'OTHER' 
-    END AS CUSTOMER_TYPE,
-    
-    -- Determine current channel based on R1 transactions
-    CASE 
-        WHEN R1_APP_TXNS > 0 AND R1_WEBSITE_TXNS > 0 THEN 'APP+WEB'
-        WHEN R1_APP_TXNS > 0 THEN 'APP'
-        WHEN R1_WEBSITE_TXNS > 0 THEN 'WEB'
-        ELSE 'OTHER'
-    END AS CURRENT_CHANNEL,
-    
-    R1_TXNS,
-    R1_APP_TXNS,
-    R1_WEBSITE_TXNS,
-    R1_PRINCIPAL,
-    R1_REVENUE,
-    R12_TXNS,
-    R12_APP_TXNS,
-    R12_WEBSITE_TXNS,
-    R12_PRINCIPAL,
-    R12_REVENUE,
-    R2_TO_R13_TXNS,
-    R2_TO_R13_APP_TXNS,
-    R2_TO_R13_WEBSITE_TXNS
-    
-FROM CAR_717_Customer_Channel_R12_Metrics1
-WHERE R12_TXNS > 0
-    AND MTH_YR >= '2023-01-01';
-
--- Validation
-SELECT
-    MTH_YR,
-    CUSTOMER_TYPE,
-    CURRENT_CHANNEL,
-    COUNT(DISTINCT SNDCUSTOMER_KEY) AS CUSTOMERS,
-    SUM(R1_APP_TXNS) AS APP_TXNS,
-    SUM(R1_WEBSITE_TXNS) AS WEB_TXNS
-FROM CAR_717_Customer_Channel_Final1
-WHERE MTH_YR = '2025-01-01'
-GROUP BY 1, 2, 3
-ORDER BY 1, 2, 3;--3,070 4,961( Jan 2025)
+),
 
 
--- ============================================================================
--- STEP 3: Create Customer Segment Classification
--- ============================================================================
-CREATE OR REPLACE TABLE CAR_717_Customer_Segments1 AS
-SELECT
-    MTH_YR,
-    SNDCUSTOMER_KEY,
-    COUNTRY_CODE,
-    SEND_COUNTRY_NAME,
-    CUSTOMER_TYPE,
-    CURRENT_CHANNEL,
-    R1_TXNS,
-    R1_APP_TXNS,
-    R1_WEBSITE_TXNS,
-    R1_PRINCIPAL,
-    R1_REVENUE,
-    R12_TXNS,
-    R12_APP_TXNS,
-    R12_WEBSITE_TXNS,
-    R12_PRINCIPAL,
-    R12_REVENUE,
-    R2_TO_R13_TXNS,
-    R2_TO_R13_APP_TXNS,
-    R2_TO_R13_WEBSITE_TXNS,
+SMS_Undelivered_main as (
+    SELECT 
+        DISTINCT customer_key AS customer_id ,
+        name as campaign_desc
     
-    -- Customer Segment Classification
-    CASE
-        -- New customers by channel
-        WHEN CUSTOMER_TYPE = 'NEW' AND CURRENT_CHANNEL = 'APP' THEN 'New to App'
-        WHEN CUSTOMER_TYPE = 'NEW' AND CURRENT_CHANNEL = 'WEB' THEN 'New to Web'
-        WHEN CUSTOMER_TYPE = 'NEW' AND CURRENT_CHANNEL = 'APP+WEB' THEN 'New to App+Web'
-        WHEN CUSTOMER_TYPE = 'NEW' THEN 'New to Other Channel'
-        
-        -- Migration from Web to App
-        WHEN NVL(R2_TO_R13_WEBSITE_TXNS, 0) > 0 
-             AND NVL(R2_TO_R13_APP_TXNS, 0) = 0 
-             AND R1_APP_TXNS > 0 
-             THEN 'Migrated Web to App'
-        
-        -- Existing customers retained on their channel
-        WHEN CUSTOMER_TYPE = 'EXISTING' AND CURRENT_CHANNEL = 'APP' THEN 'Retained on App'
-        WHEN CUSTOMER_TYPE = 'EXISTING' AND CURRENT_CHANNEL = 'WEB' THEN 'Retained on Web'
-        WHEN CUSTOMER_TYPE = 'EXISTING' AND CURRENT_CHANNEL = 'APP+WEB' THEN 'Retained on App+Web'
-        
-        ELSE 'Other'
-    END AS CUSTOMER_SEGMENT
+    FROM 
+    (
+    SELECT
+        customer_key,
+        NAME,
+    FROM 
+        //--WUDNA.SUMMARY_GEN.BIRD_WU_MARKETING_SMS_SENT_VW B
+        AK_BIRD_WU_MARKETING_SMS_SENT_BASE B
+    WHERE 
+        customer_key IS NOT NULL 
+        AND DELIVERED < 1
+    )
     
-FROM CAR_717_Customer_Channel_Final1;
-
--- Validation
-SELECT
-    MTH_YR,
-    CUSTOMER_SEGMENT,
-    Count(SNDCUSTOMER_KEY),
-    COUNT(DISTINCT SNDCUSTOMER_KEY) AS CUSTOMERS,
-    SUM(R1_APP_TXNS) AS R1_APP_TXNS,
-    SUM(R2_TO_R13_WEBSITE_TXNS) AS R2_TO_R13_WEB_TXNS,
-    SUM(R2_TO_R13_APP_TXNS) AS R2_TO_R13_APP_TXNS,
-FROM CAR_717_Customer_Segments1
-WHERE MTH_YR = '2025-01-01'
-GROUP BY 1, 2
-ORDER BY 1, 2 ;-- 3,070 
+    //-- WHERE
+    //--     DELIVERED < 1
+),
 
 
--- ============================================================================
--- STEP 4: Create Final Monthly Report
--- ============================================================================
-CREATE OR REPLACE TABLE CAR_717_Monthly_Report1 AS
-SELECT
-    CS.MTH_YR,
-    CS.SEND_COUNTRY_NAME,
-    CS.CUSTOMER_TYPE,
-    CS.CURRENT_CHANNEL,
-    CS.CUSTOMER_SEGMENT,
-    
-    -- Customer Counts
-    COUNT(DISTINCT CS.SNDCUSTOMER_KEY) AS TOTAL_CUSTOMERS,
-    
-    -- New Customer Counts by Channel
-    COUNT(DISTINCT CASE WHEN CS.CUSTOMER_TYPE = 'NEW' AND CS.CURRENT_CHANNEL = 'APP' 
-                        THEN CS.SNDCUSTOMER_KEY END) AS NEW_TO_APP,
-    COUNT(DISTINCT CASE WHEN CS.CUSTOMER_TYPE = 'NEW' AND CS.CURRENT_CHANNEL = 'WEB' 
-                        THEN CS.SNDCUSTOMER_KEY END) AS NEW_TO_WEB,
-    COUNT(DISTINCT CASE WHEN CS.CUSTOMER_TYPE = 'NEW' AND CS.CURRENT_CHANNEL = 'APP+WEB' 
-                        THEN CS.SNDCUSTOMER_KEY END) AS NEW_TO_APP_WEB,
-    
-    -- Migration Count
-    COUNT(DISTINCT CASE WHEN CS.CUSTOMER_SEGMENT = 'Migrated Web to App' 
-                        THEN CS.SNDCUSTOMER_KEY END) AS MIGRATED_WEB_TO_APP,
-    
-    -- Existing Customer Counts by Channel
-    COUNT(DISTINCT CASE WHEN CS.CUSTOMER_TYPE = 'EXISTING' AND CS.CURRENT_CHANNEL = 'APP' 
-                        THEN CS.SNDCUSTOMER_KEY END) AS EXISTING_ON_APP,
-    COUNT(DISTINCT CASE WHEN CS.CUSTOMER_TYPE = 'EXISTING' AND CS.CURRENT_CHANNEL = 'WEB' 
-                        THEN CS.SNDCUSTOMER_KEY END) AS EXISTING_ON_WEB,
-    COUNT(DISTINCT CASE WHEN CS.CUSTOMER_TYPE = 'EXISTING' AND CS.CURRENT_CHANNEL = 'APP+WEB' 
-                        THEN CS.SNDCUSTOMER_KEY END) AS EXISTING_ON_APP_WEB,
-    
-    -- Transaction Metrics
-    SUM(CS.R1_APP_TXNS) AS R1_APP_TRANSACTIONS,
-    SUM(CS.R1_WEBSITE_TXNS) AS R1_WEB_TRANSACTIONS,
-    SUM(CS.R1_TXNS) AS R1_TOTAL_TRANSACTIONS,
-    SUM(CS.R12_TXNS) AS R12_TOTAL_TRANSACTIONS,
-    SUM(CS.R12_PRINCIPAL) AS R12_TOTAL_PRINCIPAL,
-    SUM(CS.R12_REVENUE) AS R12_TOTAL_REVENUE
-    
-FROM CAR_717_Customer_Segments1 CS
-GROUP BY 1, 2, 3, 4, 5
-ORDER BY 1, 2, 3, 4, 5;
+LS_sfmc_CEM_SMS_CAMPAIGN_v4 as
 
--- Validation
-SELECT
-    MTH_YR,
-    CURRENT_CHANNEL,
-    Count(SNDCUSTOMER_KEY),
-    SUM(TOTAL_CUSTOMERS) AS TOTAL_CUSTOMERS,
-    SUM(NEW_TO_APP) AS NEW_TO_APP,
-    SUM(NEW_TO_WEB) AS NEW_TO_WEB,
-    SUM(MIGRATED_WEB_TO_APP) AS MIGRATED_WEB_TO_APP,
-    SUM(R1_APP_TRANSACTIONS) AS APP_TXNS,
-    SUM(R1_WEB_TRANSACTIONS) AS WEB_TXNS
-FROM CAR_717_Monthly_Report1
-GROUP BY 1, 2
-ORDER BY 1, 2;
+(
+select 
+    distinct A.*,
+    //date_trunc('DAY',CLICK_TIMESTAMP) as event_captured_day,
+    CLICK_TIMESTAMP as event_captured_day,
+
+from 
+    (
+    SELECT 
+    CASE  
+    
+        WHEN A.customer_key IS NULL OR A.customer_key ='' then B.cuid
+        ELSE A.customer_key
+            END AS customer_key,
+    
+        LAST_ATTRIBUTED_TOUCH_DATA_CUSTOM_FIELDS,
+        BRANCH_REFERRER,
+        LOG_TITLE,
+        LOG_DESCRIPTION,
+        DOMAIN,
+        URL,
+        WEB_ONLY,
+        DESKTOP_URL,
+        FALLBACK_URL,
+        CANONICAL_URL,
+        ANDROID_URL,
+        IOS_URL,
+        CUID,--customer key
+        UTM_CAMPAIGN,
+        UTM_MEDIUM,
+        UTM_SOURCE,
+        CREATION_SOURCE,
+        CLICK_TIMESTAMP_RAW,
+        CLICK_TIMESTAMP,--click date
+        CAN--campaign name
+    
+    
+    FROM 
+        "WUDNA"."SUMMARY_GEN"."WU_MARKETING_SMS_CLICK_VW" B
+    LEFT JOIN 
+        "WUDNA"."SUMMARY_GEN".WUDNA_ACCOUNT_MASTER_VW A ON B.CUID  = A.CUSTOMER_UMN
+    
+    WHERE  
+        B.CUID IS NOT NULL 
+        //AND UPPER(URL) NOT LIKE '%UNSUB%'
+        //AND (URL IS NULL OR UPPER(URL) NOT LIKE '%UNSUB%')
 
 
--- ============================================================================
--- STEP 5: Final Pull for Excel Analysis
--- ============================================================================
-SELECT
-    MTH_YR,
-    SEND_COUNTRY_NAME,
-    CUSTOMER_TYPE,
-    CURRENT_CHANNEL,
-    CUSTOMER_SEGMENT,
-    TOTAL_CUSTOMERS,
-    NEW_TO_APP,
-    NEW_TO_WEB,
-    NEW_TO_APP_WEB,
-    MIGRATED_WEB_TO_APP,
-    EXISTING_ON_APP,
-    EXISTING_ON_WEB,
-    EXISTING_ON_APP_WEB,
-    R1_APP_TRANSACTIONS,
-    R1_WEB_TRANSACTIONS,
-    R1_TOTAL_TRANSACTIONS,
-    R12_TOTAL_TRANSACTIONS,
-    R12_TOTAL_PRINCIPAL,
-    R12_TOTAL_REVENUE
-FROM CAR_717_Monthly_Report1 
-ORDER BY MTH_YR, CURRENT_CHANNEL;
+    )a
+
+
+where 
+    a.customer_key is not null 
+    and year(CLICK_TIMESTAMP) >= 2024
+
+),
+
+
+AK_BIRD_MARKETING_SMS_OPT_OUT_VW as
+(
+select 
+    * 
+from 
+    (
+    select 
+        distinct a.customer_key,
+        upper(campaign_desc) campaign_name,
+        release_2_vendor_Date,
+        WEB_TIMESTAMP ,
+        row_number() over (partition by a.customer_key order by release_2_vendor_Date desc) rnk //
+    from 
+        AK_BIRD_CAMPAIGN_WISE_SMS_COMMUNICATIONS a
+    inner join 
+
+    (
+        SELECT 
+  
+
+            customer_key,
+            MOBILE_COUNTRY_CODE,
+            WEB_TIMESTAMP ,
+            SMS_TIMEZONE,
+            SMS_FLAG
+        FROM 
+            summary_gen.BIRD_WU_MARKETING_SMS_OPT_OUT_VW B
+        WHERE  
+            B.customer_key IS NOT NULL
+    )b on a.customer_key = b.customer_key and a.release_2_vendor_Date <= b.WEB_TIMESTAMP 
+)
+where rnk = 1
+),
+
+LS_sfmc_SMS_OPT_OUT as
+(
+select distinct a.*,
+date_trunc('DAY',TO_DATE(WEB_TIMESTAMP)) as event_captured_day,
+
+
+from  
+(
+SELECT 
+
+customer_key,
+
+CAMPAIGN_NAME,
+
+CAST(WEB_TIMESTAMP AS DATE) AS WEB_TIMESTAMP,
+from  AK_BIRD_MARKETING_SMS_OPT_OUT_VW B
+
+WHERE  B.customer_key IS NOT NULL 
+)a,
+
+
+where A.customer_key is not null and year(WEB_TIMESTAMP) >= 2024
+),
+
+campaign_wise_sms_communications_main as 
+(
+select 
+ a.customer_key,
+ a.country,
+ a.release_2_vendor_date,
+ a.activity_code,
+ a.campaign_desc,
+ upper(a.campaign_desc) as campaign_desc_1,
+ prev_event_captured_dt,
+ days_between_communication,
+ case when b.customer_id is not null then 'UNDELIVERED' else 'DELIVERED' end  delivery_flag,
+ case when upper(nvl(a.CAMPAIGN_desc,'UNKNOWN'))  like '%RESEND%' or 
+		upper(nvl(a.CAMPAIGN_desc,'UNKNOWN'))  like '%RE SEND%' or 
+		upper(nvl(a.CAMPAIGN_desc,'UNKNOWN'))  like '%RE_SEND%' or 
+		upper(nvl(a.CAMPAIGN_desc,'UNKNOWN'))  like '%RE-SEND%'
+		then 'Y' else 'N' end as RESEND_FLAG,
+case when d.EVENT_CAPTURED_DAY is not null and d.EVENT_CAPTURED_DAY >= a.release_2_vendor_date 
+		then 'Y' else 'N' end click_flag,
+case when  
+d.EVENT_CAPTURED_DAY >= a.release_2_vendor_date then d.EVENT_CAPTURED_DAY end as click_date,
+case when
+d.EVENT_CAPTURED_DAY >= a.release_2_vendor_date then d.url end offer_url,
+g.event_captured_day as optout_date,
+case when delivery_flag = 'DELIVERED' and click_flag='Y' and   d.EVENT_CAPTURED_DAY >= a.release_2_vendor_date
+and (extract(epoch from d.EVENT_CAPTURED_DAY)-extract(epoch from a.release_2_vendor_date)) <= 2592000 then 'Y' else 'N' end as  sms_clicked_in_30_Days,
+case when delivery_flag = 'DELIVERED' and click_flag='Y' and   d.EVENT_CAPTURED_DAY >= a.release_2_vendor_date
+and (extract(epoch from d.EVENT_CAPTURED_DAY)-extract(epoch from a.release_2_vendor_date)) <= 604800 then 'Y' else 'N' end as  sms_clicked_in_7_Days 
+from AK_BIRD_CAMPAIGN_WISE_SMS_COMMUNICATIONS a 
+left outer join LS_sfmc_CEM_SMS_CAMPAIGN_v4 d on
+a.customer_key=d.customer_key and lower(a.campaign_desc)=lower(d.can)
+left join LS_SFMC_SMS_OPT_OUT g on
+a.customer_key = g.customer_key and lower(a.campaign_desc) = lower(g.campaign_name)
+                
+left outer join 
+SMS_Undelivered_main b on 
+a.customer_key=b.customer_id 
+       and upper(a.campaign_desc)=upper(b.campaign_desc)
+       )
+ 
+     SELECT * FROM campaign_wise_sms_communications_main;
+     
+CREATE or replace TABLE AM_BIRD_campaign_wise_sms_communications_main_FINAL_Test as
+
+SELECT 
+    CUSTOMER_KEY, 
+    COUNTRY, 
+    RELEASE_2_VENDOR_DATE, 
+    ACTIVITY_CODE, 
+    CAMPAIGN_DESC, 
+    CAMPAIGN_DESC_1, 
+    PREV_EVENT_CAPTURED_DT, 
+    DAYS_BETWEEN_COMMUNICATION, 
+    DELIVERY_FLAG, 
+    RESEND_FLAG, 
+    CLICK_FLAG, 
+    OFFER_URL,
+    MODE(sms_clicked_in_30_Days) AS sms_clicked_in_30_Days,
+    --case when DELIVERY_FLAG='UNDELIVERED' then 1 else 0 end EMAILS_UN_DELIVERED,
+    --case when optout_date is not null then 1 else 0 end CUSTOMERS_OPTING_OUT_OF_EMAIL_MARKETING,
+    COUNT(DISTINCT CUSTOMER_KEY) AS COMMUNICATIONS_SENT,
+    COUNT(DISTINCT CASE WHEN SMS_CLICKED_IN_7_DAYS = 'Y' THEN CUSTOMER_KEY END) AS CLICK_COUNT,
+    MIN(CASE WHEN CLICK_DATE >= RELEASE_2_VENDOR_DATE THEN CLICK_DATE END) AS CLICK_DATE, 
+    MIN(CASE WHEN OPTOUT_DATE >= RELEASE_2_VENDOR_DATE THEN OPTOUT_DATE END) AS OPTOUT_DATE    
+FROM AM_BIRD_campaign_wise_sms_communications_TEST
+
+GROUP BY ALL;
+
+in this i have to incorporate another CTE after LS_sfmc_CEM_SMS_CAMPAIGN_v4 since there's a new table created from which now click 
+data will come , so i have to add that after LS_sfmc_CEM_SMS_CAMPAIGN_v4 and then union both the CTEs into a final one and that CTE 
+will be in the join and make it flow to the next table accordingly.
+The new table is WUDNA.SUMMARY_GEN.BIRD_WU_MARKETING_SMS_CLICK_VW
+and the columns are 
+name
+CAMPAIGN_ID
+CAMPAIGN_NAME
+CHANNEL_ID
+CUSTOMER_KEY
+EVENT_DATETIME --IS CLICK_DATE
+EVENT_ID
+EVENT_NAME
+JOURNEY_ID
+JOURNEY_NAME
+MESSAGE_ID
+MOBILE_PHONE_NUMBER
+TEMPLATE_NAME
+URL
+BATCH_DATE .
+
+So create an updated script accordingly. 
