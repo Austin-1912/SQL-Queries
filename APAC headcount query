@@ -15,7 +15,25 @@ RETURN
                 ) > 0
         )
     )
- 
+ Communications Delivered by Keyword = 
+VAR SelectedKeywords = VALUES('Campaign Keywords'[Keyword])
+RETURN
+    CALCULATE(
+        SUM(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[COMMUNICATIONS_SENT]) -
+        SUM(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[COMMUNICATIONS_UNDELIVERED]),
+        FILTER(
+            SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE,
+            VAR CampaignName = SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[CAMPAIGN_NAME]
+            RETURN
+                COUNTROWS(
+                    FILTER(
+                        SelectedKeywords,
+                        CONTAINSSTRING(UPPER(CampaignName), UPPER([Keyword]))
+                    )
+                ) > 0
+        )
+    )
+
 Total Opened by Keyword = 
 VAR SelectedKeywords =
     VALUES ( 'Campaign Keywords'[Keyword] )
