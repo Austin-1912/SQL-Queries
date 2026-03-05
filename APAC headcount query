@@ -1,416 +1,174 @@
---STEP 1
-CREATE OR REPLACE TABLE CAR_861_TXN_BASE AS
+Simplified Approach
+The idea: SQL does the heavy lifting of labeling each customer, Excel handles all the ranking, rates, and pivot analysis. Here's the lean script:
+SQL — 3 clean steps, one output table
+-- ============================================================
+-- STEP 1: BASE TRANSACTIONS  (2024–2025, ME markets)
+-- ============================================================
+CREATE OR REPLACE TABLE CAR_861_BASE AS
 SELECT
     sndcustomer_key,
+    TXN_ID,
+    DATE(rcvpaying_datetime)                        AS txn_date,
+    DATE_TRUNC('MONTH', DATE(rcvpaying_datetime))   AS txn_month,
     sndcountry_code,
     rcvcountry_code,
-    pricing_channel,
-    sub_channel,
-    TXN_ID,
-    DATE(rcvpaying_datetime)                          AS txn_date,
-    DATE_TRUNC('MONTH', DATE(rcvpaying_datetime))     AS txn_month,
-    YEAR(DATE(rcvpaying_datetime))                    AS txn_year,
+    CONCAT(sndcountry_code,'-',rcvcountry_code)     AS corridor,
     CASE
-        WHEN pricing_channel IN ('WEB','APP')         THEN 'DIGITAL'
-        WHEN pricing_channel IN ('POS','AIR','TMT')   THEN 'RETAIL'
+        WHEN pricing_channel IN ('WEB','APP')       THEN 'DIGITAL'
+        WHEN pricing_channel IN ('POS','AIR','TMT') THEN 'RETAIL'
         ELSE 'OTHERS'
-    END   AS retail_digital_flag
+    END AS channel_type
 FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
 WHERE sndcountry_code IN ('AE','BH','JO','QA','SA','KW')
-  AND AGENT_NAID NOT IN ('AEE29', 'JO999', 'JOD00', 'JO997', 'JO996', 'JOT44', 'KWI85', 'KWR99', 'KWJ19', 'KWJ52', 'QAU02', 'QAU01', 'QAQ96', 'QAQ25', 'QAH42', 'QAH01', 'QA999', 'QA997')
-  AND DATE(rcvpaying_datetime) >= '2024-01-01' AND DATE(rcvpaying_datetime) <= '2025-12-31';
+  AND AGENT_NAID NOT IN (
+        'AEE29','JO999','JOD00','JO997','JO996','JOT44',
+        'KWI85','KWR99','KWJ19','KWJ52',
+        'QAU02','QAU01','QAQ96','QAQ25','QAH42','QAH01','QA999','QA997')
+  AND DATE(rcvpaying_datetime) BETWEEN '2024-01-01' AND '2025-12-31';
 
-CREATE OR REPLACE TABLE CAR_861_DOMINANT_CORRIDOR AS
-SELECT *
-FROM (
-    SELECT
-        sndcustomer_key,
-        CONCAT(sndcountry_code, '-', rcvcountry_code)   AS corridor,
-        sndcountry_code                                  AS snd_country,
-        rcvcountry_code                                  AS rcv_country,
-        COUNT(DISTINCT txn_id)                           AS txn_count,
-        ROW_NUMBER() OVER (
-            PARTITION BY sndcustomer_key
-            ORDER BY COUNT(DISTINCT txn_id) DESC,
-                     MAX(txn_date)          DESC         -- tiebreak: most recent
-        ) AS rnk
-    FROM CAR_861_TXN_BASE
-    GROUP BY sndcustomer_key, sndcountry_code, rcvcountry_code
-)
-WHERE rnk = 1;
 
 -- ============================================================
--- [PRE-STEP 0C]  REBUILD MARKETABILITY
+-- STEP 2: MARKETABILITY FLAGS
 -- ============================================================
-CREATE OR REPLACE TABLE CAR_861_MARKETABILITY AS
-WITH base AS (
-    SELECT
-        customer_key,
-        global_holdout,
-        CASE
-            WHEN marketing_flag = 'Y'
-             AND email_address_on_file_flag = 'Y'
-             AND opt_email = 'I'                    THEN 'YES' ELSE 'NO'
-        END AS email_marketable_flag,
-        CASE
-            WHEN marketing_flag = 'Y'
-             AND mobile_number_on_file_flag = 'Y'
-             AND opt_sms = 'I'                      THEN 'YES' ELSE 'NO'
-        END AS sms_marketable_flag
-    FROM WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW
-    WHERE first_registration_date IS NOT NULL
-)
+CREATE OR REPLACE TABLE CAR_861_MKTBL AS
 SELECT
     customer_key,
     global_holdout,
-    email_marketable_flag,
-    sms_marketable_flag,
-    CASE
-        WHEN email_marketable_flag = 'YES'
-          OR sms_marketable_flag   = 'YES'          THEN 'YES' ELSE 'NO'
-    END AS Marketability_flag,
-    CASE
-        WHEN email_marketable_flag = 'YES' AND sms_marketable_flag = 'NO'  THEN 'EMAIL_ONLY'
-        WHEN email_marketable_flag = 'NO'  AND sms_marketable_flag = 'YES' THEN 'SMS_ONLY'
-        WHEN email_marketable_flag = 'YES' AND sms_marketable_flag = 'YES' THEN 'EMAIL_SMS'
-        ELSE 'OTHERS'
-    END AS marketing_combination
-FROM base;
+    CASE WHEN marketing_flag='Y' AND email_address_on_file_flag='Y' AND opt_email='I' THEN 'Y' ELSE 'N' END AS email_ok,
+    CASE WHEN marketing_flag='Y' AND mobile_number_on_file_flag='Y' AND opt_sms='I'   THEN 'Y' ELSE 'N' END AS sms_ok
+FROM WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW
+WHERE first_registration_date IS NOT NULL;
+
 
 -- ============================================================
--- STEP 1  FIRST DIGITAL TRANSACTION PER CUSTOMER (ALL TIME)
--- Used as the conversion event anchor
+-- STEP 3: FINAL OUTPUT — One row per R2D converted customer
+-- Conversion = first DIGITAL txn in a 2025 month,
+--              AND had RETAIL in the prior 12 months (R2–R13 window)
 -- ============================================================
-CREATE OR REPLACE TABLE CAR_861_FIRST_DIGITAL AS
-SELECT
-    sndcustomer_key,
-    MIN(txn_date)   AS first_digital_date,
-    MIN(txn_month)  AS first_digital_month,
-    MIN(txn_year)   AS first_digital_year
-FROM CAR_861_TXN_BASE
-WHERE retail_digital_flag = 'DIGITAL'
-GROUP BY sndcustomer_key;
-
--- ============================================================
---  SECTION A  ─  MONTHLY R2D ANALYSIS (2025, month by month)
--- ============================================================
--- STEP A1  MONTHLY R2D NUMERATOR
--- Customers who first went DIGITAL in a 2025 month AND had
--- RETAIL in the 12 months prior to that conversion month
--- ============================================================
-CREATE OR REPLACE TABLE CAR_861_MONTHLY_R2D_CUSTOMERS AS
-SELECT
-    fd.sndcustomer_key,
-    fd.first_digital_month                 AS conversion_month,
-    dc.corridor                            AS dominant_corridor,
-    dc.snd_country,
-    dc.rcv_country,
-    mk.Marketability_flag,
-    mk.email_marketable_flag,
-    mk.sms_marketable_flag,
-    mk.marketing_combination,
-    mk.global_holdout
-FROM CAR_861_FIRST_DIGITAL fd
-INNER JOIN CAR_861_DOMINANT_CORRIDOR dc
-        ON fd.sndcustomer_key = dc.sndcustomer_key
-LEFT  JOIN CAR_861_MARKETABILITY mk
-        ON fd.sndcustomer_key = mk.customer_key
-WHERE fd.first_digital_month BETWEEN '2025-01-01' AND '2025-12-01'
-  AND EXISTS (
-        -- Must have had at least one RETAIL txn in prior 12 months
-        SELECT 1
-        FROM   CAR_861_TXN_BASE t
-        WHERE  t.sndcustomer_key      = fd.sndcustomer_key
-          AND  t.retail_digital_flag  = 'RETAIL'
-          AND  t.txn_date            >= DATEADD('MONTH', -12, fd.first_digital_month)
-          AND  t.txn_date             < fd.first_digital_month
-  );
-
-CREATE OR REPLACE TABLE CAR_861_MONTHLY_RETAIL_POOL AS
-WITH months_2025 AS (
-    SELECT COLUMN1::DATE AS analysis_month
-    FROM VALUES
-        ('2025-01-01'),('2025-02-01'),('2025-03-01'),('2025-04-01'),
-        ('2025-05-01'),('2025-06-01'),('2025-07-01'),('2025-08-01'),
-        ('2025-09-01'),('2025-10-01'),('2025-11-01'),('2025-12-01')
+CREATE OR REPLACE TABLE CAR_861_R2D_OUTPUT AS
+WITH first_digital AS (
+    -- First digital transaction month per customer, restricted to 2025
+    SELECT sndcustomer_key,
+           MIN(txn_month) AS first_digital_month
+    FROM   CAR_861_BASE
+    WHERE  channel_type = 'DIGITAL'
+      AND  txn_month BETWEEN '2025-01-01' AND '2025-12-01'
+    GROUP BY sndcustomer_key
 ),
-retail_with_corridor AS (
-    SELECT
-        t.sndcustomer_key,
-        t.txn_date,
-        dc.corridor,
-        dc.snd_country,
-        dc.rcv_country
-    FROM CAR_861_TXN_BASE t
-    INNER JOIN CAR_861_DOMINANT_CORRIDOR dc
-        ON t.sndcustomer_key = dc.sndcustomer_key
-    WHERE t.retail_digital_flag = 'RETAIL'
+had_retail_prior AS (
+    -- Customers who had at least one retail txn in the 12 months before their first digital month
+    SELECT DISTINCT b.sndcustomer_key
+    FROM   CAR_861_BASE b
+    JOIN   first_digital fd ON b.sndcustomer_key = fd.sndcustomer_key
+    WHERE  b.channel_type = 'RETAIL'
+      AND  b.txn_date >= DATEADD('MONTH', -12, fd.first_digital_month)
+      AND  b.txn_date <  fd.first_digital_month
+),
+dominant_corridor AS (
+    -- Most-used corridor per customer (by txn count, recency as tiebreak)
+    SELECT sndcustomer_key, corridor, sndcountry_code, rcvcountry_code
+    FROM (
+        SELECT sndcustomer_key, corridor, sndcountry_code, rcvcountry_code,
+               ROW_NUMBER() OVER (
+                   PARTITION BY sndcustomer_key
+                   ORDER BY COUNT(DISTINCT txn_id) DESC, MAX(txn_date) DESC
+               ) AS rnk
+        FROM CAR_861_BASE
+        GROUP BY sndcustomer_key, corridor, sndcountry_code, rcvcountry_code
+    )
+    WHERE rnk = 1
 )
 SELECT
-    mn.analysis_month,
-    r.corridor,
-    r.snd_country,
-    r.rcv_country,
-    COUNT(DISTINCT r.sndcustomer_key) AS retail_pool_total,
-    COUNT(DISTINCT IFF(mk.Marketability_flag = 'YES', mk.customer_key, NULL)) AS retail_pool_marketable
-FROM months_2025 mn
-INNER JOIN retail_with_corridor r
-        ON r.txn_date >= DATEADD('MONTH', -12, mn.analysis_month)
-       AND r.txn_date <  mn.analysis_month
-LEFT JOIN CAR_861_MARKETABILITY mk
-        ON r.sndcustomer_key = mk.customer_key
-GROUP BY
-    mn.analysis_month, r.corridor, r.snd_country, r.rcv_country;
-
--- ============================================================
--- STEP A4  TOP 10 CORRIDORS PER MONTH  –  by R2D conversion rate
--- BEFORE marketability  :  ranked on r2d_rate_total_pct
--- AFTER  marketability  :  ranked on r2d_rate_marketable_pct
---                          (only corridors with sizable marketable base)
--- ============================================================
-
--- ── A4a: TOP 10 — BEFORE Marketability ───────────────────────
-SELECT
-    conversion_month,
-    dominant_corridor,
-    snd_country,
-    rcv_country,
-    r2d_converted_total,
-    retail_pool_total,
-    r2d_rate_total_pct,
-    RANK() OVER (
-        PARTITION BY conversion_month
-        ORDER BY r2d_rate_total_pct DESC
-    ) AS rank_total
-FROM CAR_861_MONTHLY_R2D_SUMMARY
-WHERE retail_pool_total > 0
-QUALIFY rank_total <= 10
-ORDER BY conversion_month, rank_total;
-
-
--- ── A4b: TOP 10 — AFTER Marketability ────────────────────────
--- Filter: retail_pool_marketable >= 100  (sizable marketable base threshold)
-SELECT
-    conversion_month,
-    dominant_corridor,
-    snd_country,
-    rcv_country,
-    r2d_converted_marketable,
-    retail_pool_marketable,
-    r2d_rate_marketable_pct,
-    RANK() OVER (
-        PARTITION BY conversion_month
-        ORDER BY r2d_rate_marketable_pct DESC
-    ) AS rank_marketable
-FROM CAR_861_MONTHLY_R2D_SUMMARY
-WHERE retail_pool_marketable >= 100                -- adjust threshold as needed
-QUALIFY rank_marketable <= 10
-ORDER BY conversion_month, rank_marketable;
-
-
--- ============================================================
--- ============================================================
---  SECTION B  ─  YEARLY R2D ANALYSIS (2025 vs 2024)
--- ============================================================
--- ============================================================
-
--- ============================================================
--- STEP B1  YEARLY R2D NUMERATOR
--- First DIGITAL year = 2025  AND  had RETAIL in 2024
--- ============================================================
-CREATE OR REPLACE TABLE CAR_861_YEARLY_R2D_CUSTOMERS AS
-SELECT
     fd.sndcustomer_key,
-    2025                                   AS conversion_year,
-    dc.snd_country                         AS send_market,     -- AE/BH/JO/QA/SA/KW
-    dc.corridor                            AS dominant_corridor,
-    dc.snd_country,
-    dc.rcv_country,
-    mk.Marketability_flag,
-    mk.email_marketable_flag,
-    mk.sms_marketable_flag,
-    mk.marketing_combination,
-    mk.global_holdout
-FROM CAR_861_FIRST_DIGITAL fd
-INNER JOIN CAR_861_DOMINANT_CORRIDOR dc
-        ON fd.sndcustomer_key = dc.sndcustomer_key
-LEFT  JOIN CAR_861_MARKETABILITY mk
-        ON fd.sndcustomer_key = mk.sndcustomer_key
-WHERE fd.first_digital_year = 2025
-  AND EXISTS (
-        SELECT 1
-        FROM   CAR_861_TXN_BASE t
-        WHERE  t.sndcustomer_key     = fd.sndcustomer_key
-          AND  t.retail_digital_flag = 'RETAIL'
-          AND  t.txn_year            = 2024
-  );
-
-
--- ============================================================
--- STEP B2  YEARLY RETAIL POOL — DENOMINATOR
--- Customers who had RETAIL in 2024, by market + dominant corridor
--- ============================================================
-CREATE OR REPLACE TABLE CAR_861_YEARLY_RETAIL_POOL AS
-SELECT
-    dc.snd_country                                                  AS send_market,
+    TO_CHAR(fd.first_digital_month, 'YYYY-MM')  AS conversion_month,
+    dc.sndcountry_code                           AS send_market,
     dc.corridor,
-    dc.snd_country,
-    dc.rcv_country,
-    COUNT(DISTINCT t.sndcustomer_key)                               AS retail_pool_total,
-    COUNT(DISTINCT CASE WHEN mk.Marketability_flag = 'YES'
-                        THEN t.sndcustomer_key END)                 AS retail_pool_marketable
-FROM CAR_861_TXN_BASE           t
-INNER JOIN CAR_861_DOMINANT_CORRIDOR dc
-        ON t.sndcustomer_key = dc.sndcustomer_key
-LEFT  JOIN CAR_861_MARKETABILITY mk
-        ON t.sndcustomer_key = mk.sndcustomer_key
-WHERE  t.retail_digital_flag = 'RETAIL'
-  AND  t.txn_year            = 2024
-GROUP BY dc.snd_country, dc.corridor, dc.snd_country, dc.rcv_country;
-
-
--- ============================================================
--- STEP B3  YEARLY R2D SUMMARY  –  by Market + Corridor
--- ============================================================
-CREATE OR REPLACE TABLE CAR_861_YEARLY_R2D_SUMMARY AS
+    dc.rcvcountry_code                           AS receive_country,
+    -- Marketability
+    mk.global_holdout,
+    mk.email_ok,
+    mk.sms_ok,
+    CASE WHEN mk.email_ok='Y' OR mk.sms_ok='Y'  THEN 'Y' ELSE 'N' END AS any_marketable,
+    CASE
+        WHEN mk.email_ok='Y' AND mk.sms_ok='Y'  THEN 'EMAIL+SMS'
+        WHEN mk.email_ok='Y'                     THEN 'EMAIL_ONLY'
+        WHEN mk.sms_ok  ='Y'                     THEN 'SMS_ONLY'
+        ELSE 'NONE'
+    END AS marketability_segment
+FROM   first_digital   fd
+JOIN   had_retail_prior r  ON fd.sndcustomer_key = r.sndcustomer_key
+JOIN   dominant_corridor dc ON fd.sndcustomer_key = dc.sndcustomer_key
+LEFT JOIN CAR_861_MKTBL mk  ON fd.sndcustomer_key = mk.customer_key;
+Pull CAR_861_R2D_OUTPUT into Excel. That's your only export.
+Excel Guide — Rates, Rankings & Pivot Analysis
+Sheet 1 — Raw Data
+Paste the SQL output as-is. Do not touch this sheet.
+Sheet 2 — Pivot: Conversion Rate by Corridor × Month
+Insert → PivotTable from Sheet 1
+PivotTable Zone
+Field
+Rows
+conversion_month, send_market, corridor
+Columns
+marketability_segment (optional slicer instead)
+Values
+Count of sndcustomer_key → rename "R2D Converted"
+Then, in a separate helper table, calculate the retail pool denominator — pull a second query or add a tab:
+-- Optional add-on: retail pool denominator for rate calculation
 SELECT
-    num.send_market,
-    num.dominant_corridor,
-    num.snd_country,
-    num.rcv_country,
-    -- ── TOTAL (before marketability) ─────────────────────────
-    COUNT(DISTINCT num.sndcustomer_key)                                                 AS r2d_converted_total,
-    den.retail_pool_total,
-    ROUND(COUNT(DISTINCT num.sndcustomer_key)
-          / NULLIF(den.retail_pool_total, 0) * 100, 2)                                  AS r2d_rate_total_pct,
-    -- ── MARKETABLE ONLY ──────────────────────────────────────
-    COUNT(DISTINCT CASE WHEN num.Marketability_flag = 'YES'
-                        THEN num.sndcustomer_key END)                                   AS r2d_converted_marketable,
-    den.retail_pool_marketable,
-    ROUND(COUNT(DISTINCT CASE WHEN num.Marketability_flag = 'YES'
-                              THEN num.sndcustomer_key END)
-          / NULLIF(den.retail_pool_marketable, 0) * 100, 2)                             AS r2d_rate_marketable_pct
-FROM CAR_861_YEARLY_R2D_CUSTOMERS num
-LEFT JOIN CAR_861_YEARLY_RETAIL_POOL den
-       ON num.dominant_corridor = den.corridor
-GROUP BY
-    num.send_market,
-    num.dominant_corridor,
-    num.snd_country,
-    num.rcv_country,
-    den.retail_pool_total,
-    den.retail_pool_marketable;
-
-
--- ============================================================
--- STEP B4  TOP CORRIDORS PER MARKET — YEARLY 2025
--- BEFORE and AFTER Marketability filter
--- ============================================================
-
--- ── B4a: YEARLY TOP CORRIDORS — BEFORE Marketability ─────────
-SELECT
-    send_market,
-    dominant_corridor,
-    snd_country,
-    rcv_country,
-    r2d_converted_total,
-    retail_pool_total,
-    r2d_rate_total_pct,
-    RANK() OVER (
-        PARTITION BY send_market
-        ORDER BY r2d_rate_total_pct DESC
-    ) AS rank_within_market_total
-FROM CAR_861_YEARLY_R2D_SUMMARY
-WHERE retail_pool_total > 0
-QUALIFY rank_within_market_total <= 10
-ORDER BY send_market, rank_within_market_total;
-
-
--- ── B4b: YEARLY TOP CORRIDORS — AFTER Marketability ──────────
--- Only corridors with sizable marketable base (>= 100)
--- R2D conversion measured ONLY for marketable customers
-SELECT
-    send_market,
-    dominant_corridor,
-    snd_country,
-    rcv_country,
-    r2d_converted_marketable,
-    retail_pool_marketable,
-    r2d_rate_marketable_pct,
-    RANK() OVER (
-        PARTITION BY send_market
-        ORDER BY r2d_rate_marketable_pct DESC
-    ) AS rank_within_market_marketable
-FROM CAR_861_YEARLY_R2D_SUMMARY
-WHERE retail_pool_marketable >= 100                -- sizable marketable threshold
-QUALIFY rank_within_market_marketable <= 10
-ORDER BY send_market, rank_within_market_marketable;
-
-
--- ============================================================
--- ============================================================
---  SECTION C  ─  FINAL COMBINED OUTPUT TABLE
---  Per Market + Corridor: BEFORE vs AFTER marketability
---  Monthly + Yearly in one view
--- ============================================================
--- ============================================================
-
--- ── MONTHLY FINAL OUTPUT ─────────────────────────────────────
-CREATE OR REPLACE TABLE CAR_861_FINAL_MONTHLY_R2D AS
-SELECT
-    TO_CHAR(conversion_month, 'YYYY-MM')                            AS year_month,
-    snd_country                                                     AS send_market,
-    dominant_corridor,
-    rcv_country                                                     AS receive_country,
-    -- Before Marketability
-    r2d_converted_total,
-    retail_pool_total,
-    r2d_rate_total_pct                                              AS r2d_conv_rate_before_mkt_pct,
-    -- After Marketability
-    r2d_converted_marketable,
-    retail_pool_marketable,
-    r2d_rate_marketable_pct                                         AS r2d_conv_rate_after_mkt_pct,
-    -- Ranks
-    RANK() OVER (
-        PARTITION BY conversion_month
-        ORDER BY r2d_rate_total_pct DESC
-    )                                                               AS rank_total,
-    RANK() OVER (
-        PARTITION BY conversion_month
-        ORDER BY r2d_rate_marketable_pct DESC
-    )                                                               AS rank_marketable
-FROM CAR_861_MONTHLY_R2D_SUMMARY
-WHERE retail_pool_marketable >= 100
-ORDER BY year_month, rank_marketable;
-
-
--- ── YEARLY FINAL OUTPUT ──────────────────────────────────────
-CREATE OR REPLACE TABLE CAR_861_FINAL_YEARLY_R2D AS
-SELECT
-    2025                                                            AS analysis_year,
-    send_market,
-    dominant_corridor,
-    rcv_country                                                     AS receive_country,
-    -- Before Marketability
-    r2d_converted_total,
-    retail_pool_total,
-    r2d_rate_total_pct                                              AS r2d_conv_rate_before_mkt_pct,
-    -- After Marketability
-    r2d_converted_marketable,
-    retail_pool_marketable,
-    r2d_rate_marketable_pct                                         AS r2d_conv_rate_after_mkt_pct,
-    -- Ranks within each market
-    RANK() OVER (
-        PARTITION BY send_market
-        ORDER BY r2d_rate_total_pct DESC
-    )                                                               AS rank_total_within_market,
-    RANK() OVER (
-        PARTITION BY send_market
-        ORDER BY r2d_rate_marketable_pct DESC
-    )                                       
-Can we somehow make this simpler instead of such a huge script , we will extract the top 10 corridors based on R2D conversion 
-(customers who completed a digital transaction in the current month after having retail transactions in the R2 - R13 period) 
-for each month from January 2025 to December 2025. Using this dataset, 
-we will identify the top‑performing corridors for each market as well as overall, segmented by marketability(Both Email and SMS).
-Also we will calculate the converion rate and all the percentages in excel guide me for that , however keep the script 
-simple and concise.
+    TO_CHAR(DATE_TRUNC('MONTH', txn_date), 'YYYY-MM')  AS pool_month,
+    sndcountry_code                                     AS send_market,
+    corridor,
+    COUNT(DISTINCT sndcustomer_key)                     AS retail_pool_size
+FROM (
+    SELECT b.sndcustomer_key, b.txn_date, b.sndcountry_code, b.corridor,
+           mn.analysis_month
+    FROM CAR_861_BASE b
+    CROSS JOIN (
+        SELECT COLUMN1::DATE AS analysis_month
+        FROM VALUES ('2025-01-01'),('2025-02-01'),('2025-03-01'),
+                    ('2025-04-01'),('2025-05-01'),('2025-06-01'),
+                    ('2025-07-01'),('2025-08-01'),('2025-09-01'),
+                    ('2025-10-01'),('2025-11-01'),('2025-12-01')
+    ) mn
+    WHERE b.channel_type = 'RETAIL'
+      AND b.txn_date >= DATEADD('MONTH',-12, mn.analysis_month)
+      AND b.txn_date <  mn.analysis_month
+)
+GROUP BY 1,2,3;
+Paste this as Sheet 3 — Retail Pool.
+Sheet 4 — Conversion Rate Table
+Build this manually using SUMIFS + IFERROR:
+Column
+Formula (row 2 example)
+conversion_month
+from pivot
+send_market
+from pivot
+corridor
+from pivot
+r2d_converted
+=SUMIFS(RawData[sndcustomer_key], RawData[conversion_month], A2, RawData[corridor], C2) → use COUNTA
+retail_pool
+=IFERROR(SUMIFS(Pool[retail_pool_size], Pool[pool_month], A2, Pool[corridor], C2), 0)
+conversion_rate_%
+=IFERROR(D2/E2*100, 0) → format as number, 2 decimals
+r2d_marketable
+same SUMIFS but add condition RawData[any_marketable]="Y"
+retail_pool_mktbl
+pull from a separate marketable pool count
+conv_rate_mktbl_%
+=IFERROR(G2/H2*100, 0)
+Sheet 5 — Top 10 Rankings
+Use LARGE + RANK per month/market:
+=RANK(F2, IF(($A$2:$A$200=A2)*($B$2:$B$200=B2), $F$2:$F$200), 0)
+(Enter as Ctrl+Shift+Enter array formula, or use RANKX in Power Pivot)
+Then filter: rank <= 10 using AutoFilter or a slicer on a formatted Table.
+Recommended Final Dashboard Layout
+Tab 1: Raw_Data          ← SQL export, untouched
+Tab 2: Retail_Pool       ← denominator query export
+Tab 3: Conv_Rate_Table   ← SUMIFS calculations
+Tab 4: Top10_Monthly     ← filtered + ranked view with slicers
+Tab 5: Top10_by_Market   ← pivot filtered by send_market
+Tab 6: Marketability_Cut ← same but filtered to any_marketable = Y
+Add slicers on conversion_month, send_market, and marketability_segment across Tab 4–6 for interactive filtering — no VBA needed.
