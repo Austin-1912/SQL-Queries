@@ -5,8 +5,8 @@ WITH first_digital AS (
            MIN(txn_month) AS first_digital_month
     FROM   CAR_861_BASE
     WHERE  channel_type = 'DIGITAL'
-      AND  txn_month >= '2025-01-01' AND txn_month <= '2025-12-01'
     GROUP BY sndcustomer_key
+    having  first_digital_month >= '2025-01-01' AND first_digital_month <= '2025-12-01'
 ),
 had_retail_prior AS (
     -- Customers who had at least one retail txn in the 12 months before their first digital month
