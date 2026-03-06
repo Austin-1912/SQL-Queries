@@ -1,50 +1,3 @@
-Simplified Approach
-The idea: SQL does the heavy lifting of labeling each customer, Excel handles all the ranking, rates, and pivot analysis. Here's the lean script:
-SQL — 3 clean steps, one output table
--- ============================================================
--- STEP 1: BASE TRANSACTIONS  (2024–2025, ME markets)
--- ============================================================
-CREATE OR REPLACE TABLE CAR_861_BASE AS
-SELECT
-    sndcustomer_key,
-    TXN_ID,
-    DATE(rcvpaying_datetime)                        AS txn_date,
-    DATE_TRUNC('MONTH', DATE(rcvpaying_datetime))   AS txn_month,
-    sndcountry_code,
-    rcvcountry_code,
-    CONCAT(sndcountry_code,'-',rcvcountry_code)     AS corridor,
-    CASE
-        WHEN pricing_channel IN ('WEB','APP')       THEN 'DIGITAL'
-        WHEN pricing_channel IN ('POS','AIR','TMT') THEN 'RETAIL'
-        ELSE 'OTHERS'
-    END AS channel_type
-FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
-WHERE sndcountry_code IN ('AE','BH','JO','QA','SA','KW')
-  AND AGENT_NAID NOT IN (
-        'AEE29','JO999','JOD00','JO997','JO996','JOT44',
-        'KWI85','KWR99','KWJ19','KWJ52',
-        'QAU02','QAU01','QAQ96','QAQ25','QAH42','QAH01','QA999','QA997')
-  AND DATE(rcvpaying_datetime) BETWEEN '2024-01-01' AND '2025-12-31';
-
-
--- ============================================================
--- STEP 2: MARKETABILITY FLAGS
--- ============================================================
-CREATE OR REPLACE TABLE CAR_861_MKTBL AS
-SELECT
-    customer_key,
-    global_holdout,
-    CASE WHEN marketing_flag='Y' AND email_address_on_file_flag='Y' AND opt_email='I' THEN 'Y' ELSE 'N' END AS email_ok,
-    CASE WHEN marketing_flag='Y' AND mobile_number_on_file_flag='Y' AND opt_sms='I'   THEN 'Y' ELSE 'N' END AS sms_ok
-FROM WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW
-WHERE first_registration_date IS NOT NULL;
-
-
--- ============================================================
--- STEP 3: FINAL OUTPUT — One row per R2D converted customer
--- Conversion = first DIGITAL txn in a 2025 month,
---              AND had RETAIL in the prior 12 months (R2–R13 window)
--- ============================================================
 CREATE OR REPLACE TABLE CAR_861_R2D_OUTPUT AS
 WITH first_digital AS (
     -- First digital transaction month per customer, restricted to 2025
@@ -52,7 +5,7 @@ WITH first_digital AS (
            MIN(txn_month) AS first_digital_month
     FROM   CAR_861_BASE
     WHERE  channel_type = 'DIGITAL'
-      AND  txn_month BETWEEN '2025-01-01' AND '2025-12-01'
+      AND  txn_month >= '2025-01-01' AND txn_month <= '2025-12-01'
     GROUP BY sndcustomer_key
 ),
 had_retail_prior AS (
@@ -86,89 +39,16 @@ SELECT
     dc.rcvcountry_code                           AS receive_country,
     -- Marketability
     mk.global_holdout,
-    mk.email_ok,
-    mk.sms_ok,
-    CASE WHEN mk.email_ok='Y' OR mk.sms_ok='Y'  THEN 'Y' ELSE 'N' END AS any_marketable,
+    mk.email_marketable_flag,
+    mk.sms_marketable_flag,
+    CASE WHEN mk.email_marketable_flag='Y' OR mk.sms_marketable_flag='Y'  THEN 'Y' ELSE 'N' END AS any_marketable,
     CASE
-        WHEN mk.email_ok='Y' AND mk.sms_ok='Y'  THEN 'EMAIL+SMS'
-        WHEN mk.email_ok='Y'                     THEN 'EMAIL_ONLY'
-        WHEN mk.sms_ok  ='Y'                     THEN 'SMS_ONLY'
+        WHEN mk.email_marketable_flag='Y' AND mk.sms_marketable_flag='Y'  THEN 'EMAIL+SMS'
+        WHEN mk.email_marketable_flag='Y'                     THEN 'EMAIL_ONLY'
+        WHEN mk.sms_marketable_flag  ='Y'                     THEN 'SMS_ONLY'
         ELSE 'NONE'
     END AS marketability_segment
 FROM   first_digital   fd
 JOIN   had_retail_prior r  ON fd.sndcustomer_key = r.sndcustomer_key
 JOIN   dominant_corridor dc ON fd.sndcustomer_key = dc.sndcustomer_key
 LEFT JOIN CAR_861_MKTBL mk  ON fd.sndcustomer_key = mk.customer_key;
-Pull CAR_861_R2D_OUTPUT into Excel. That's your only export.
-Excel Guide — Rates, Rankings & Pivot Analysis
-Sheet 1 — Raw Data
-Paste the SQL output as-is. Do not touch this sheet.
-Sheet 2 — Pivot: Conversion Rate by Corridor × Month
-Insert → PivotTable from Sheet 1
-PivotTable Zone
-Field
-Rows
-conversion_month, send_market, corridor
-Columns
-marketability_segment (optional slicer instead)
-Values
-Count of sndcustomer_key → rename "R2D Converted"
-Then, in a separate helper table, calculate the retail pool denominator — pull a second query or add a tab:
--- Optional add-on: retail pool denominator for rate calculation
-SELECT
-    TO_CHAR(DATE_TRUNC('MONTH', txn_date), 'YYYY-MM')  AS pool_month,
-    sndcountry_code                                     AS send_market,
-    corridor,
-    COUNT(DISTINCT sndcustomer_key)                     AS retail_pool_size
-FROM (
-    SELECT b.sndcustomer_key, b.txn_date, b.sndcountry_code, b.corridor,
-           mn.analysis_month
-    FROM CAR_861_BASE b
-    CROSS JOIN (
-        SELECT COLUMN1::DATE AS analysis_month
-        FROM VALUES ('2025-01-01'),('2025-02-01'),('2025-03-01'),
-                    ('2025-04-01'),('2025-05-01'),('2025-06-01'),
-                    ('2025-07-01'),('2025-08-01'),('2025-09-01'),
-                    ('2025-10-01'),('2025-11-01'),('2025-12-01')
-    ) mn
-    WHERE b.channel_type = 'RETAIL'
-      AND b.txn_date >= DATEADD('MONTH',-12, mn.analysis_month)
-      AND b.txn_date <  mn.analysis_month
-)
-GROUP BY 1,2,3;
-Paste this as Sheet 3 — Retail Pool.
-Sheet 4 — Conversion Rate Table
-Build this manually using SUMIFS + IFERROR:
-Column
-Formula (row 2 example)
-conversion_month
-from pivot
-send_market
-from pivot
-corridor
-from pivot
-r2d_converted
-=SUMIFS(RawData[sndcustomer_key], RawData[conversion_month], A2, RawData[corridor], C2) → use COUNTA
-retail_pool
-=IFERROR(SUMIFS(Pool[retail_pool_size], Pool[pool_month], A2, Pool[corridor], C2), 0)
-conversion_rate_%
-=IFERROR(D2/E2*100, 0) → format as number, 2 decimals
-r2d_marketable
-same SUMIFS but add condition RawData[any_marketable]="Y"
-retail_pool_mktbl
-pull from a separate marketable pool count
-conv_rate_mktbl_%
-=IFERROR(G2/H2*100, 0)
-Sheet 5 — Top 10 Rankings
-Use LARGE + RANK per month/market:
-=RANK(F2, IF(($A$2:$A$200=A2)*($B$2:$B$200=B2), $F$2:$F$200), 0)
-(Enter as Ctrl+Shift+Enter array formula, or use RANKX in Power Pivot)
-Then filter: rank <= 10 using AutoFilter or a slicer on a formatted Table.
-Recommended Final Dashboard Layout
-Tab 1: Raw_Data          ← SQL export, untouched
-Tab 2: Retail_Pool       ← denominator query export
-Tab 3: Conv_Rate_Table   ← SUMIFS calculations
-Tab 4: Top10_Monthly     ← filtered + ranked view with slicers
-Tab 5: Top10_by_Market   ← pivot filtered by send_market
-Tab 6: Marketability_Cut ← same but filtered to any_marketable = Y
-Add slicers on conversion_month, send_market, and marketability_segment across Tab 4–6 for interactive filtering — no VBA needed.
