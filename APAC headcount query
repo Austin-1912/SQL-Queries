@@ -1,24 +1,39 @@
--- 1) TXN base restricted to SG/MY, with simplified channel mapping
+Understood — so there are actually **5 buckets**, not 4:
+
+| Window | Definition |
+|---|---|
+| R12 | Active March 2025 – Feb 2026 |
+| R24 | Active March 2024 – Feb 2025 (not R12) |
+| R36 | Active March 2023 – Feb 2024 (not R12/R24) |
+| R48 | Active March 2022 – Feb 2023 (not R12/R24/R36) |
+| R48+ | Transacted but last active before March 2022 |
+| RNT | Registered, never transacted at all |
+
+Two things change — TXN_BASE needs to go back to 2017 again to catch R48+ customers, and the CASE gets one extra bucket:
+
+```sql
+-- ---------------------------------------------------------------
+-- STEP 1 | TXN base — extended back to 2017 to capture R48+
+-- ---------------------------------------------------------------
 CREATE OR REPLACE TABLE CAR_905_TXN_BASE AS
 SELECT
     t.sndcustomer_key,
-    t.sndcountry_code,
-    t.txn_id,                         
-    YEAR(t.rcvpaying_datetime) AS txn_year,
-    rcvpaying_datetime,
-    pricing_channel,
-   CASE
-        WHEN pricing_channel IN ('WEB','APP')       THEN 'DIGITAL'
-        WHEN pricing_channel IN ('POS','AIR','TMT') THEN 'RETAIL'
+    t.txn_id,
+    t.rcvpaying_datetime,
+    t.pricing_channel,
+    CASE
+        WHEN t.pricing_channel IN ('WEB','APP')       THEN 'DIGITAL'
+        WHEN t.pricing_channel IN ('POS','AIR','TMT') THEN 'RETAIL'
         ELSE 'OTHERS'
     END AS channel_type
 FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
-WHERE t.sndcountry_code IN ('SG','MY')
-AND DATE(t.rcvpaying_datetime)  >= '2017-01-01'
-  AND DATE(t.rcvpaying_datetime)  <  '2026-01-01';
+WHERE DATE(t.rcvpaying_datetime) >= '2017-01-01'
+  AND DATE(t.rcvpaying_datetime) <  '2026-03-01'
+;
+
 
 -- ---------------------------------------------------------------
--- STEP 2- Marketability flags from customer master
+-- STEP 2 | Marketability flags from customer master (unchanged)
 -- ---------------------------------------------------------------
 CREATE OR REPLACE TABLE CAR_905_CUST_MARKETABILITY AS
 SELECT
@@ -27,100 +42,108 @@ SELECT
     CASE
         WHEN c.marketing_flag             = 'Y'
          AND c.email_address_on_file_flag = 'Y'
-         AND c.opt_email                  = 'I'            THEN 'Y'
+         AND c.opt_email                  = 'I'  THEN 'Y'
         ELSE 'N'
-    END                                                     AS email_marketable_flag,
+    END AS email_marketable_flag,
     CASE
         WHEN c.marketing_flag             = 'Y'
          AND c.mobile_number_on_file_flag = 'Y'
-         AND c.opt_sms                    = 'I'            THEN 'Y'
+         AND c.opt_sms                    = 'I'  THEN 'Y'
         ELSE 'N'
-    END                                                     AS sms_marketable_flag
-FROM  WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c  
-WHERE c.country_code IN ('SG', 'MY');
+    END AS sms_marketable_flag
+FROM WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
+WHERE c.country_code IN ('SG', 'MY')
+;
 
 
 -- ---------------------------------------------------------------
--- STEP 3 - Customer activity aggregated per year
+-- STEP 3 | Assign each customer to their activity window
+--          Most recent rolling window wins (CASE precedence)
+--          R48+ = transacted but only before March 2022
+--          RNT  = registered but never transacted at all
 -- ---------------------------------------------------------------
-CREATE OR REPLACE TABLE CAR_905_CUST_YEAR_ACTIVITY AS
+CREATE OR REPLACE TABLE CAR_905_CUST_ACTIVITY AS
+
+WITH customer_windows AS (
+    SELECT
+        c.customer_key,
+        c.country_code,
+        CASE
+            WHEN MAX(CASE WHEN t.rcvpaying_datetime >= '2025-03-01'
+                          AND t.rcvpaying_datetime <  '2026-03-01' THEN 1 ELSE 0 END) = 1 THEN 'R12'
+            WHEN MAX(CASE WHEN t.rcvpaying_datetime >= '2024-03-01'
+                          AND t.rcvpaying_datetime <  '2025-03-01' THEN 1 ELSE 0 END) = 1 THEN 'R24'
+            WHEN MAX(CASE WHEN t.rcvpaying_datetime >= '2023-03-01'
+                          AND t.rcvpaying_datetime <  '2024-03-01' THEN 1 ELSE 0 END) = 1 THEN 'R36'
+            WHEN MAX(CASE WHEN t.rcvpaying_datetime >= '2022-03-01'
+                          AND t.rcvpaying_datetime <  '2023-03-01' THEN 1 ELSE 0 END) = 1 THEN 'R48'
+            WHEN MAX(CASE WHEN t.rcvpaying_datetime <  '2022-03-01' THEN 1 ELSE 0 END) = 1 THEN 'R48+'
+            ELSE 'RNT'   -- no transactions found at all
+        END AS activity_window
+    FROM      WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
+    LEFT JOIN CAR_905_TXN_BASE t ON t.sndcustomer_key = c.customer_key
+    WHERE c.country_code IN ('SG', 'MY')
+    GROUP BY c.customer_key, c.country_code
+),
+
+window_dates AS (
+    SELECT 'R12'  AS activity_window, '2025-03-01'::DATE AS start_dt, '2026-03-01'::DATE AS end_dt UNION ALL
+    SELECT 'R24',                      '2024-03-01'::DATE,             '2025-03-01'::DATE           UNION ALL
+    SELECT 'R36',                      '2023-03-01'::DATE,             '2024-03-01'::DATE           UNION ALL
+    SELECT 'R48',                      '2022-03-01'::DATE,             '2023-03-01'::DATE           UNION ALL
+    SELECT 'R48+',                     '2017-01-01'::DATE,             '2022-03-01'::DATE           -- full historical window
+)
+
 SELECT
-    sndcustomer_key,
-    sndcountry_code,
-    txn_year,
-    CASE WHEN txn_year = 2025 THEN 'R12'
-        WHEN TXN_YEAR = 2024 THEN  'R24'
-        WHEN TXN_YEAR = 2023 THEN 'R36'
-        WHEN TXN_YEAR = 2022 THEN 'R48'
-        WHEN TXN_YEAR = 2021 THEN 'R60'
-        WHEN TXN_YEAR = 2020 THEN 'R72'
-        WHEN TXN_YEAR = 2019 THEN 'R84'
-        WHEN TXN_YEAR = 2018 THEN 'R96'
-        WHEN TXN_YEAR = 2017 THEN 'R108'
-        
-    END                                                     AS activity_window,
+    cw.customer_key,
+    cw.country_code,
+    cw.activity_window,
     CASE
-        WHEN MAX(CASE WHEN channel_type = 'DIGITAL' THEN 1 ELSE 0 END) = 1
-         AND MAX(CASE WHEN channel_type = 'RETAIL'  THEN 1 ELSE 0 END) = 1 THEN 'OMNI'
-        WHEN MAX(CASE WHEN channel_type = 'DIGITAL' THEN 1 ELSE 0 END) = 1  THEN 'DIGITAL'
-        WHEN MAX(CASE WHEN channel_type = 'RETAIL'  THEN 1 ELSE 0 END) = 1  THEN 'RETAIL'
+        WHEN cw.activity_window = 'RNT'                                       THEN 'N/A'
+        WHEN MAX(CASE WHEN t.channel_type = 'DIGITAL' THEN 1 ELSE 0 END) = 1
+         AND MAX(CASE WHEN t.channel_type = 'RETAIL'  THEN 1 ELSE 0 END) = 1 THEN 'OMNI'
+        WHEN MAX(CASE WHEN t.channel_type = 'DIGITAL' THEN 1 ELSE 0 END) = 1 THEN 'DIGITAL'
+        WHEN MAX(CASE WHEN t.channel_type = 'RETAIL'  THEN 1 ELSE 0 END) = 1 THEN 'RETAIL'
         ELSE 'OTHERS'
     END AS channel_segment,
-     MAX(CASE WHEN pricing_channel = 'APP' THEN 'Y' ELSE 'N' END)
-                                                            AS app_marketable_flag,
-    
-FROM  CAR_905_TXN_BASE
-GROUP BY ALL;
+    COALESCE(MAX(CASE WHEN t.pricing_channel = 'APP' THEN 'Y' ELSE 'N' END), 'N')
+                                                                              AS app_marketable_flag
+FROM      customer_windows cw
+LEFT JOIN window_dates wd ON wd.activity_window = cw.activity_window
+LEFT JOIN CAR_905_TXN_BASE t
+       ON  t.sndcustomer_key    = cw.customer_key
+      AND  t.rcvpaying_datetime >= wd.start_dt
+      AND  t.rcvpaying_datetime <  wd.end_dt
+GROUP BY cw.customer_key, cw.country_code, cw.activity_window
+;
+
+
 -- ---------------------------------------------------------------
--- STEP 4 | Summary — customers per window × channel × marketability
+-- STEP 4 | Final summary (unchanged)
 -- ---------------------------------------------------------------
- CREATE OR REPLACE TABLE CAR_905_FINAL_SUMMARY AS 
--- customer counted in every year they were active
+CREATE OR REPLACE TABLE CAR_905_FINAL_SUMMARY AS
 SELECT
-    a.sndcountry_code AS COUNTRY ,
+    a.country_code                          AS country,
     a.activity_window,
     a.channel_segment,
     a.app_marketable_flag,
-    COALESCE(m.email_marketable_flag, 'N')                  AS email_marketable_flag,
-    COALESCE(m.sms_marketable_flag,   'N')                  AS sms_marketable_flag,
-    COUNT(DISTINCT a.sndcustomer_key)                       AS customer_count
-FROM  CAR_905_CUST_YEAR_ACTIVITY a
+    COALESCE(m.email_marketable_flag, 'N')  AS email_marketable_flag,
+    COALESCE(m.sms_marketable_flag,   'N')  AS sms_marketable_flag,
+    COUNT(DISTINCT a.customer_key)          AS customer_count
+FROM      CAR_905_CUST_ACTIVITY a
 LEFT JOIN CAR_905_CUST_MARKETABILITY m
-       ON m.customer_key = a.sndcustomer_key
+       ON m.customer_key = a.customer_key
+      AND m.country_code = a.country_code
 GROUP BY ALL
- 
-UNION ALL
- 
--- RNT: registered in customer master but zero transactions 2017–2025
-SELECT
-    c.country_code                               AS COUNTRY,
-    'RNT'                                                   AS activity_window,
-    'N/A'                                                   AS channel_segment,
-    'N'                                                     AS app_marketable_flag,
-    CASE
-        WHEN c.marketing_flag             = 'Y'
-         AND c.email_address_on_file_flag = 'Y'
-         AND c.opt_email                  = 'I'            THEN 'Y'
-        ELSE 'N'
-    END                                                     AS email_marketable_flag,
-    CASE
-        WHEN c.marketing_flag             = 'Y'
-         AND c.mobile_number_on_file_flag = 'Y'
-         AND c.opt_sms                    = 'I'            THEN 'Y'
-        ELSE 'N'
-    END                                                     AS sms_marketable_flag,
-    COUNT(DISTINCT c.customer_key)                          AS customer_count
-FROM  WUDNA.SUMMARY_GEN.CUSTOMER_MASTER_VW c
-WHERE c.country_code IN ('SG', 'MY')
-  AND NOT EXISTS (
-        SELECT sndcustomer_key
-        FROM   CAR_905_TXN_BASE t
-        WHERE  t.sndcustomer_key = c.customer_key
-        and t.sndcustomer_key is not null
-  )
-GROUP BY ALL
+ORDER BY
+    country,
+    CASE activity_window
+        WHEN 'R12'  THEN 1  WHEN 'R24' THEN 2  WHEN 'R36' THEN 3
+        WHEN 'R48'  THEN 4  WHEN 'R48+' THEN 5 WHEN 'RNT' THEN 6
+        ELSE 99
+    END,
+    channel_segment
 ;
+```
 
-select sum(customer_count) from  CAR_905_FINAL_SUMMARY
-WHERE activity_window = 'R24'
-AND COUNTRY = 'MY';--236,211 AND IN CEM SCORECARD 234,939
+The sanity check for this should now be: **R12 + R24 + R36 + R48 + R48+ + RNT = total registered customer base in customer master** for SG and MY respectively — every registered customer lands in exactly one bucket.
