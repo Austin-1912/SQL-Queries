@@ -59,7 +59,9 @@ WITH customer_windows AS (
              WHEN MAX(DATE(rcvpaying_datetime)) >= '2022-03-01' THEN 'R48'
              WHEN MAX(DATE(rcvpaying_datetime)) < '2022-03-01' THEN 'R48+'
              ELSE 'RNT'
-        END AS activity_window
+        END AS activity_window,
+ COUNT(DISTINCT CASE WHEN channel_type = 'RETAIL' THEN txn_id  END) AS retail_txn,
+        COUNT(DISTINCT CASE WHEN channel_type = 'DIGITAL' THEN txn_id END) AS digital_txn
     FROM  CAR_905_TXN_BASE1
     GROUP BY ALL
 ),
@@ -77,12 +79,12 @@ SELECT
     cw.activity_window,
     CASE
         WHEN cw.activity_window = 'RNT'                                       THEN 'N/A'
-        WHEN MAX(CASE WHEN t.channel_type = 'DIGITAL' THEN 1 ELSE 0 END) = 1
-         AND MAX(CASE WHEN t.channel_type = 'RETAIL'  THEN 1 ELSE 0 END) = 1 THEN 'OMNI'
-        WHEN MAX(CASE WHEN t.channel_type = 'DIGITAL' THEN 1 ELSE 0 END) = 1 THEN 'DIGITAL'
-        WHEN MAX(CASE WHEN t.channel_type = 'RETAIL'  THEN 1 ELSE 0 END) = 1 THEN 'RETAIL'
-        ELSE 'OTHERS'
-    END AS channel_segment,
+WHEN digital_txn > 0 AND retail_txn > 0 THEN 'OMNI' 
+WHEN digital_txn > 0 THEN 'Digital' 
+WHEN retail_txn > 0 THEN 'Retail' 
+ELSE 'Others' 
+END AS channel_segment,
+
     COALESCE(MAX(CASE WHEN t.pricing_channel = 'APP' THEN 'Y' ELSE 'N' END), 'N')
                                                                               AS app_marketable_flag
 FROM      customer_windows cw
@@ -91,7 +93,7 @@ LEFT JOIN CAR_905_TXN_BASE t
        ON  t.sndcustomer_key    = cw.customer_key
       AND  t.rcvpaying_datetime >= wd.start_dt
       AND  t.rcvpaying_datetime <  wd.end_dt
-GROUP BY cw.customer_key, cw.country_code, cw.activity_window
+GROUP BY ALL
 ;
 
 -- ---------------------------------------------------------------
