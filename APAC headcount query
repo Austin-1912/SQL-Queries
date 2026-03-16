@@ -1,22 +1,189 @@
--- 1) TXN base restricted to SG/MY, with simplified channel mapping
+-- ---------------------------------------------------------------
+-- STEP 1 | Raw transaction base — SG + MY, 2017–2025
+-- (unchanged)
+-- ---------------------------------------------------------------
 CREATE OR REPLACE TABLE CAR_905_TXN_BASE AS
 SELECT
     t.sndcustomer_key,
     t.sndcountry_code,
-    t.txn_id,                           -- adjust column name
+    t.txn_id,
     t.rcvpaying_datetime,
-   CASE
-        WHEN pricing_channel IN ('WEB','APP')       THEN 'DIGITAL'
-        WHEN pricing_channel IN ('POS','AIR','TMT') THEN 'RETAIL'
+    YEAR(t.rcvpaying_datetime)                              AS txn_year,
+    t.pricing_channel,
+    CASE
+        WHEN t.pricing_channel IN ('WEB','APP')             THEN 'DIGITAL'
+        WHEN t.pricing_channel IN ('POS','AIR','TMT')       THEN 'RETAIL'
         ELSE 'OTHERS'
-    END AS channel_type
-FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
-As dsicussed you will need the total customer base for SG and MY based on all the available transaction data segmented by 
+    END                                                     AS channel_type,
+    CASE
+        WHEN t.marketing_flag             = 'Y'
+         AND t.email_address_on_file_flag = 'Y'
+         AND t.opt_email                  = 'I'            THEN 'Y'
+        ELSE 'N'
+    END                                                     AS email_marketable_flag,
+    CASE
+        WHEN t.marketing_flag             = 'Y'
+         AND t.mobile_number_on_file_flag = 'Y'
+         AND t.opt_sms                    = 'I'            THEN 'Y'
+        ELSE 'N'
+    END                                                     AS sms_marketable_flag
+FROM  WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
+WHERE t.sndcountry_code     IN ('SG', 'MY')
+  AND t.rcvpaying_datetime  >= '2017-01-01'
+  AND t.rcvpaying_datetime  <  '2026-01-01'
+;
 
-Activity Status - RNT, R12 Active, R24 Active ….. Untill data available period.
 
-Split by Retail, Digital, Omni
-any person who have done a transaction in that time period should be considered as Active in that period not take their last txn date. For RNT check if they have a txn in the entire time period 
-   CASE WHEN marketing_flag='Y' AND email_address_on_file_flag='Y' AND opt_email='I' THEN 'Y' ELSE 'N' END AS email_marketable_flag,
-    CASE WHEN marketing_flag='Y' AND mobile_number_on_file_flag='Y' AND opt_sms='I'   THEN 'Y' ELSE 'N' END AS sms_marketable_flag, for app_marketability , if a customer has done any app txn during that period then they are app marketable 
-what we can do is We can do R12 for Jan to Dec 2025, R24 to be Jan to Dec 2024, R36 Jan to Dec 2023, etc and we have data till 2017 
+-- ---------------------------------------------------------------
+-- STEP 2 | Customer activity aggregated per year
+-- (unchanged)
+-- ---------------------------------------------------------------
+CREATE OR REPLACE TABLE CAR_905_CUST_YEAR_ACTIVITY AS
+SELECT
+    sndcustomer_key,
+    sndcountry_code,
+    txn_year,
+    CASE txn_year
+        WHEN 2025 THEN 'R12'
+        WHEN 2024 THEN 'R24'
+        WHEN 2023 THEN 'R36'
+        WHEN 2022 THEN 'R48'
+        WHEN 2021 THEN 'R60'
+        WHEN 2020 THEN 'R72'
+        WHEN 2019 THEN 'R84'
+        WHEN 2018 THEN 'R96'
+        WHEN 2017 THEN 'R108'
+    END                                                     AS activity_window,
+    CASE
+        WHEN MAX(CASE WHEN channel_type = 'DIGITAL' THEN 1 ELSE 0 END) = 1
+         AND MAX(CASE WHEN channel_type = 'RETAIL'  THEN 1 ELSE 0 END) = 1 THEN 'OMNI'
+        WHEN MAX(CASE WHEN channel_type = 'DIGITAL' THEN 1 ELSE 0 END) = 1  THEN 'DIGITAL'
+        WHEN MAX(CASE WHEN channel_type = 'RETAIL'  THEN 1 ELSE 0 END) = 1  THEN 'RETAIL'
+        ELSE 'OTHERS'
+    END                                                     AS channel_segment,
+    MAX(CASE WHEN pricing_channel = 'APP' THEN 'Y' ELSE 'N' END)
+                                                            AS app_marketable_flag,
+    MAX(email_marketable_flag)                              AS email_marketable_flag,
+    MAX(sms_marketable_flag)                                AS sms_marketable_flag
+FROM  CAR_905_TXN_BASE
+GROUP BY 1, 2, 3, 4
+;
+
+
+-- ---------------------------------------------------------------
+-- STEP 3 | Customer-level base — most recent Rxx bucket
+--          RNT is NO LONGER an override here; handled in Step 4
+-- ---------------------------------------------------------------
+CREATE OR REPLACE TABLE CAR_905_CUST_BASE AS
+SELECT
+    a.sndcustomer_key,
+    a.sndcountry_code,
+    a.activity_window                                       AS activity_status,
+    a.channel_segment,
+    a.app_marketable_flag,
+    a.email_marketable_flag,
+    a.sms_marketable_flag
+FROM (
+    SELECT
+        *,
+        ROW_NUMBER() OVER (
+            PARTITION BY sndcustomer_key, sndcountry_code
+            ORDER BY     txn_year DESC                      -- most recent year wins
+        ) AS yr_rank
+    FROM  CAR_905_CUST_YEAR_ACTIVITY
+    WHERE activity_window IS NOT NULL
+) a
+WHERE a.yr_rank = 1
+;
+
+
+-- ---------------------------------------------------------------
+-- STEP 4 | Summary — Rxx buckets UNION RNT (total universe)
+--
+-- RNT row = all customers who transacted at any point 2017–2025.
+-- Channel segment for RNT is derived across the FULL period, so
+-- a customer who was Digital one year and Retail another = OMNI.
+-- Marketability for RNT = most favourable flag across full period.
+-- ---------------------------------------------------------------
+
+-- 4a. Rxx mutually exclusive buckets (most recent year)
+SELECT
+    sndcountry_code,
+    activity_status,
+    channel_segment,
+    email_marketable_flag,
+    sms_marketable_flag,
+    app_marketable_flag,
+    COUNT(DISTINCT sndcustomer_key)                         AS customer_count
+
+FROM  CAR_905_CUST_BASE
+GROUP BY 1, 2, 3, 4, 5, 6
+
+UNION ALL
+
+-- 4b. RNT = full universe across entire 2017–2025 period
+SELECT
+    sndcountry_code,
+    'RNT'                                                   AS activity_status,
+
+    -- Channel across full period (any Digital + any Retail = OMNI)
+    CASE
+        WHEN MAX(CASE WHEN channel_type = 'DIGITAL' THEN 1 ELSE 0 END) = 1
+         AND MAX(CASE WHEN channel_type = 'RETAIL'  THEN 1 ELSE 0 END) = 1 THEN 'OMNI'
+        WHEN MAX(CASE WHEN channel_type = 'DIGITAL' THEN 1 ELSE 0 END) = 1  THEN 'DIGITAL'
+        WHEN MAX(CASE WHEN channel_type = 'RETAIL'  THEN 1 ELSE 0 END) = 1  THEN 'RETAIL'
+        ELSE 'OTHERS'
+    END                                                     AS channel_segment,
+
+    MAX(email_marketable_flag)                              AS email_marketable_flag,
+    MAX(sms_marketable_flag)                                AS sms_marketable_flag,
+    MAX(CASE WHEN pricing_channel = 'APP' THEN 'Y' ELSE 'N' END)
+                                                            AS app_marketable_flag,
+    COUNT(DISTINCT sndcustomer_key)                         AS customer_count
+
+FROM  CAR_905_TXN_BASE
+GROUP BY 1, 3, 4, 5, 6                                     -- channel/marketability aggregated per customer first below
+
+-- ⚠ The above RNT block aggregates at txn level — wrap in a subquery
+-- to correctly derive per-customer flags before counting:
+
+ORDER BY
+    sndcountry_code,
+    CASE activity_status
+        WHEN 'RNT'  THEN 0  WHEN 'R12'  THEN 1  WHEN 'R24'  THEN 2
+        WHEN 'R36'  THEN 3  WHEN 'R48'  THEN 4  WHEN 'R60'  THEN 5
+        WHEN 'R72'  THEN 6  WHEN 'R84'  THEN 7  WHEN 'R96'  THEN 8
+        WHEN 'R108' THEN 9  ELSE 99
+    END,
+    channel_segment
+;
+The 4b RNT block needs a two-level aggregation to avoid counting customers at transaction level — here's the clean version of that block:
+-- Corrected 4b — RNT universe with per-customer aggregation first
+SELECT
+    sndcountry_code,
+    'RNT'                                                   AS activity_status,
+    channel_segment,
+    email_marketable_flag,
+    sms_marketable_flag,
+    app_marketable_flag,
+    COUNT(DISTINCT sndcustomer_key)                         AS customer_count
+FROM (
+    -- Inner: one row per customer, flags/channel across full period
+    SELECT
+        sndcustomer_key,
+        sndcountry_code,
+        CASE
+            WHEN MAX(CASE WHEN channel_type = 'DIGITAL' THEN 1 ELSE 0 END) = 1
+             AND MAX(CASE WHEN channel_type = 'RETAIL'  THEN 1 ELSE 0 END) = 1 THEN 'OMNI'
+            WHEN MAX(CASE WHEN channel_type = 'DIGITAL' THEN 1 ELSE 0 END) = 1  THEN 'DIGITAL'
+            WHEN MAX(CASE WHEN channel_type = 'RETAIL'  THEN 1 ELSE 0 END) = 1  THEN 'RETAIL'
+            ELSE 'OTHERS'
+        END                                                 AS channel_segment,
+        MAX(email_marketable_flag)                          AS email_marketable_flag,
+        MAX(sms_marketable_flag)                            AS sms_marketable_flag,
+        MAX(CASE WHEN pricing_channel = 'APP' THEN 'Y' ELSE 'N' END)
+                                                            AS app_marketable_flag
+    FROM  CAR_905_TXN_BASE
+    GROUP BY 1, 2
+) cust_rnt
+GROUP BY 1, 2, 3, 4, 5, 6
