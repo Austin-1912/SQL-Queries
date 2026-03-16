@@ -3,7 +3,7 @@ CREATE OR REPLACE TABLE CAR_905_TXN_BASE AS
 SELECT
     t.sndcustomer_key,
     t.sndcountry_code,
-    t.txn_id,                           -- adjust column name
+    t.txn_id,                         
     YEAR(t.rcvpaying_datetime) AS txn_year,
     rcvpaying_datetime,
     pricing_channel,
@@ -16,8 +16,6 @@ FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
 WHERE t.sndcountry_code IN ('SG','MY')
 AND DATE(t.rcvpaying_datetime)  >= '2017-01-01'
   AND DATE(t.rcvpaying_datetime)  <  '2026-01-01';
-
-select count(distinct sndcustomer_key) from CAR_905_TXN_BASE where sndcountry_code = 'MY' and txn_year = 2025;
 
 -- ---------------------------------------------------------------
 -- STEP 2- Marketability flags from customer master
@@ -51,7 +49,7 @@ SELECT
     sndcountry_code,
     txn_year,
     CASE WHEN txn_year = 2025 THEN 'R12'
-        WHEN TXN_YEAR = 2024 THEN 'R24'
+        WHEN TXN_YEAR = 2024 THEN  'R24'
         WHEN TXN_YEAR = 2023 THEN 'R36'
         WHEN TXN_YEAR = 2022 THEN 'R48'
         WHEN TXN_YEAR = 2021 THEN 'R60'
@@ -59,22 +57,20 @@ SELECT
         WHEN TXN_YEAR = 2019 THEN 'R84'
         WHEN TXN_YEAR = 2018 THEN 'R96'
         WHEN TXN_YEAR = 2017 THEN 'R108'
+        
     END                                                     AS activity_window,
     CASE
-        WHEN CASE WHEN channel_type = 'DIGITAL' THEN 1 ELSE 0 END = 1
-         AND CASE WHEN channel_type = 'RETAIL'  THEN 1 ELSE 0 END = 1 THEN 'OMNI'
-        WHEN CASE WHEN channel_type = 'DIGITAL' THEN 1 ELSE 0 END = 1  THEN 'DIGITAL'
-        WHEN CASE WHEN channel_type = 'RETAIL'  THEN 1 ELSE 0 END = 1  THEN 'RETAIL'
+        WHEN MAX(CASE WHEN channel_type = 'DIGITAL' THEN 1 ELSE 0 END) = 1
+         AND MAX(CASE WHEN channel_type = 'RETAIL'  THEN 1 ELSE 0 END) = 1 THEN 'OMNI'
+        WHEN MAX(CASE WHEN channel_type = 'DIGITAL' THEN 1 ELSE 0 END) = 1  THEN 'DIGITAL'
+        WHEN MAX(CASE WHEN channel_type = 'RETAIL'  THEN 1 ELSE 0 END) = 1  THEN 'RETAIL'
         ELSE 'OTHERS'
-    END                                                     AS channel_segment,
+    END AS channel_segment,
      MAX(CASE WHEN pricing_channel = 'APP' THEN 'Y' ELSE 'N' END)
                                                             AS app_marketable_flag,
     
 FROM  CAR_905_TXN_BASE
 GROUP BY ALL;
-select * from CAR_905_CUST_YEAR_ACTIVITY limit 100;
-select count( distinct sndcustomer_key) from CAR_905_CUST_YEAR_ACTIVITY where sndcountry_code = 'MY' AND activity_window = 'R12';--236,211
-
 -- ---------------------------------------------------------------
 -- STEP 4 | Summary — customers per window × channel × marketability
 -- ---------------------------------------------------------------
@@ -126,9 +122,5 @@ GROUP BY ALL
 ;
 
 select sum(customer_count) from  CAR_905_FINAL_SUMMARY
-WHERE activity_window = 'R12'
-AND COUNTRY = 'MY';--239,224 AND IN CEM SCORECARD 234,939
-
-select sum(customer_count) from  CAR_905_FINAL_SUMMARY
-WHERE activity_window = 'R12'
-AND COUNTRY = 'SG';--253,088 AND IN CEM SCORECARD R12 IS 244,418
+WHERE activity_window = 'R24'
+AND COUNTRY = 'MY';--236,211 AND IN CEM SCORECARD 234,939
