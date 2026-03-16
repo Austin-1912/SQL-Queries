@@ -1,89 +1,67 @@
-Understood — so there are actually **5 buckets**, not 4:
-
-| Window | Definition |
-|---|---|
-| R12 | Active March 2025 – Feb 2026 |
-| R24 | Active March 2024 – Feb 2025 (not R12) |
-| R36 | Active March 2023 – Feb 2024 (not R12/R24) |
-| R48 | Active March 2022 – Feb 2023 (not R12/R24/R36) |
-| R48+ | Transacted but last active before March 2022 |
-| RNT | Registered, never transacted at all |
-
-Two things change — TXN_BASE needs to go back to 2017 again to catch R48+ customers, and the CASE gets one extra bucket:
-
-```sql
 -- ---------------------------------------------------------------
--- STEP 1 | TXN base — extended back to 2017 to capture R48+
+-- STEP 1- Marketability flags from customer master
 -- ---------------------------------------------------------------
-CREATE OR REPLACE TABLE CAR_905_TXN_BASE AS
-SELECT
-    t.sndcustomer_key,
-    t.txn_id,
-    t.rcvpaying_datetime,
-    t.pricing_channel,
-    CASE
-        WHEN t.pricing_channel IN ('WEB','APP')       THEN 'DIGITAL'
-        WHEN t.pricing_channel IN ('POS','AIR','TMT') THEN 'RETAIL'
-        ELSE 'OTHERS'
-    END AS channel_type
-FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
-WHERE DATE(t.rcvpaying_datetime) >= '2017-01-01'
-  AND DATE(t.rcvpaying_datetime) <  '2026-03-01'
-;
-
-
--- ---------------------------------------------------------------
--- STEP 2 | Marketability flags from customer master (unchanged)
--- ---------------------------------------------------------------
-CREATE OR REPLACE TABLE CAR_905_CUST_MARKETABILITY AS
+CREATE OR REPLACE TABLE CAR_905_CUST_MARKETABILITY1 AS
 SELECT
     c.customer_key,
     c.country_code,
     CASE
         WHEN c.marketing_flag             = 'Y'
          AND c.email_address_on_file_flag = 'Y'
-         AND c.opt_email                  = 'I'  THEN 'Y'
+         AND c.opt_email                  = 'I'            THEN 'Y'
         ELSE 'N'
-    END AS email_marketable_flag,
+    END                                                     AS email_marketable_flag,
     CASE
         WHEN c.marketing_flag             = 'Y'
          AND c.mobile_number_on_file_flag = 'Y'
-         AND c.opt_sms                    = 'I'  THEN 'Y'
+         AND c.opt_sms                    = 'I'            THEN 'Y'
         ELSE 'N'
-    END AS sms_marketable_flag
-FROM WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
-WHERE c.country_code IN ('SG', 'MY')
-;
+    END                                                     AS sms_marketable_flag
+FROM  WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c  
+WHERE c.country_code IN ('SG', 'MY');
 
+-- 2) TXN base restricted to SG/MY, with simplified channel mapping
+CREATE OR REPLACE TABLE CAR_905_TXN_BASE1 AS
+SELECT
+    c.customer_key,
+    t.sndcountry_code,
+    c.country_code,
+    t.txn_id,                         
+    t.rcvpaying_datetime,
+    t.pricing_channel,
+    -- COALESCE(c.email_marketable_flag, 'N')                  AS email_marketable_flag,
+    -- COALESCE(c.sms_marketable_flag,   'N')                  AS sms_marketable_flag,
+   CASE
+        WHEN t.pricing_channel IN ('WEB','APP')       THEN 'DIGITAL'
+        WHEN t.pricing_channel IN ('POS','AIR','TMT') THEN 'RETAIL'
+        ELSE 'OTHERS'
+    END AS channel_type
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
+JOIN CAR_905_CUST_MARKETABILITY1 c
+ON t.sndcustomer_key = c.customer_key
+-- WHERE t.sndcountry_code IN ('SG','MY')
+WHERE DATE(t.rcvpaying_datetime)  >= '2017-01-01'
+  AND DATE(t.rcvpaying_datetime)  <  '2026-03-01';
 
 -- ---------------------------------------------------------------
--- STEP 3 | Assign each customer to their activity window
---          Most recent rolling window wins (CASE precedence)
---          R48+ = transacted but only before March 2022
---          RNT  = registered but never transacted at all
--- ---------------------------------------------------------------
-CREATE OR REPLACE TABLE CAR_905_CUST_ACTIVITY AS
-
+-- STEP 3 - Customer activity aggregated per year
+----
+CREATE OR REPLACE TABLE CAR_905_CUST_ACTIVITY1 AS
+ 
 WITH customer_windows AS (
     SELECT
-        c.customer_key,
-        c.country_code,
-        CASE
-            WHEN MAX(CASE WHEN t.rcvpaying_datetime >= '2025-03-01'
-                          AND t.rcvpaying_datetime <  '2026-03-01' THEN 1 ELSE 0 END) = 1 THEN 'R12'
-            WHEN MAX(CASE WHEN t.rcvpaying_datetime >= '2024-03-01'
-                          AND t.rcvpaying_datetime <  '2025-03-01' THEN 1 ELSE 0 END) = 1 THEN 'R24'
-            WHEN MAX(CASE WHEN t.rcvpaying_datetime >= '2023-03-01'
-                          AND t.rcvpaying_datetime <  '2024-03-01' THEN 1 ELSE 0 END) = 1 THEN 'R36'
-            WHEN MAX(CASE WHEN t.rcvpaying_datetime >= '2022-03-01'
-                          AND t.rcvpaying_datetime <  '2023-03-01' THEN 1 ELSE 0 END) = 1 THEN 'R48'
-            WHEN MAX(CASE WHEN t.rcvpaying_datetime <  '2022-03-01' THEN 1 ELSE 0 END) = 1 THEN 'R48+'
-            ELSE 'RNT'   -- no transactions found at all
+        customer_key,
+        country_code,
+        -- channel_type,
+        CASE WHEN MAX(DATE(rcvpaying_datetime)) >= '2025-03-01' AND MAX(DATE(rcvpaying_datetime)) < '2026-03-01' THEN 'R12'
+             WHEN MAX(DATE(rcvpaying_datetime)) >= '2024-03-01' THEN 'R24'
+             WHEN MAX(DATE(rcvpaying_datetime)) >= '2023-03-01' THEN 'R36'
+             WHEN MAX(DATE(rcvpaying_datetime)) >= '2022-03-01' THEN 'R48'
+             WHEN MAX(DATE(rcvpaying_datetime)) < '2022-03-01' THEN 'R48+'
+             ELSE 'RNT'
         END AS activity_window
-    FROM      WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
-    LEFT JOIN CAR_905_TXN_BASE t ON t.sndcustomer_key = c.customer_key
-    WHERE c.country_code IN ('SG', 'MY')
-    GROUP BY c.customer_key, c.country_code
+    FROM  CAR_905_TXN_BASE1
+    GROUP BY ALL
 ),
 
 window_dates AS (
@@ -91,9 +69,8 @@ window_dates AS (
     SELECT 'R24',                      '2024-03-01'::DATE,             '2025-03-01'::DATE           UNION ALL
     SELECT 'R36',                      '2023-03-01'::DATE,             '2024-03-01'::DATE           UNION ALL
     SELECT 'R48',                      '2022-03-01'::DATE,             '2023-03-01'::DATE           UNION ALL
-    SELECT 'R48+',                     '2017-01-01'::DATE,             '2022-03-01'::DATE           -- full historical window
+    SELECT 'R48+',                     '2017-01-01'::DATE,             '2022-03-01'::DATE           
 )
-
 SELECT
     cw.customer_key,
     cw.country_code,
@@ -117,33 +94,22 @@ LEFT JOIN CAR_905_TXN_BASE t
 GROUP BY cw.customer_key, cw.country_code, cw.activity_window
 ;
 
-
 -- ---------------------------------------------------------------
--- STEP 4 | Final summary (unchanged)
+-- STEP 4 | Final summary
 -- ---------------------------------------------------------------
 CREATE OR REPLACE TABLE CAR_905_FINAL_SUMMARY AS
 SELECT
-    a.country_code                          AS country,
+    a.country_code                  AS country,
     a.activity_window,
     a.channel_segment,
     a.app_marketable_flag,
-    COALESCE(m.email_marketable_flag, 'N')  AS email_marketable_flag,
-    COALESCE(m.sms_marketable_flag,   'N')  AS sms_marketable_flag,
-    COUNT(DISTINCT a.customer_key)          AS customer_count
-FROM      CAR_905_CUST_ACTIVITY a
-LEFT JOIN CAR_905_CUST_MARKETABILITY m
-       ON m.customer_key = a.customer_key
-      AND m.country_code = a.country_code
+    b.email_marketable_flag,
+    b.sms_marketable_flag,
+    CASE WHEN b.email_marketable_flag = 'Y' AND b.sms_marketable_flag = 'Y' AND a.app_marketable_flag = ''
+    COUNT(DISTINCT a.customer_key)  AS customer_count
+FROM      CAR_905_CUST_ACTIVITY1 a
+LEFT JOIN CAR_905_CUST_MARKETABILITY1 b
+       ON b.customer_key  = a.customer_key
+      AND b.country_code  = a.country_code
 GROUP BY ALL
-ORDER BY
-    country,
-    CASE activity_window
-        WHEN 'R12'  THEN 1  WHEN 'R24' THEN 2  WHEN 'R36' THEN 3
-        WHEN 'R48'  THEN 4  WHEN 'R48+' THEN 5 WHEN 'RNT' THEN 6
-        ELSE 99
-    END,
-    channel_segment
 ;
-```
-
-The sanity check for this should now be: **R12 + R24 + R36 + R48 + R48+ + RNT = total registered customer base in customer master** for SG and MY respectively — every registered customer lands in exactly one bucket.
