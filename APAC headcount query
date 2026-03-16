@@ -1,6 +1,6 @@
 -- ---------------------------------------------------------------
 -- STEP 1 | Raw transaction base — SG + MY, 2017–2025
--- (unchanged)
+--          Txn table: activity + channel only, no marketability
 -- ---------------------------------------------------------------
 CREATE OR REPLACE TABLE CAR_905_TXN_BASE AS
 SELECT
@@ -14,19 +14,7 @@ SELECT
         WHEN t.pricing_channel IN ('WEB','APP')             THEN 'DIGITAL'
         WHEN t.pricing_channel IN ('POS','AIR','TMT')       THEN 'RETAIL'
         ELSE 'OTHERS'
-    END                                                     AS channel_type,
-    CASE
-        WHEN t.marketing_flag             = 'Y'
-         AND t.email_address_on_file_flag = 'Y'
-         AND t.opt_email                  = 'I'            THEN 'Y'
-        ELSE 'N'
-    END                                                     AS email_marketable_flag,
-    CASE
-        WHEN t.marketing_flag             = 'Y'
-         AND t.mobile_number_on_file_flag = 'Y'
-         AND t.opt_sms                    = 'I'            THEN 'Y'
-        ELSE 'N'
-    END                                                     AS sms_marketable_flag
+    END                                                     AS channel_type
 FROM  WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
 WHERE t.sndcountry_code     IN ('SG', 'MY')
   AND t.rcvpaying_datetime  >= '2017-01-01'
@@ -35,8 +23,34 @@ WHERE t.sndcountry_code     IN ('SG', 'MY')
 
 
 -- ---------------------------------------------------------------
--- STEP 2 | Customer activity aggregated per year
--- (unchanged)
+-- STEP 2 | Marketability flags from customer master
+--          One row per customer — current/point-in-time snapshot
+--          App marketability derived in Step 3 from txn history
+-- ---------------------------------------------------------------
+CREATE OR REPLACE TABLE CAR_905_CUST_MARKETABILITY AS
+SELECT
+    c.sndcustomer_key,
+    c.sndcountry_code,
+    CASE
+        WHEN c.marketing_flag             = 'Y'
+         AND c.email_address_on_file_flag = 'Y'
+         AND c.opt_email                  = 'I'            THEN 'Y'
+        ELSE 'N'
+    END                                                     AS email_marketable_flag,
+    CASE
+        WHEN c.marketing_flag             = 'Y'
+         AND c.mobile_number_on_file_flag = 'Y'
+         AND c.opt_sms                    = 'I'            THEN 'Y'
+        ELSE 'N'
+    END                                                     AS sms_marketable_flag
+FROM  WUDNA.SUMMARY_GEN.CUSTOMER_MASTER_VW c   -- ⚠ confirm exact schema + table name
+WHERE c.sndcountry_code IN ('SG', 'MY')
+;
+
+
+-- ---------------------------------------------------------------
+-- STEP 3 | Customer activity aggregated per year
+--          App marketability: any APP txn in that year = 'Y'
 -- ---------------------------------------------------------------
 CREATE OR REPLACE TABLE CAR_905_CUST_YEAR_ACTIVITY AS
 SELECT
@@ -62,17 +76,14 @@ SELECT
         ELSE 'OTHERS'
     END                                                     AS channel_segment,
     MAX(CASE WHEN pricing_channel = 'APP' THEN 'Y' ELSE 'N' END)
-                                                            AS app_marketable_flag,
-    MAX(email_marketable_flag)                              AS email_marketable_flag,
-    MAX(sms_marketable_flag)                                AS sms_marketable_flag
+                                                            AS app_marketable_flag
 FROM  CAR_905_TXN_BASE
 GROUP BY 1, 2, 3, 4
 ;
 
 
 -- ---------------------------------------------------------------
--- STEP 3 | Customer-level base — most recent Rxx bucket
---          RNT is NO LONGER an override here; handled in Step 4
+-- STEP 4 | Customer-level base — most recent Rxx + marketability joined
 -- ---------------------------------------------------------------
 CREATE OR REPLACE TABLE CAR_905_CUST_BASE AS
 SELECT
@@ -81,32 +92,30 @@ SELECT
     a.activity_window                                       AS activity_status,
     a.channel_segment,
     a.app_marketable_flag,
-    a.email_marketable_flag,
-    a.sms_marketable_flag
+    COALESCE(m.email_marketable_flag, 'N')                  AS email_marketable_flag,
+    COALESCE(m.sms_marketable_flag,   'N')                  AS sms_marketable_flag
 FROM (
     SELECT
         *,
         ROW_NUMBER() OVER (
             PARTITION BY sndcustomer_key, sndcountry_code
-            ORDER BY     txn_year DESC                      -- most recent year wins
+            ORDER BY     txn_year DESC
         ) AS yr_rank
     FROM  CAR_905_CUST_YEAR_ACTIVITY
     WHERE activity_window IS NOT NULL
 ) a
+LEFT JOIN CAR_905_CUST_MARKETABILITY m
+       ON m.sndcustomer_key  = a.sndcustomer_key
+      AND m.sndcountry_code  = a.sndcountry_code
 WHERE a.yr_rank = 1
 ;
 
 
 -- ---------------------------------------------------------------
--- STEP 4 | Summary — Rxx buckets UNION RNT (total universe)
---
--- RNT row = all customers who transacted at any point 2017–2025.
--- Channel segment for RNT is derived across the FULL period, so
--- a customer who was Digital one year and Retail another = OMNI.
--- Marketability for RNT = most favourable flag across full period.
+-- STEP 5 | Summary — Rxx buckets UNION ALL RNT (total universe)
 -- ---------------------------------------------------------------
 
--- 4a. Rxx mutually exclusive buckets (most recent year)
+-- 5a. Rxx mutually exclusive buckets
 SELECT
     sndcountry_code,
     activity_status,
@@ -115,37 +124,42 @@ SELECT
     sms_marketable_flag,
     app_marketable_flag,
     COUNT(DISTINCT sndcustomer_key)                         AS customer_count
-
 FROM  CAR_905_CUST_BASE
 GROUP BY 1, 2, 3, 4, 5, 6
 
 UNION ALL
 
--- 4b. RNT = full universe across entire 2017–2025 period
+-- 5b. RNT = full universe, channel across entire 2017–2025 period
+--     Marketability from customer master (current snapshot)
 SELECT
-    sndcountry_code,
+    t.sndcountry_code,
     'RNT'                                                   AS activity_status,
-
-    -- Channel across full period (any Digital + any Retail = OMNI)
-    CASE
-        WHEN MAX(CASE WHEN channel_type = 'DIGITAL' THEN 1 ELSE 0 END) = 1
-         AND MAX(CASE WHEN channel_type = 'RETAIL'  THEN 1 ELSE 0 END) = 1 THEN 'OMNI'
-        WHEN MAX(CASE WHEN channel_type = 'DIGITAL' THEN 1 ELSE 0 END) = 1  THEN 'DIGITAL'
-        WHEN MAX(CASE WHEN channel_type = 'RETAIL'  THEN 1 ELSE 0 END) = 1  THEN 'RETAIL'
-        ELSE 'OTHERS'
-    END                                                     AS channel_segment,
-
-    MAX(email_marketable_flag)                              AS email_marketable_flag,
-    MAX(sms_marketable_flag)                                AS sms_marketable_flag,
-    MAX(CASE WHEN pricing_channel = 'APP' THEN 'Y' ELSE 'N' END)
-                                                            AS app_marketable_flag,
-    COUNT(DISTINCT sndcustomer_key)                         AS customer_count
-
-FROM  CAR_905_TXN_BASE
-GROUP BY 1, 3, 4, 5, 6                                     -- channel/marketability aggregated per customer first below
-
--- ⚠ The above RNT block aggregates at txn level — wrap in a subquery
--- to correctly derive per-customer flags before counting:
+    channel_segment,
+    COALESCE(m.email_marketable_flag, 'N')                  AS email_marketable_flag,
+    COALESCE(m.sms_marketable_flag,   'N')                  AS sms_marketable_flag,
+    app_marketable_flag,
+    COUNT(DISTINCT t.sndcustomer_key)                       AS customer_count
+FROM (
+    -- Per-customer channel + app marketability across full period
+    SELECT
+        sndcustomer_key,
+        sndcountry_code,
+        CASE
+            WHEN MAX(CASE WHEN channel_type = 'DIGITAL' THEN 1 ELSE 0 END) = 1
+             AND MAX(CASE WHEN channel_type = 'RETAIL'  THEN 1 ELSE 0 END) = 1 THEN 'OMNI'
+            WHEN MAX(CASE WHEN channel_type = 'DIGITAL' THEN 1 ELSE 0 END) = 1  THEN 'DIGITAL'
+            WHEN MAX(CASE WHEN channel_type = 'RETAIL'  THEN 1 ELSE 0 END) = 1  THEN 'RETAIL'
+            ELSE 'OTHERS'
+        END                                                 AS channel_segment,
+        MAX(CASE WHEN pricing_channel = 'APP' THEN 'Y' ELSE 'N' END)
+                                                            AS app_marketable_flag
+    FROM  CAR_905_TXN_BASE
+    GROUP BY 1, 2
+) t
+LEFT JOIN CAR_905_CUST_MARKETABILITY m
+       ON m.sndcustomer_key  = t.sndcustomer_key
+      AND m.sndcountry_code  = t.sndcountry_code
+GROUP BY 1, 2, 3, 4, 5, 6
 
 ORDER BY
     sndcountry_code,
@@ -157,33 +171,3 @@ ORDER BY
     END,
     channel_segment
 ;
-The 4b RNT block needs a two-level aggregation to avoid counting customers at transaction level — here's the clean version of that block:
--- Corrected 4b — RNT universe with per-customer aggregation first
-SELECT
-    sndcountry_code,
-    'RNT'                                                   AS activity_status,
-    channel_segment,
-    email_marketable_flag,
-    sms_marketable_flag,
-    app_marketable_flag,
-    COUNT(DISTINCT sndcustomer_key)                         AS customer_count
-FROM (
-    -- Inner: one row per customer, flags/channel across full period
-    SELECT
-        sndcustomer_key,
-        sndcountry_code,
-        CASE
-            WHEN MAX(CASE WHEN channel_type = 'DIGITAL' THEN 1 ELSE 0 END) = 1
-             AND MAX(CASE WHEN channel_type = 'RETAIL'  THEN 1 ELSE 0 END) = 1 THEN 'OMNI'
-            WHEN MAX(CASE WHEN channel_type = 'DIGITAL' THEN 1 ELSE 0 END) = 1  THEN 'DIGITAL'
-            WHEN MAX(CASE WHEN channel_type = 'RETAIL'  THEN 1 ELSE 0 END) = 1  THEN 'RETAIL'
-            ELSE 'OTHERS'
-        END                                                 AS channel_segment,
-        MAX(email_marketable_flag)                          AS email_marketable_flag,
-        MAX(sms_marketable_flag)                            AS sms_marketable_flag,
-        MAX(CASE WHEN pricing_channel = 'APP' THEN 'Y' ELSE 'N' END)
-                                                            AS app_marketable_flag
-    FROM  CAR_905_TXN_BASE
-    GROUP BY 1, 2
-) cust_rnt
-GROUP BY 1, 2, 3, 4, 5, 6
