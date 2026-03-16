@@ -1,36 +1,31 @@
--- ---------------------------------------------------------------
--- STEP 1 | Raw transaction base — SG + MY, 2017–2025
---          Txn table: activity + channel only, no marketability
--- ---------------------------------------------------------------
+-- 1) TXN base restricted to SG/MY, with simplified channel mapping
 CREATE OR REPLACE TABLE CAR_905_TXN_BASE AS
 SELECT
     t.sndcustomer_key,
     t.sndcountry_code,
-    t.txn_id,
-    t.rcvpaying_datetime,
-    YEAR(t.rcvpaying_datetime)                              AS txn_year,
-    t.pricing_channel,
-    CASE
-        WHEN t.pricing_channel IN ('WEB','APP')             THEN 'DIGITAL'
-        WHEN t.pricing_channel IN ('POS','AIR','TMT')       THEN 'RETAIL'
+    t.txn_id,                           -- adjust column name
+    YEAR(t.rcvpaying_datetime) AS txn_year,
+    rcvpaying_datetime,
+    pricing_channel,
+   CASE
+        WHEN pricing_channel IN ('WEB','APP')       THEN 'DIGITAL'
+        WHEN pricing_channel IN ('POS','AIR','TMT') THEN 'RETAIL'
         ELSE 'OTHERS'
-    END                                                     AS channel_type
-FROM  WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
-WHERE t.sndcountry_code     IN ('SG', 'MY')
-  AND t.rcvpaying_datetime  >= '2017-01-01'
-  AND t.rcvpaying_datetime  <  '2026-01-01'
-;
+    END AS channel_type
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
+WHERE t.sndcountry_code IN ('SG','MY')
+AND DATE(t.rcvpaying_datetime)  >= '2017-01-01'
+  AND DATE(t.rcvpaying_datetime)  <  '2026-01-01';
 
+select count(distinct sndcustomer_key) from CAR_905_TXN_BASE where sndcountry_code = 'MY' and txn_year = 2025;
 
 -- ---------------------------------------------------------------
--- STEP 2 | Marketability flags from customer master
---          One row per customer — current/point-in-time snapshot
---          App marketability derived in Step 3 from txn history
+-- STEP 2- Marketability flags from customer master
 -- ---------------------------------------------------------------
 CREATE OR REPLACE TABLE CAR_905_CUST_MARKETABILITY AS
 SELECT
-    c.sndcustomer_key,
-    c.sndcountry_code,
+    c.customer_key,
+    c.country_code,
     CASE
         WHEN c.marketing_flag             = 'Y'
          AND c.email_address_on_file_flag = 'Y'
@@ -43,131 +38,97 @@ SELECT
          AND c.opt_sms                    = 'I'            THEN 'Y'
         ELSE 'N'
     END                                                     AS sms_marketable_flag
-FROM  WUDNA.SUMMARY_GEN.CUSTOMER_MASTER_VW c   -- ⚠ confirm exact schema + table name
-WHERE c.sndcountry_code IN ('SG', 'MY')
-;
+FROM  WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c  
+WHERE c.country_code IN ('SG', 'MY');
 
 
 -- ---------------------------------------------------------------
--- STEP 3 | Customer activity aggregated per year
---          App marketability: any APP txn in that year = 'Y'
+-- STEP 3 - Customer activity aggregated per year
 -- ---------------------------------------------------------------
 CREATE OR REPLACE TABLE CAR_905_CUST_YEAR_ACTIVITY AS
 SELECT
     sndcustomer_key,
     sndcountry_code,
     txn_year,
-    CASE txn_year
-        WHEN 2025 THEN 'R12'
-        WHEN 2024 THEN 'R24'
-        WHEN 2023 THEN 'R36'
-        WHEN 2022 THEN 'R48'
-        WHEN 2021 THEN 'R60'
-        WHEN 2020 THEN 'R72'
-        WHEN 2019 THEN 'R84'
-        WHEN 2018 THEN 'R96'
-        WHEN 2017 THEN 'R108'
+    CASE WHEN txn_year = 2025 THEN 'R12'
+        WHEN TXN_YEAR = 2024 THEN 'R24'
+        WHEN TXN_YEAR = 2023 THEN 'R36'
+        WHEN TXN_YEAR = 2022 THEN 'R48'
+        WHEN TXN_YEAR = 2021 THEN 'R60'
+        WHEN TXN_YEAR = 2020 THEN 'R72'
+        WHEN TXN_YEAR = 2019 THEN 'R84'
+        WHEN TXN_YEAR = 2018 THEN 'R96'
+        WHEN TXN_YEAR = 2017 THEN 'R108'
     END                                                     AS activity_window,
     CASE
-        WHEN MAX(CASE WHEN channel_type = 'DIGITAL' THEN 1 ELSE 0 END) = 1
-         AND MAX(CASE WHEN channel_type = 'RETAIL'  THEN 1 ELSE 0 END) = 1 THEN 'OMNI'
-        WHEN MAX(CASE WHEN channel_type = 'DIGITAL' THEN 1 ELSE 0 END) = 1  THEN 'DIGITAL'
-        WHEN MAX(CASE WHEN channel_type = 'RETAIL'  THEN 1 ELSE 0 END) = 1  THEN 'RETAIL'
+        WHEN CASE WHEN channel_type = 'DIGITAL' THEN 1 ELSE 0 END = 1
+         AND CASE WHEN channel_type = 'RETAIL'  THEN 1 ELSE 0 END = 1 THEN 'OMNI'
+        WHEN CASE WHEN channel_type = 'DIGITAL' THEN 1 ELSE 0 END = 1  THEN 'DIGITAL'
+        WHEN CASE WHEN channel_type = 'RETAIL'  THEN 1 ELSE 0 END = 1  THEN 'RETAIL'
         ELSE 'OTHERS'
     END                                                     AS channel_segment,
-    MAX(CASE WHEN pricing_channel = 'APP' THEN 'Y' ELSE 'N' END)
-                                                            AS app_marketable_flag
+     MAX(CASE WHEN pricing_channel = 'APP' THEN 'Y' ELSE 'N' END)
+                                                            AS app_marketable_flag,
+    
 FROM  CAR_905_TXN_BASE
-GROUP BY 1, 2, 3, 4
-;
-
+GROUP BY ALL;
+select * from CAR_905_CUST_YEAR_ACTIVITY limit 100;
+select count( distinct sndcustomer_key) from CAR_905_CUST_YEAR_ACTIVITY where sndcountry_code = 'MY' AND activity_window = 'R12';--236,211
 
 -- ---------------------------------------------------------------
--- STEP 4 | Customer-level base — most recent Rxx + marketability joined
+-- STEP 4 | Summary — customers per window × channel × marketability
 -- ---------------------------------------------------------------
-CREATE OR REPLACE TABLE CAR_905_CUST_BASE AS
+ CREATE OR REPLACE TABLE CAR_905_FINAL_SUMMARY AS 
+-- customer counted in every year they were active
 SELECT
-    a.sndcustomer_key,
-    a.sndcountry_code,
-    a.activity_window                                       AS activity_status,
+    a.sndcountry_code AS COUNTRY ,
+    a.activity_window,
     a.channel_segment,
     a.app_marketable_flag,
     COALESCE(m.email_marketable_flag, 'N')                  AS email_marketable_flag,
-    COALESCE(m.sms_marketable_flag,   'N')                  AS sms_marketable_flag
-FROM (
-    SELECT
-        *,
-        ROW_NUMBER() OVER (
-            PARTITION BY sndcustomer_key, sndcountry_code
-            ORDER BY     txn_year DESC
-        ) AS yr_rank
-    FROM  CAR_905_CUST_YEAR_ACTIVITY
-    WHERE activity_window IS NOT NULL
-) a
-LEFT JOIN CAR_905_CUST_MARKETABILITY m
-       ON m.sndcustomer_key  = a.sndcustomer_key
-      AND m.sndcountry_code  = a.sndcountry_code
-WHERE a.yr_rank = 1
-;
-
-
--- ---------------------------------------------------------------
--- STEP 5 | Summary — Rxx buckets UNION ALL RNT (total universe)
--- ---------------------------------------------------------------
-
--- 5a. Rxx mutually exclusive buckets
-SELECT
-    sndcountry_code,
-    activity_status,
-    channel_segment,
-    email_marketable_flag,
-    sms_marketable_flag,
-    app_marketable_flag,
-    COUNT(DISTINCT sndcustomer_key)                         AS customer_count
-FROM  CAR_905_CUST_BASE
-GROUP BY 1, 2, 3, 4, 5, 6
-
-UNION ALL
-
--- 5b. RNT = full universe, channel across entire 2017–2025 period
---     Marketability from customer master (current snapshot)
-SELECT
-    t.sndcountry_code,
-    'RNT'                                                   AS activity_status,
-    channel_segment,
-    COALESCE(m.email_marketable_flag, 'N')                  AS email_marketable_flag,
     COALESCE(m.sms_marketable_flag,   'N')                  AS sms_marketable_flag,
-    app_marketable_flag,
-    COUNT(DISTINCT t.sndcustomer_key)                       AS customer_count
-FROM (
-    -- Per-customer channel + app marketability across full period
-    SELECT
-        sndcustomer_key,
-        sndcountry_code,
-        CASE
-            WHEN MAX(CASE WHEN channel_type = 'DIGITAL' THEN 1 ELSE 0 END) = 1
-             AND MAX(CASE WHEN channel_type = 'RETAIL'  THEN 1 ELSE 0 END) = 1 THEN 'OMNI'
-            WHEN MAX(CASE WHEN channel_type = 'DIGITAL' THEN 1 ELSE 0 END) = 1  THEN 'DIGITAL'
-            WHEN MAX(CASE WHEN channel_type = 'RETAIL'  THEN 1 ELSE 0 END) = 1  THEN 'RETAIL'
-            ELSE 'OTHERS'
-        END                                                 AS channel_segment,
-        MAX(CASE WHEN pricing_channel = 'APP' THEN 'Y' ELSE 'N' END)
-                                                            AS app_marketable_flag
-    FROM  CAR_905_TXN_BASE
-    GROUP BY 1, 2
-) t
+    COUNT(DISTINCT a.sndcustomer_key)                       AS customer_count
+FROM  CAR_905_CUST_YEAR_ACTIVITY a
 LEFT JOIN CAR_905_CUST_MARKETABILITY m
-       ON m.sndcustomer_key  = t.sndcustomer_key
-      AND m.sndcountry_code  = t.sndcountry_code
-GROUP BY 1, 2, 3, 4, 5, 6
-
-ORDER BY
-    sndcountry_code,
-    CASE activity_status
-        WHEN 'RNT'  THEN 0  WHEN 'R12'  THEN 1  WHEN 'R24'  THEN 2
-        WHEN 'R36'  THEN 3  WHEN 'R48'  THEN 4  WHEN 'R60'  THEN 5
-        WHEN 'R72'  THEN 6  WHEN 'R84'  THEN 7  WHEN 'R96'  THEN 8
-        WHEN 'R108' THEN 9  ELSE 99
-    END,
-    channel_segment
+       ON m.customer_key = a.sndcustomer_key
+GROUP BY ALL
+ 
+UNION ALL
+ 
+-- RNT: registered in customer master but zero transactions 2017–2025
+SELECT
+    c.country_code                               AS COUNTRY,
+    'RNT'                                                   AS activity_window,
+    'N/A'                                                   AS channel_segment,
+    'N'                                                     AS app_marketable_flag,
+    CASE
+        WHEN c.marketing_flag             = 'Y'
+         AND c.email_address_on_file_flag = 'Y'
+         AND c.opt_email                  = 'I'            THEN 'Y'
+        ELSE 'N'
+    END                                                     AS email_marketable_flag,
+    CASE
+        WHEN c.marketing_flag             = 'Y'
+         AND c.mobile_number_on_file_flag = 'Y'
+         AND c.opt_sms                    = 'I'            THEN 'Y'
+        ELSE 'N'
+    END                                                     AS sms_marketable_flag,
+    COUNT(DISTINCT c.customer_key)                          AS customer_count
+FROM  WUDNA.SUMMARY_GEN.CUSTOMER_MASTER_VW c
+WHERE c.country_code IN ('SG', 'MY')
+  AND NOT EXISTS (
+        SELECT sndcustomer_key
+        FROM   CAR_905_TXN_BASE t
+        WHERE  t.sndcustomer_key = c.customer_key
+        and t.sndcustomer_key is not null
+  )
+GROUP BY ALL
 ;
+
+select sum(customer_count) from  CAR_905_FINAL_SUMMARY
+WHERE activity_window = 'R12'
+AND COUNTRY = 'MY';--239,224 AND IN CEM SCORECARD 234,939
+
+select sum(customer_count) from  CAR_905_FINAL_SUMMARY
+WHERE activity_window = 'R12'
+AND COUNTRY = 'SG';--253,088 AND IN CEM SCORECARD R12 IS 244,418
