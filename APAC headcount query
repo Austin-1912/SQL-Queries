@@ -1,117 +1,245 @@
--- ---------------------------------------------------------------
--- STEP 1- Marketability flags from customer master
--- ---------------------------------------------------------------
-CREATE OR REPLACE TABLE CAR_905_CUST_MARKETABILITY1 AS
-SELECT
-    c.customer_key,
-    c.country_code,
-    CASE
-        WHEN c.marketing_flag             = 'Y'
-         AND c.email_address_on_file_flag = 'Y'
-         AND c.opt_email                  = 'I'            THEN 'Y'
-        ELSE 'N'
-    END                                                     AS email_marketable_flag,
-    CASE
-        WHEN c.marketing_flag             = 'Y'
-         AND c.mobile_number_on_file_flag = 'Y'
-         AND c.opt_sms                    = 'I'            THEN 'Y'
-        ELSE 'N'
-    END                                                     AS sms_marketable_flag
-FROM  WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c  
-WHERE c.country_code IN ('SG', 'MY');
+CREATE OR REPLACE TABLE CAR_921_US_IPF_MISSED_BEATS AS
 
--- 2) TXN base restricted to SG/MY, with simplified channel mapping
-CREATE OR REPLACE TABLE CAR_905_TXN_BASE1 AS
-SELECT
-    c.customer_key,
-    t.sndcountry_code,
-    c.country_code,
-    t.txn_id,                         
-    t.rcvpaying_datetime,
-    t.pricing_channel,
-    -- COALESCE(c.email_marketable_flag, 'N')                  AS email_marketable_flag,
-    -- COALESCE(c.sms_marketable_flag,   'N')                  AS sms_marketable_flag,
-   CASE
-        WHEN t.pricing_channel IN ('WEB','APP')       THEN 'DIGITAL'
-        WHEN t.pricing_channel IN ('POS','AIR','TMT') THEN 'RETAIL'
-        ELSE 'OTHERS'
-    END AS channel_type
-FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
-JOIN CAR_905_CUST_MARKETABILITY1 c
-ON t.sndcustomer_key = c.customer_key
--- WHERE t.sndcountry_code IN ('SG','MY')
-WHERE DATE(t.rcvpaying_datetime)  >= '2017-01-01'
-  AND DATE(t.rcvpaying_datetime)  <  '2026-03-01';
+//---ADDED CAMPAIGN ENGAGEMENT AND TXN DATA LAUNCHED AFTER 2025
+WITH CAMP_ENGAGEMENT AS (
+Select 
+     Customer_Key
+    
+    ,SUM(CASE WHEN SUBSTR(ACTIVITY_CODE,3,1) IN ('P') THEN (TOTAL_EMAILS_SENT) ELSE 1 END) AS Sent
 
--- ---------------------------------------------------------------
--- STEP 3 - Customer activity aggregated per year
-----
-CREATE OR REPLACE TABLE CAR_905_CUST_ACTIVITY1 AS
+    ,SUM(CASE WHEN EMAILS_UN_DELIVERED > 0 THEN 1 END) AS COMMUNICATIONS_UNDELIVERED
+    ,SUM(CASE WHEN EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0 THEN 1 END) Opened
+    ,SUM(CASE WHEN EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0  THEN 1 END) Clicked
+    
+    ,SUM(Case WHEN SUBSTR(ACTIVITY_CODE,3,1) = 'P' and EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0 THEN 1 END) Push_Opened
+    ,SUM(Case WHEN SUBSTR(ACTIVITY_CODE,3,1) != 'P' and EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0 THEN 1 END) WO_Push_Clicked
+    ,nvl(PUSH_OPENED,0) + nvl(WO_PUSH_CLICKED,0) as Opened_Clicked
+
+    ,SUM(Case WHEN SUBSTR(ACTIVITY_CODE,3,1) IN ('P','E') and EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0 THEN 1 END) Push_Email_Opened
+    ,SUM(Case WHEN SUBSTR(ACTIVITY_CODE,3,1) NOT IN ('P','E') and EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0 THEN 1 END) SMS_CC_IAM_Clicked
+    ,nvl(Push_Email_Opened,0) + nvl(SMS_CC_IAM_Clicked,0) as All_Engage_Opened_Clicked
+
+    ,SUM(CASE WHEN RETAIL_TXNS_7DAYS > 0 THEN 1 END ) AS RETAIL_TXNS7
+    ,SUM(CASE WHEN DIGITAL_TXNS_7DAYS > 0 THEN 1 END ) AS DIGITAL_TXNS7
+    ,SUM(CASE WHEN TXNS_7DAYS > 0 THEN 1 END ) as TOTAL_TXNS7
+        
+    ,Case When TIMESTAMPDIFF(MONTH,MIN(EVENT_CAPTURED_DT),Max(EVENT_CAPTURED_DT))=0 
+     Then 1 else TIMESTAMPDIFF(MONTH,MIN(EVENT_CAPTURED_DT),Max(EVENT_CAPTURED_DT)) END AS Month_Difference
+    ,Round(Sent / Month_Difference,2) As Comm_Per_Month
+
  
-WITH customer_windows AS (
-    SELECT
-        customer_key,
-        country_code,
-        -- channel_type,
-        CASE WHEN MAX(DATE(rcvpaying_datetime)) >= '2025-03-01' AND MAX(DATE(rcvpaying_datetime)) < '2026-03-01' THEN 'R12'
-             WHEN MAX(DATE(rcvpaying_datetime)) >= '2024-03-01' THEN 'R24'
-             WHEN MAX(DATE(rcvpaying_datetime)) >= '2023-03-01' THEN 'R36'
-             WHEN MAX(DATE(rcvpaying_datetime)) >= '2022-03-01' THEN 'R48'
-             WHEN MAX(DATE(rcvpaying_datetime)) < '2022-03-01' THEN 'R48+'
-             ELSE 'RNT'
-        END AS activity_window,
- COUNT(DISTINCT CASE WHEN channel_type = 'RETAIL' THEN txn_id  END) AS retail_txn,
-        COUNT(DISTINCT CASE WHEN channel_type = 'DIGITAL' THEN txn_id END) AS digital_txn
-    FROM  CAR_905_TXN_BASE1
-    GROUP BY ALL
+from 
+    WUDNA.CEX_SANDBOX.SJ_BI_CAMPAIGN_WISE_EMAIL_COMMUNICATIONS_2_V2_MYWU_UPDATE_CUSTOMER_LEVEL
+where 
+    --Year(EVENT_CAPTURED_DT) in ('2025') 
+    DATE_TRUNC(MONTH,EVENT_CAPTURED_DT) >= DATEADD(MONTH,-12,DATE_TRUNC(MONTH,CURRENT_DATE))
+    AND DATE_TRUNC(MONTH,EVENT_CAPTURED_DT) <= DATEADD(MONTH,-1,DATE_TRUNC(MONTH,CURRENT_DATE))
+Group by All
+
 ),
 
-window_dates AS (
-    SELECT 'R12'  AS activity_window, '2025-03-01'::DATE AS start_dt, '2026-03-01'::DATE AS end_dt UNION ALL
-    SELECT 'R24',                      '2024-03-01'::DATE,             '2025-03-01'::DATE           UNION ALL
-    SELECT 'R36',                      '2023-03-01'::DATE,             '2024-03-01'::DATE           UNION ALL
-    SELECT 'R48',                      '2022-03-01'::DATE,             '2023-03-01'::DATE           UNION ALL
-    SELECT 'R48+',                     '2017-01-01'::DATE,             '2022-03-01'::DATE           
-)
-SELECT
-    cw.customer_key,
-    cw.country_code,
-    cw.activity_window,
+
+AI_ML_01 AS (
+SELECT 
+    COUNT(CEM.SNDCUSTOMER_KEY) AS CUST_COUNT,
+    A.COUNTRY_CODE,
+    D.SUPER_REGION AS REGION,
+    D.COUNTRY_NAME,
+    A.HVC_FLAG,
+            
+    CASE 
+        WHEN CEM.RETAIL_DIGITAL_FLAG IS NOT NULL THEN CEM.RETAIL_DIGITAL_FLAG ELSE 'N/A' END AS RETAIL_DIGITAL_FLAG,
+    
+    A.MYWU_STATUS,
+    
+    CASE 
+        WHEN A.RFM_PERSONA IS NOT NULL THEN A.RFM_PERSONA ELSE 'N/A' END AS RFM_PERSONA,
+    CASE 
+        WHEN A.CHURN_RISK IS NOT NULL THEN A.CHURN_RISK ELSE 'N/A' END AS CHURN_RISK_SEGMENT,
+
+    CASE WHEN CEM.IPF_CHANGE IS NOT NULL THEN CEM.IPF_CHANGE ELSE '<3 times transactor' END AS IPF_CHANGE,
+    
+    CASE WHEN CEM.BEATS IS NOT NULL THEN CEM.BEATS ELSE '<3 times transactor' END AS IPF_BEATS,
+    
+
+                    
+    C.DOMINANT_CORRIDOR,
+    C.DOMINANT_CORRIDOR_TYPE,
+    C.DOMINANT_CORRIDOR_NAME,
+    C.MTH_YR,
+
+//-------------------------------------------------------------------------------------------------------------------------
+    
+    -- CASE WHEN A.R2D_PROPENSITY IS NOT NULL THEN A.R2D_PROPENSITY ELSE 'N/A' END AS R2D_CONVERSION,
+
+    -- CASE 
+    --     WHEN AIML.R2D_EQUAL_DENSITY_DECILE IN ('10') THEN 'd) 10 Decile'
+    --     WHEN AIML.R2D_EQUAL_DENSITY_DECILE IN ('9') THEN 'c) 9 Decile'
+    --     WHEN AIML.R2D_EQUAL_DENSITY_DECILE IN ('8') THEN 'b) 8 Decile'
+    --     WHEN AIML.R2D_EQUAL_DENSITY_DECILE IN ('7','6','5','4','3','2','1') THEN 'a) 1-7 Decile'
+    --         ELSE 'e) N/A' END AS R2D_CONVERSION,
+
+    CASE 
+        WHEN A.R2D_DECILE IN ('10') THEN 'd) 10 Decile'
+        WHEN A.R2D_DECILE IN ('9') THEN 'c) 9 Decile'
+        WHEN A.R2D_DECILE IN ('8') THEN 'b) 8 Decile'
+        WHEN A.R2D_DECILE IN ('7','6','5','4','3','2','1') THEN 'a) 1-7 Decile'
+            ELSE 'e) N/A' END AS R2D_CONVERSION,
+    
+//-------------------------------------------------------------------------------------------------------------------------
+
+    CASE 
+        WHEN A.R6_TXNS > 0 THEN 'R6 ACTIVE' ELSE 'R7 TO R12 ACTIVE' END AS ACTIVITY_STATUS,
+//------------------------------------------------------------------------------------------------------------------------- 
+    CASE 
+        WHEN CEM.R12_PAYIN_CASH_TXNS IS NOT NULL AND CEM.R12_PAYIN_CASH_TXNS > 0 THEN 'CASH' END AS PAYIN_CASH_FLAG,
     CASE
-        WHEN cw.activity_window = 'RNT'                                       THEN 'N/A'
-WHEN digital_txn > 0 AND retail_txn > 0 THEN 'OMNI' 
-WHEN digital_txn > 0 THEN 'Digital' 
-WHEN retail_txn > 0 THEN 'Retail' 
-ELSE 'Others' 
-END AS channel_segment,
+        WHEN CEM.R12_PAYIN_ACCOUNT_TXNS IS NOT NULL AND CEM.R12_PAYIN_ACCOUNT_TXNS > 0 THEN 'ACCOUNT' END AS PAYIN_ACCOUNT_FLAG,
+    CASE 
+        WHEN PAYIN_CASH_FLAG = 'CASH' AND (PAYIN_ACCOUNT_FLAG <> 'ACCOUNT' OR PAYIN_ACCOUNT_FLAG IS NULL) THEN 'CASH ONLY'
+        WHEN (PAYIN_CASH_FLAG <> 'CASH' OR PAYIN_CASH_FLAG IS NULL) AND PAYIN_ACCOUNT_FLAG = 'ACCOUNT' THEN 'ACCOUNT ONLY'
+        WHEN PAYIN_CASH_FLAG IS NULL AND PAYIN_ACCOUNT_FLAG IS NULL THEN 'N/A'
+            ELSE 'CASH + ACCOUNT' END AS PAYIN_FLAG,
+//-------------------------------------------------------------------------------------------------------------------------
+    CASE 
+        WHEN CEM.R12_PAYOUT_CASH_TXNS IS NOT NULL AND CEM.R12_PAYOUT_CASH_TXNS > 0 THEN 'CASH' END AS PAYOUT_CASH_FLAG,
+    CASE
+        WHEN CEM.R12_PAYOUT_ACCOUNT_TXNS IS NOT NULL AND CEM.R12_PAYOUT_ACCOUNT_TXNS > 0 THEN 'ACCOUNT' END AS PAYOUT_ACCOUNT_FLAG,
+    CASE 
+        WHEN PAYOUT_CASH_FLAG = 'CASH' AND (PAYOUT_ACCOUNT_FLAG <> 'ACCOUNT' OR PAYOUT_ACCOUNT_FLAG IS NULL) THEN 'CASH ONLY'
+        WHEN (PAYOUT_CASH_FLAG <> 'CASH' OR PAYOUT_CASH_FLAG IS NULL) AND PAYOUT_ACCOUNT_FLAG = 'ACCOUNT' THEN 'ACCOUNT ONLY'
+        WHEN PAYOUT_CASH_FLAG IS NULL AND PAYOUT_ACCOUNT_FLAG IS NULL THEN 'N/A'
+            ELSE 'CASH + ACCOUNT' END AS PAYOUT_FLAG,
+//-------------------------------------------------------------------------------------------------------------------------
 
-    COALESCE(MAX(CASE WHEN t.pricing_channel = 'APP' THEN 'Y' ELSE 'N' END), 'N')
-                                                                              AS app_marketable_flag
-FROM      customer_windows cw
-LEFT JOIN window_dates wd ON wd.activity_window = cw.activity_window
-LEFT JOIN CAR_905_TXN_BASE t
-       ON  t.sndcustomer_key    = cw.customer_key
-      AND  t.rcvpaying_datetime >= wd.start_dt
-      AND  t.rcvpaying_datetime <  wd.end_dt
-GROUP BY ALL
-;
+    CASE 
+        WHEN CUST.MARKETING_FLAG = 'Y' AND PHONE_NUMBER_ON_FILE_FLAG = 'Y' AND CLEANSED_MOBILE_VALIDATION_FLAG = 'Y' AND OPT_WHATSAPP = 'I'  THEN 'Y' ELSE 'N' END AS WHATSAPP_MARKETABLE,
 
--- ---------------------------------------------------------------
--- STEP 4 | Final summary
--- ---------------------------------------------------------------
-CREATE OR REPLACE TABLE CAR_905_FINAL_SUMMARY AS
-SELECT
-    a.country_code                  AS country,
-    a.activity_window,
-    a.channel_segment,
-    a.app_marketable_flag,
-    b.email_marketable_flag,
-    b.sms_marketable_flag,
-    CASE WHEN b.email_marketable_flag = 'Y' AND b.sms_marketable_flag = 'Y' AND a.app_marketable_flag = ''
-    COUNT(DISTINCT a.customer_key)  AS customer_count
-FROM      CAR_905_CUST_ACTIVITY1 a
-LEFT JOIN CAR_905_CUST_MARKETABILITY1 b
-       ON b.customer_key  = a.customer_key
-      AND b.country_code  = a.country_code
+
+
+//-------------------------------------------------------------------------------------------------------------------------
+
+    
+    Case 
+        when CEM.SMS_MARKETABLE = 'Y' and CEM.EMAIL_MARKETABLE = 'Y' and CEM.R12_APP_TXNS > 0 AND WHATSAPP_MARKETABLE = 'Y' Then 'EMAIL, SMS, APP & WHATSAPP'   //#WHATSAPP_FLAG
+        when CEM.SMS_MARKETABLE = 'Y' and CEM.EMAIL_MARKETABLE = 'Y' and CEM.R12_APP_TXNS > 0 AND WHATSAPP_MARKETABLE = 'N' Then 'EMAIL, SMS & APP'
+        when CEM.SMS_MARKETABLE = 'Y' and CEM.EMAIL_MARKETABLE = 'Y' and CEM.R12_APP_TXNS = 0 AND WHATSAPP_MARKETABLE = 'Y' Then 'EMAIL, SMS & WHATSAPP'  //#WHATSAPP_FLAG
+        when CEM.SMS_MARKETABLE = 'N' and CEM.EMAIL_MARKETABLE = 'Y' and CEM.R12_APP_TXNS > 0 AND WHATSAPP_MARKETABLE = 'Y' Then 'EMAIL, APP & WHATSAPP'  //#WHATSAPP_FLAG
+        when CEM.SMS_MARKETABLE = 'Y' and CEM.EMAIL_MARKETABLE = 'N' and CEM.R12_APP_TXNS > 0 AND WHATSAPP_MARKETABLE = 'Y' Then 'SMS, APP & WHATSAPP'  //#WHATSAPP_FLAG
+        when CEM.SMS_MARKETABLE = 'Y' and CEM.EMAIL_MARKETABLE = 'Y' and CEM.R12_APP_TXNS = 0 AND WHATSAPP_MARKETABLE = 'N' Then 'EMAIL & SMS'
+        when CEM.SMS_MARKETABLE = 'N' and CEM.EMAIL_MARKETABLE = 'Y' and CEM.R12_APP_TXNS > 0 AND WHATSAPP_MARKETABLE = 'N' Then 'EMAIL & APP'
+        when CEM.SMS_MARKETABLE = 'N' and CEM.EMAIL_MARKETABLE = 'Y' and CEM.R12_APP_TXNS = 0 AND WHATSAPP_MARKETABLE = 'Y' Then 'EMAIL & WHATSAPP' //#WHATSAPP_FLAG
+        when CEM.SMS_MARKETABLE = 'Y' and CEM.EMAIL_MARKETABLE = 'N' and CEM.R12_APP_TXNS > 0 AND WHATSAPP_MARKETABLE = 'N' Then 'SMS & APP'
+        when CEM.SMS_MARKETABLE = 'Y' and CEM.EMAIL_MARKETABLE = 'N' and CEM.R12_APP_TXNS = 0 AND WHATSAPP_MARKETABLE = 'Y' Then 'SMS & WHATSAPP'   //#WHATSAPP_FLAG
+        when CEM.SMS_MARKETABLE = 'N' and CEM.EMAIL_MARKETABLE = 'N' and CEM.R12_APP_TXNS > 0 AND WHATSAPP_MARKETABLE = 'Y' Then 'APP & WHATSAPP'   //#WHATSAPP_FLAG
+        when CEM.SMS_MARKETABLE = 'Y' and CEM.EMAIL_MARKETABLE = 'N' and CEM.R12_APP_TXNS = 0 AND WHATSAPP_MARKETABLE = 'N' Then 'SMS only'
+        when CEM.SMS_MARKETABLE = 'N' and CEM.EMAIL_MARKETABLE = 'Y' and CEM.R12_APP_TXNS = 0 AND WHATSAPP_MARKETABLE = 'N' Then 'EMAIL only'
+        when CEM.SMS_MARKETABLE = 'N' and CEM.EMAIL_MARKETABLE = 'N' and CEM.R12_APP_TXNS > 0 AND WHATSAPP_MARKETABLE = 'N' Then 'APP only'
+        when CEM.SMS_MARKETABLE = 'N' and CEM.EMAIL_MARKETABLE = 'N' and CEM.R12_APP_TXNS = 0 AND WHATSAPP_MARKETABLE = 'Y' THEN 'WHATSAPP only'    //#WHATSAPP_FLAG
+        
+        else 'Neither SMS nor EMAIL nor APP nor WHATSAPP' end MARKETABILTY,
+
+
+        -- Case 
+        -- when CEM.SMS_MARKETABLE = 'Y' and CEM.EMAIL_MARKETABLE = 'Y' and CEM.R12_APP_TXNS > 0 Then 'EMAIL, SMS & APP'
+        -- when CEM.SMS_MARKETABLE = 'Y' and CEM.EMAIL_MARKETABLE = 'Y' and CEM.R12_APP_TXNS = 0 Then 'EMAIL & SMS'
+        -- when CEM.SMS_MARKETABLE = 'N' and CEM.EMAIL_MARKETABLE = 'Y' and CEM.R12_APP_TXNS > 0 Then 'EMAIL & APP'
+        -- when CEM.SMS_MARKETABLE = 'Y' and CEM.EMAIL_MARKETABLE = 'N' and CEM.R12_APP_TXNS > 0 Then 'SMS & APP'
+        -- when CEM.SMS_MARKETABLE = 'Y' and CEM.EMAIL_MARKETABLE = 'N' and CEM.R12_APP_TXNS = 0 Then 'SMS only'
+        -- when CEM.SMS_MARKETABLE = 'N' and CEM.EMAIL_MARKETABLE = 'Y' and CEM.R12_APP_TXNS = 0 Then 'EMAIL only'
+        -- when CEM.SMS_MARKETABLE = 'N' and CEM.EMAIL_MARKETABLE = 'N' and CEM.R12_APP_TXNS > 0 Then 'APP only'
+        
+        -- else 'Neither SMS nor EMAIL nor APP' end MARKETABILTY,
+
+
+    CASE 
+        WHEN MARKETABILTY <> 'Neither SMS nor EMAIL nor APP nor WHATSAPP' THEN '1.Marketable' ELSE '2.Non Marketable' END AS MARKETABLE_FLAG,
+
+//-------------------------------------------------------------------------------------------------------------
+
+    CASE 
+        WHEN CEM.R12_TXNS = 1 THEN 'A.1x' 
+        WHEN CEM.R12_TXNS = 2 THEN 'B.2x'
+        WHEN CEM.R12_TXNS >= 2 AND CEM.R12_TXNS < 6 THEN 'C.3x to 5x'
+        WHEN CEM.R12_TXNS >= 6 AND CEM.R12_TXNS < 11 THEN 'D.6x to 10x'
+            ELSE 'E.11x and Plus'  END AS TPC_FLAG,
+
+    C.DOMINANT_AGENT_NETWORK_2,
+
+//-------------------------------------------------------------------------------------------------------------
+
+//-----CAMPAIGN ENGAGEMENT AND TXNS DATA-----------------------------------------------------------------------
+
+        Case   when  Sent > 100 then '7.Sent >101'
+                when  Sent > 50 then '6.Sent 51 to 100'
+                when  Sent > 25 then '5.Sent 26 to 50'
+                when  Sent > 10 then '4.Sent 11 to 25'
+                when  Sent > 5 then '3.Sent 6 to 10'
+                when  Sent > 1 then '2.Sent 2 to 5'
+                when  Sent >= 1 then '1.Sent 1'                
+                when Sent = 0 or Sent is null then '8.No Communications Sent'
+                else '9.Other'
+                END  Sent_Bucket
+
+            ,Case  When  nvl(Opened_Clicked,0) = 0 then '2.No_Engagement'
+                   When  nvl(Opened_Clicked,0) >= 1 then '1.Engagement'
+                else '3.Other' END  Opened_Clicked_Bucket_Flag
+
+         -- ,Case  when  TOTAL_TXNS7 > 5 then '8.>5+Txns'
+         --        when  TOTAL_TXNS7 = 5 then '7.5xer'
+         --        when  TOTAL_TXNS7 = 4 then '6.4xer'
+         --        when  TOTAL_TXNS7 = 3 then '5.3xer'
+         --        when  TOTAL_TXNS7 = 2 then '4.2xer'
+         --        when  TOTAL_TXNS7 = 1 then '3.1xer'
+         --        when  NVL(TOTAL_TXNS7,0) = 0 then '2.No_Txns'
+         --        else '1.Other' END Conversion_Bucket
+                
+        ,Case   When  nvl(TOTAL_TXNS7,0) = 0 then '2.No_Txns'
+                When  nvl(TOTAL_TXNS7,0) >= 1 then '1.Txns'
+                else '3.Other' END  Conversion_Bucket_Flag
+
+//-------------------------------------------------------------------------------------------------------------
+
+        ,CASE 
+            WHEN GLOBAL_HOLDOUT = 'Y' THEN '2.Global Holdout'
+            WHEN GLOBAL_HOLDOUT = 'N' THEN '1.Test'
+        ELSE '3.Not Found' END AS GLOBAL_HOLDOUT_FLAG
+
+//-------------------------------------------------------------------------------------------------------------
+    
+FROM
+    CEX_SANDBOX.YN_Va_kpi_2020_output_engagement_cust_level CEM
+LEFT JOIN 
+    WUDNA.CEX_SANDBOX.SK_DOMINANCY_METRICS C ON CEM.SNDCUSTOMER_KEY = C.SNDCUSTOMER_KEY AND C.MTH_YR = CEM.MTH_YR
+LEFT JOIN 
+    WUDNA.SUMMARY_GEN.COUNTRY_VW D ON CEM.COUNTRY_CODE = D.COUNTRY_CODE
+LEFT JOIN 
+    WUDNA.CEX_SANDBOX.CUSTOMER_ENGAGEMENT_FRAMEWORK_CUST_LEVEL A ON A.SNDCUSTOMER_KEY = CEM.SNDCUSTOMER_KEY and CEM.MTH_YR = A.MTH_YR
+LEFT JOIN 
+    WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW CUST ON CEM.SNDCUSTOMER_KEY = CUST.CUSTOMER_KEY
+LEFT JOIN 
+    CAMP_ENGAGEMENT CAMP ON CEM.SNDCUSTOMER_KEY = CAMP.CUSTOMER_KEY
+LEFT JOIN 
+    WUDATA_CDO_AIML.SHARE_SECURE.CUSTOMER_DAILY_SCORES_VW AIML ON A.SNDCUSTOMER_KEY = AIML.SNDCUSTOMER_KEY
+
+WHERE CEM.R12_TXNS > 0 AND CEM.R12_TXNS IS NOT NULL AND CEM.MTH_YR = DATEADD(MONTH,-1,DATE_TRUNC(MONTH,CURRENT_DATE))
+
 GROUP BY ALL
-;
+),
+
+TOP_Send_Agent_AI_ML as                        
+(SELECT MTH_YR, DOMINANT_SNDCOUNTRY_NAME, DOMINANT_AGENT_NETWORK_2,
+--COUNT(CASE WHEN R12_ACTIVE = 'Y' THEN SNDCUSTOMER_KEY END) AS R12_ACTIVE,
+ROW_NUMBER() OVER (PARTITION BY MTH_YR, DOMINANT_SNDCOUNTRY_NAME ORDER BY COUNT(CASE WHEN DATE(mth_yr) = DATEADD(MONTH,-1,DATE_TRUNC(MONTH,CURRENT_DATE)) THEN SNDCUSTOMER_KEY END) DESC) AS TOP_10_AGENT_RANK
+FROM WUDNA.CEX_SANDBOX.SK_DOMINANCY_METRICS
+where DATE(mth_yr) = DATEADD(MONTH,-1,DATE_TRUNC(MONTH,CURRENT_DATE))
+GROUP BY 1,2,3)
+
+
+SELECT 
+    A.*,
+    CASE WHEN TOP_10_AGENT_RANK < 11 THEN B.DOMINANT_AGENT_NETWORK_2 ELSE 'OTHERS' END AS TOP_10_AGENT
+FROM AI_ML_01 A
+LEFT JOIN TOP_Send_Agent_AI_ML B ON A.COUNTRY_NAME = B.DOMINANT_SNDCOUNTRY_NAME AND A.MTH_YR = DATE(B.MTH_YR) AND A.DOMINANT_AGENT_NETWORK_2 = B.DOMINANT_AGENT_NETWORK_2
+WHERE 
+    COUNTRY_NAME IS NOT NULL;
