@@ -243,3 +243,37 @@ FROM AI_ML_01 A
 LEFT JOIN TOP_Send_Agent_AI_ML B ON A.COUNTRY_NAME = B.DOMINANT_SNDCOUNTRY_NAME AND A.MTH_YR = DATE(B.MTH_YR) AND A.DOMINANT_AGENT_NETWORK_2 = B.DOMINANT_AGENT_NETWORK_2
 WHERE 
     COUNTRY_NAME IS NOT NULL;
+
+Request to provide RDR list for marketable IPF beats customers for US. 
+
+Please include GID, UMN, app marketable flag, email marketable flag, marketability, GH (Y/N)
+
+Qualifications 
+
+Email marketable
+
+Registered country: US
+
+Split out loyalty and non-loyalty customers(Already being flagged MYWU Status) 
+
+IPF Missed beats(Already being flagged under IPF_BEATS)
+
+1 missed beat
+
+2 missed beats
+
+3 missed beats
+
+4 missed beats
+
+5 or more missed beats
+
+R12(This is already been calculated )
+
+Split by language(need to do but dont do anything for now)
+
+EN
+
+ES.
+The above details i have given are the only information i need however in the table it is aggregating a lot of stuff which i dont
+need , could you update the script in such a way that i get only the customer level details instead of the aggregation in the final pull.
