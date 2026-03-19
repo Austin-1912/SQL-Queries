@@ -1,95 +1,117 @@
-CREATE OR REPLACE TABLE CAR_921_US_IPF_MISSED_BEATS_CUST AS
+-- ---------------------------------------------------------------
+-- STEP 1- Marketability flags from customer master
+-- ---------------------------------------------------------------
+CREATE OR REPLACE TABLE CAR_905_CUST_MARKETABILITY1 AS
+SELECT
+    c.customer_key,
+    c.country_code,
+    CASE
+        WHEN c.marketing_flag             = 'Y'
+         AND c.email_address_on_file_flag = 'Y'
+         AND c.opt_email                  = 'I'            THEN 'Y'
+        ELSE 'N'
+    END                                                     AS email_marketable_flag,
+    CASE
+        WHEN c.marketing_flag             = 'Y'
+         AND c.mobile_number_on_file_flag = 'Y'
+         AND c.opt_sms                    = 'I'            THEN 'Y'
+        ELSE 'N'
+    END                                                     AS sms_marketable_flag
+FROM  WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c  
+WHERE c.country_code IN ('SG', 'MY');
+
+select count(distinct customer_key) from CAR_905_CUST_MARKETABILITY1; -- 5,442,840
+
+-- 2) TXN base restricted to SG/MY, with simplified channel mapping
+CREATE OR REPLACE TABLE CAR_905_TXN_BASE1 AS
+SELECT
+    c.customer_key,
+    t.sndcustomer_key,
+    t.sndcountry_code,
+    c.country_code,
+    t.txn_id,                         
+    t.rcvpaying_datetime,
+    t.pricing_channel,
+    -- COALESCE(c.email_marketable_flag, 'N')                  AS email_marketable_flag,
+    -- COALESCE(c.sms_marketable_flag,   'N')                  AS sms_marketable_flag,
+   CASE
+        WHEN t.pricing_channel IN ('WEB','APP')       THEN 'DIGITAL'
+        WHEN t.pricing_channel IN ('POS','AIR','TMT') THEN 'RETAIL'
+        ELSE 'OTHERS'
+    END AS channel_type
+FROM  CAR_905_CUST_MARKETABILITY1 c
+LEFT JOIN WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
+ON  c.customer_key = t.sndcustomer_key
+-- WHERE t.sndcountry_code IN ('SG','MY')
+AND DATE(t.rcvpaying_datetime)  >= '2017-01-01'
+  AND DATE(t.rcvpaying_datetime)  <  '2026-03-01';
+
+-- ---------------------------------------------------------------
+-- STEP 3 - Customer activity aggregated per year
+----
+CREATE OR REPLACE TABLE CAR_905_CUST_ACTIVITY1 AS
  
-WITH CAMP_ENGAGEMENT AS (
+WITH customer_windows AS (
     SELECT
-         CUSTOMER_KEY
-        ,SUM(CASE WHEN SUBSTR(ACTIVITY_CODE,3,1) IN ('P') THEN (TOTAL_EMAILS_SENT) ELSE 1 END) AS Sent
-        ,SUM(CASE WHEN EMAILS_UN_DELIVERED > 0 THEN 1 END)                                              AS COMMUNICATIONS_UNDELIVERED
-        ,SUM(CASE WHEN EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0 THEN 1 END)        AS Opened
-        ,SUM(CASE WHEN EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0 THEN 1 END) AS Clicked
-        ,SUM(CASE WHEN SUBSTR(ACTIVITY_CODE,3,1) = 'P'  AND EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0 THEN 1 END) AS Push_Opened
-        ,SUM(CASE WHEN SUBSTR(ACTIVITY_CODE,3,1) != 'P' AND EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0 THEN 1 END) AS WO_Push_Clicked
-        ,NVL(Push_Opened,0) + NVL(WO_Push_Clicked,0) AS Opened_Clicked
-        ,SUM(CASE WHEN RETAIL_TXNS_7DAYS > 0 THEN 1 END) AS RETAIL_TXNS7
-        ,SUM(CASE WHEN DIGITAL_TXNS_7DAYS > 0 THEN 1 END) AS DIGITAL_TXNS7
-        ,SUM(CASE WHEN TXNS_7DAYS > 0 THEN 1 END)         AS TOTAL_TXNS7
-    FROM
-        WUDNA.CEX_SANDBOX.SJ_BI_CAMPAIGN_WISE_EMAIL_COMMUNICATIONS_2_V2_MYWU_UPDATE_CUSTOMER_LEVEL
-    WHERE
-        DATE_TRUNC(MONTH, EVENT_CAPTURED_DT) >= DATEADD(MONTH, -12, DATE_TRUNC(MONTH, CURRENT_DATE))
-        AND DATE_TRUNC(MONTH, EVENT_CAPTURED_DT) <= DATEADD(MONTH, -1, DATE_TRUNC(MONTH, CURRENT_DATE))
+        customer_key,
+        country_code,
+        -- channel_type,
+        CASE WHEN MAX(DATE(rcvpaying_datetime)) >= '2025-03-01' AND MAX(DATE(rcvpaying_datetime)) < '2026-03-01' THEN 'R12'
+             WHEN MAX(DATE(rcvpaying_datetime)) >= '2024-03-01' THEN 'R24'
+             WHEN MAX(DATE(rcvpaying_datetime)) >= '2023-03-01' THEN 'R36'
+             WHEN MAX(DATE(rcvpaying_datetime)) >= '2022-03-01' THEN 'R48'
+             WHEN MAX(DATE(rcvpaying_datetime)) < '2022-03-01' THEN 'R48+'
+             ELSE 'RNT'
+        END AS activity_window
+    FROM  CAR_905_TXN_BASE1
     GROUP BY ALL
 ),
- 
-CUST_LEVEL AS (
-    SELECT
-        
-        CEM.SNDCUSTOMER_KEY AS GID,
-        CUST.customer_umn AS UMN,  
-        CUST.COUNTRY_CODE,
-        
-         
-        
-        CASE WHEN CEM.R12_APP_TXNS > 0 THEN 'Y' ELSE 'N' END AS APP_MARKETABLE_FLAG,
-        CEM.EMAIL_MARKETABLE                                AS EMAIL_MARKETABLE_FLAG,
 
- 
-CASE
-    WHEN CEM.EMAIL_MARKETABLE = 'Y' AND CEM.R12_APP_TXNS > 0 THEN 'EMAIL & APP'
-    WHEN CEM.EMAIL_MARKETABLE = 'Y' AND CEM.R12_APP_TXNS = 0 THEN 'EMAIL only'
-    WHEN CEM.EMAIL_MARKETABLE = 'N' AND CEM.R12_APP_TXNS > 0 THEN 'APP only'
-    ELSE 'Neither EMAIL nor APP'
-END AS MARKETABILITY,
- 
-        
-        CUST.GLOBAL_HOLDOUT                              AS GLOBAL_HOLDOUT_FLAG,  
- 
-        --Loyalty split 
-        CASE WHEN A.MYWU_STATUS = 'Non Member' THEN 'Non Member' ELSE 'Member' END AS LOYALTY_STATUS,
- 
-        -- IPF Missed Beats
-        CASE
-            WHEN CEM.BEATS IS NOT NULL THEN CEM.BEATS
-            ELSE '<3 times transactor'
-        END AS IPF_BEATS,
- 
-        CUST.PRFRD_LANGUAGE_CODE,
- 
-        CEM.MTH_YR
- 
-    FROM CEX_SANDBOX.YN_Va_kpi_2020_output_engagement_cust_level CEM
-    LEFT JOIN WUDNA.CEX_SANDBOX.CUSTOMER_ENGAGEMENT_FRAMEWORK_CUST_LEVEL A
-           ON A.SNDCUSTOMER_KEY = CEM.SNDCUSTOMER_KEY
-          AND A.MTH_YR = CEM.MTH_YR
-    LEFT JOIN WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW CUST
-           ON CEM.SNDCUSTOMER_KEY = CUST.CUSTOMER_KEY
-    LEFT JOIN CAMP_ENGAGEMENT CAMP
-           ON CEM.SNDCUSTOMER_KEY = CAMP.CUSTOMER_KEY
- 
-    WHERE
-        CEM.MTH_YR          = DATEADD(MONTH, -1, DATE_TRUNC(MONTH, CURRENT_DATE))
-        AND CEM.R12_TXNS     > 0
-        AND CEM.R12_TXNS    IS NOT NULL
-        AND CEM.COUNTRY_CODE = 'US'
-        AND CEM.BEATS IS NOT NULL                           -- IPF missed beats customers only
-        AND CEM.BEATS NOT IN ('Ahead Schedule', 'On Schedule', '<3 times transactor' ) AND
-        (CEM.EMAIL_MARKETABLE = 'Y' OR CEM.R12_APP_TXNS > 0)
+window_dates AS (
+    SELECT 'R12'  AS activity_window, '2025-03-01'::DATE AS start_dt, '2026-03-01'::DATE AS end_dt UNION ALL
+    SELECT 'R24',                      '2024-03-01'::DATE,             '2025-03-01'::DATE           UNION ALL
+    SELECT 'R36',                      '2023-03-01'::DATE,             '2024-03-01'::DATE           UNION ALL
+    SELECT 'R48',                      '2022-03-01'::DATE,             '2023-03-01'::DATE           UNION ALL
+    SELECT 'R48+',                     '2017-01-01'::DATE,             '2022-03-01'::DATE           
 )
- 
-SELECT *
-FROM CUST_LEVEL;
-
-SELECT IPF_BEATS, count(distinct GID) FROM CAR_921_US_IPF_MISSED_BEATS_CUST group by 1;
-SELECT MARKETABILITY, count(distinct GID) FROM CAR_921_US_IPF_MISSED_BEATS_CUST group by 1;
-
-CREATE OR REPLACE TABLE CAR_921_US_IPF_BIRD_LIST AS
-SELECT c.GID, c.UMN, c.country_code, c.app_marketable_flag, c.email_marketable_flag,c.marketability, c.global_holdout_flag,
-c.loyalty_status, c.ipf_beats, c.prfrd_language_code 
-FROM CEX_SANDBOX.CAR_921_US_IPF_MISSED_BEATS_CUST c
-LEFT JOIN WUDNA.SUMMARY_GEN.WUDNA_BIRD_ALL_CONTACTS_VW b
-       ON b.CUSTOMER_KEY = c.GID
-WHERE b.CUSTOMER_KEY IS NOT NULL
-and prfrd_language_code IN ('EN', 'ES')
+SELECT
+    cw.customer_key,
+    cw.country_code,
+    cw.activity_window,
+    COUNT(DISTINCT CASE WHEN t.channel_type = 'DIGITAL' THEN t.txn_id END) AS Digital_txns,
+    COUNT(DISTINCT CASE WHEN t.channel_type = 'RETAIL'  THEN t.txn_id END) AS Retail_txns,
+    COUNT(DISTINCT CASE WHEN t.pricing_channel = 'APP'  and cw.activity_window = 'R12' THEN t.txn_id END) AS App_txns
+    -- COALESCE(MAX(CASE WHEN t.pricing_channel = 'APP' THEN 'Y' ELSE 'N' END), 'N') AS app_marketable_flag
+FROM      customer_windows cw
+LEFT JOIN window_dates wd  ON wd.activity_window = cw.activity_window
+LEFT JOIN CAR_905_TXN_BASE1 t
+       ON  t.customer_key       = cw.customer_key
+      AND  t.rcvpaying_datetime >= wd.start_dt
+      AND  t.rcvpaying_datetime <  wd.end_dt
+GROUP BY cw.customer_key, cw.country_code, cw.activity_window
 ;
 
-SELECT * FROM CAR_921_US_IPF_BIRD_LIST;
+-- ---------------------------------------------------------------
+-- STEP 4 | Final summary
+-- ---------------------------------------------------------------
+CREATE OR REPLACE TABLE CAR_905_FINAL_SUMMARY AS
+SELECT
+    a.country_code                  AS country,
+    a.activity_window,
+    -- a.channel_segment,
+    case when app_txns > 0 then 'Y' else 'N' end  app_marketable_flag,
+    b.email_marketable_flag,
+    b.sms_marketable_flag,
+    CASE WHEN Digital_txns > 0 AND retail_txns > 0 THEN 'OMNI'
+        WHEN Digital_txns > 0 THEN 'DIGITAL'
+        WHEN retail_txns > 0 THEN 'RETAIL' ELSE 'RNT' END AS channel_segment1,
+    CASE WHEN b.email_marketable_flag = 'Y' OR b.sms_marketable_flag = 'Y' OR app_marketable_flag = 'Y' THEN 'YES' ELSE 'NO' END AS Marketability_Flag, 
+    COUNT(DISTINCT a.customer_key)  AS customer_count
+FROM      CAR_905_CUST_ACTIVITY1 a
+LEFT JOIN CAR_905_CUST_MARKETABILITY1 b
+       ON b.customer_key  = a.customer_key
+      AND b.country_code  = a.country_code
+GROUP BY ALL
+;
+
+select * from CAR_905_FINAL_SUMMARY;
