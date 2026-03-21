@@ -1,26 +1,44 @@
-CREATE OR REPLACE TABLE CAR_921_US_IPF_LIST_TILL_DATE AS
-select 
-        distinct c.customer_key, 
-        c.customer_umn,
-        c.country_code, 
-        'Y' AS email_marketable_flag,
-        c.global_holdout,
-        c.loyalty_member_flag,
-        c.interpurchase_freq_beats, 
-        c.prfrd_language_code
-from WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
-INNER JOIN  WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t ON c.customer_key = t.sndcustomer_key
-INNER JOIN WUDNA.SUMMARY_GEN.WUDNA_BIRD_ALL_CONTACTS_VW b ON c.customer_key = b.customer_key
-where country_code = 'US'
-and c.global_holdout = 'N'
-AND DATE(rcvpaying_datetime) >= '2025-03-19'
-AND DATE(rcvpaying_datetime) < '2026-03-18'
-AND c.marketing_flag             = 'Y'
-AND c.email_address_on_file_flag = 'Y'
-AND c.opt_email  = 'I'
-AND c.prfrd_language_code IN ('EN', 'ES')
-group by all;
-i have written a code in order to get the upto date IPF Beats however i dont have app marketable in it , we can get that using
-Pricing channel = APP from txn master table , if any customer has that then they become app marketable. Could you update the query to get
-the details. so i want two more columns one would be the app marketable flag , and the other marketability like we had 
-created in the final query i had shared
+Metrics Parameter = {
+    ("Communications Sent", NAMEOF([Communications Sent]), 0),
+    ("Communications Delivered", NAMEOF([Communication Delivered]), 1),
+    ("Sucessfully Delivered Rate", NAMEOF([Delivery Rate]), 2),
+    ("Communications Opened", NAMEOF([Communications Opened]), 3),
+    ("Open Rate", NAMEOF([Open Rate 7days]), 4),
+    ("Communications Clicked", NAMEOF([Communications Clicked]), 5),
+    ("Click Rate", NAMEOF([Click Rate 7days]), 6),
+    ("Communications Opted-Out", NAMEOF([Communications Opted-Out]), 7),
+    ("Opt-Out Rate", NAMEOF([Opt-out Rate]), 8),
+    ("Communications Spammed", NAMEOF([Communications Spammed]), 9),
+    ("Spam Rate", NAMEOF([Spam Rate]), 10),
+    ("Communications with at least 1 Retail txn", NAMEOF([Comm: ≥1 Retail Txn (7d)]), 11),
+    ("Retail", NAMEOF([7days conversion Rate Retail]), 12),
+    ("Communications with at least 1 Air Txn", NAMEOF([Comm: ≥1 AIR Txn (7d)]), 13),
+    ("Air", NAMEOF([7days conversion Rate AIR]), 14),
+    ("Communications with at least 1 Web Txn", NAMEOF([Communications with atleast 1 Web Txn 7days]), 15),
+    ("Web", NAMEOF([7days conversion Rate Web]), 16),
+    ("Communications with at least 1 App Txn", NAMEOF([Comm: ≥1 App Txn (7d)]), 17),
+    ("App", NAMEOF([7days conversion Rate APP]), 18),
+    ("Communications with at least 1 Digital Txn", NAMEOF([Comm: ≥1 Digital Txn (7d)]), 19),
+    ("Digital", NAMEOF([7days conversion Rate Digital]), 20),
+    ("Communications with at least 1 Txn", NAMEOF([Comm: ≥1 Txn (7d)]), 21),
+    ("Overall", NAMEOF([7days conversion Rate Overall]), 22),
+    ("Communications leading to OneX to TwoX Conversions", NAMEOF([Comm: 1x→2x+ (7d)]), 23),
+    ("1x-2x Conversion Rate", NAMEOF([1x to 2x Rate 7days]), 24),
+    ("Communications sent to 1x Customers", NAMEOF([Comm: sent to 1x Customers (7d)]), 25),
+    ("Communications leading to Retail to Digital Conversion", NAMEOF([Comm: sent to 1x (R2D base) (7d)]), 26),
+    ("R2D Conversion Rate", NAMEOF([R2D Conversion Rate 7days]), 27),
+    ("Communications sent to Retail Only Customers", NAMEOF([Comm: sent to Retail Only (7d)]), 28),
+    ("Communications with a Winback", NAMEOF([Comm: with Winback (7d)]), 29),
+    ("Winback Rate", NAMEOF([Winback Rate 7days]), 30),
+    ("Communications sent to Lapsed Customers", NAMEOF([Comm: sent to Lapsed (7d)]), 31),
+    ("Communications leading to Redemption", NAMEOF([Comm: leading to Redemption]), 32),
+    ("Redemption Rate", NAMEOF([Redemption Rate 7days]), 33),
+    ("Communications sent to Members", NAMEOF([Comm: sent to Members (7d)]), 34),
+    ("Communications sent to Non-Members", NAMEOF([Comm: sent to Non‑Members (7d)]), 35),
+    ("Communications leading to Enrollment", NAMEOF([Comm: leading to Enrollment]), 36),
+    ("Enrollment Rate", NAMEOF([Enrollment Rate 7days]), 37),
+    ("RNT Deliv.", NAMEOF([RNT Deliv.]), 38),
+    ("RNT TXNs", NAMEOF([RNT TXNs]), 39),
+    ("RNT TXN CR", NAMEOF([RNT TXN CR AK]), 40),
+    ("Revenue (in $)", NAMEOF([Revenue $]), 41)
+    }
