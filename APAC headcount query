@@ -1,212 +1,78 @@
-Metrics Parameter = {
-    ("Communications Sent", NAMEOF([Communications Sent]), 0),
-    ("Communications Delivered", NAMEOF([Communication Delivered]), 1),
-    ("Sucessfully Delivered Rate", NAMEOF([Delivery Rate]), 2),
-    ("Communications Opened", NAMEOF([Communications Opened]), 3),
-    ("Open Rate", NAMEOF([Open Rate 7days]), 4),
-    ("Communications Clicked", NAMEOF([Communications Clicked]), 5),
-    ("Click Rate", NAMEOF([Click Rate 7days]), 6),
-    ("Communications Opted-Out", NAMEOF([Communications Opted-Out]), 7),
-    ("Opt-Out Rate", NAMEOF([Opt-out Rate]), 8),
-    ("Communications Spammed", NAMEOF([Communications Spammed]), 9),
-    ("Spam Rate", NAMEOF([Spam Rate]), 10),
-    ("Communications with at least 1 Retail txn", NAMEOF([Comm: ≥1 Retail Txn (7d)]), 11),
-    ("Retail", NAMEOF([7days conversion Rate Retail]), 12),
-    ("Communications with at least 1 Air Txn", NAMEOF([Comm: ≥1 AIR Txn (7d)]), 13),
-    ("Air", NAMEOF([7days conversion Rate AIR]), 14),
-    ("Communications with at least 1 Web Txn", NAMEOF([Communications with atleast 1 Web Txn 7days]), 15),
-    ("Web", NAMEOF([7days conversion Rate Web]), 16),
-    ("Communications with at least 1 App Txn", NAMEOF([Comm: ≥1 App Txn (7d)]), 17),
-    ("App", NAMEOF([7days conversion Rate APP]), 18),
-    ("Communications with at least 1 Digital Txn", NAMEOF([Comm: ≥1 Digital Txn (7d)]), 19),
-    ("Digital", NAMEOF([7days conversion Rate Digital]), 20),
-    ("Communications with at least 1 Txn", NAMEOF([Comm: ≥1 Txn (7d)]), 21),
-    ("Overall", NAMEOF([7days conversion Rate Overall]), 22),
-    ("Communications leading to OneX to TwoX Conversions", NAMEOF([Comm: 1x→2x+ (7d)]), 23),
-    ("1x-2x Conversion Rate", NAMEOF([1x to 2x Rate 7days]), 24),
-    ("Communications sent to 1x Customers", NAMEOF([Comm: sent to 1x Customers (7d)]), 25),
-    ("Communications leading to Retail to Digital Conversion", NAMEOF([Comm: sent to 1x (R2D base) (7d)]), 26),
-    ("R2D Conversion Rate", NAMEOF([R2D Conversion Rate 7days]), 27),
-    ("Communications sent to Retail Only Customers", NAMEOF([Comm: sent to Retail Only (7d)]), 28),
-    ("Communications with a Winback", NAMEOF([Comm: with Winback (7d)]), 29),
-    ("Winback Rate", NAMEOF([Winback Rate 7days]), 30),
-    ("Communications sent to Lapsed Customers", NAMEOF([Comm: sent to Lapsed (7d)]), 31),
-    ("Communications leading to Redemption", NAMEOF([Comm: leading to Redemption]), 32),
-    ("Redemption Rate", NAMEOF([Redemption Rate 7days]), 33),
-    ("Communications sent to Members", NAMEOF([Comm: sent to Members (7d)]), 34),
-    ("Communications sent to Non-Members", NAMEOF([Comm: sent to Non‑Members (7d)]), 35),
-    ("Communications leading to Enrollment", NAMEOF([Comm: leading to Enrollment]), 36),
-    ("Enrollment Rate", NAMEOF([Enrollment Rate 7days]), 37),
-    ("RNT Deliv.", NAMEOF([RNT Deliv.]), 38),
-    ("RNT TXNs", NAMEOF([RNT TXNs]), 39),
-    ("RNT TXN CR", NAMEOF([RNT TXN CR AK]), 40),
-    ("Revenue (in $)", NAMEOF([Revenue $]), 41)
-    }
-The above parameter has been created using the below measures:
-Communications Sent = 
-    SUM ( 'SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[COMMUNICATIONS_SENT] )
-Communication Delivered = 
-SUM(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[COMMUNICATIONS_SENT]) - SUM(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[COMMUNICATIONS_UNDELIVERED])
-Delivery Rate = 
-DIVIDE(
-    [Communication Delivered],
-    SUM(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[COMMUNICATIONS_SENT]),
-    0
-)
-Open Rate 7days = 
-DIVIDE(
-    SUM(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[COMMUNICATIONS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION]),
-    CALCULATE(
-        [Communication Delivered],
-        FILTER(
-            SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE,
-        SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[CHANNEL] ="E" || SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[CHANNEL] ="P" || SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[CHANNEL] ="W"
-    )),
-    0
-)
-Communications Opened = 
-    SUM ( 'SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[COMMUNICATIONS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION] )
-Click Rate 7days = 
-DIVIDE(
-    SUM(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[COMMUNICATIONS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION]),
-    CALCULATE(
-        [Communication Delivered],
-        FILTER(
-            SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE,
-        SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[CHANNEL] <>"P"
-    )),
-    0
-)
-Communications Clicked = 
-    SUM ( 'SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[COMMUNICATIONS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION] )
-Communications Opted-Out = 
-    SUM ( 'SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[OPT_OUTS] )
-Opt-out Rate = 
-DIVIDE(
-    SUM(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[OPT_OUTS]),
-    CALCULATE(
-        [Communication Delivered],
-        FILTER(
-            SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE,
-        SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[CHANNEL] ="E" || SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[CHANNEL] ="S" || SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[CHANNEL] ="W"
-    )),
-    0
-)
-Spam Rate = 
-DIVIDE(
-    SUM(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[COMPLAINTS]),
-    CALCULATE(
-        [Communication Delivered],
-        FILTER(
-            SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE,
-            SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[CHANNEL] ="E"
-    )),
-    0
-)
-Communications Spammed = 
-    SUM ( 'SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[COMPLAINTS] )
-Comm: ≥1 Retail Txn (7d) = 
-    SUM ( 'SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[TEST_COMMUNICATIONS_WITH_ATLEAST_1_RETAIL_TXN_7DAYS] )
-7days conversion Rate Retail = 
-DIVIDE(
-    SUM(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[TEST_COMMUNICATIONS_WITH_ATLEAST_1_RETAIL_TXN_7DAYS]),
-    [Total_Opened_or_Clicked],
-    0
-)
-Comm: ≥1 AIR Txn (7d) = 
-    SUM ( 'SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[TEST_COMMUNICATIONS_WITH_ATLEAST_1_AIR_TXN_7DAYS] )
-7days conversion Rate AIR = 
-DIVIDE(
-    SUM(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[TEST_COMMUNICATIONS_WITH_ATLEAST_1_AIR_TXN_7DAYS]),
-    [Total_Opened_or_Clicked],
-    0
-)
-Comm: ≥1 App Txn (7d) = 
-    SUM ( 'SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[TEST_COMMUNICATIONS_WITH_ATLEAST_1_APP_TXN_7DAYS] )
-7days conversion Rate APP = 
-DIVIDE(
-    SUM(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[TEST_COMMUNICATIONS_WITH_ATLEAST_1_APP_TXN_7DAYS]),
-    [Total_Opened_or_Clicked],
-    0
-)
-Comm: ≥1 Digital Txn (7d) = 
-    SUM ( 'SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[TEST_COMMUNICATIONS_WITH_ATLEAST_1_DIGITAL_TXN_7DAYS] )
-7days conversion Rate Digital = 
-DIVIDE(
-    SUM(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[TEST_COMMUNICATIONS_WITH_ATLEAST_1_DIGITAL_TXN_7DAYS]),
-    [Total_Opened_or_Clicked],
-    0
-)
-Comm: ≥1 Txn (7d) = 
-    SUM ( 'SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[TEST_COMMUNICATIONS_WITH_ATLEAST_1_TXN_7DAYS] )
-7days conversion Rate Overall = 
-DIVIDE(
-    SUM(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[TEST_COMMUNICATIONS_WITH_ATLEAST_1_TXN_7DAYS]),
-    [Total_Opened_or_Clicked],
-    0
-)
-Comm: 1x→2x+ (7d) = 
-    SUM ( 'SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[TEST_COMMUNICATIONS_ONEX_TO_TWOX_AND_PLUS_7DAYS] )
-1x to 2x Rate 7days = 
-DIVIDE(
-    SUM(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[TEST_COMMUNICATIONS_ONEX_TO_TWOX_AND_PLUS_7DAYS]),
-    SUM(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[TEST_1X_DELIVERED_OPENED_CLICKED_7DAYS]),
-    0
-)
-Comm: sent to 1x Customers (7d) = 
-    SUM ( 'SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[TEST_1X_DELIVERED_OPENED_CLICKED_7DAYS] )
-Comm: sent to 1x (R2D base) (7d) = 
-    SUM ( 'SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[TEST_COMMUNICATIONS_R2D_7DAYS] )
-R2D Conversion Rate 7days = 
-DIVIDE(
-    SUM(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[TEST_COMMUNICATIONS_R2D_7DAYS]),
-    SUM(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[TEST_RETAIL_ONLY_DELIVERED_7DAYS]),
-    0
-)
-Comm: sent to Retail Only (7d) = 
-    SUM ( 'SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[TEST_RETAIL_ONLY_DELIVERED_7DAYS] )
-Comm: with Winback (7d) = 
-    SUM ( 'SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[TEST_COMMUNICATIONS_WINBACKS_7DAYS] )
-Winback Rate 7days = 
-DIVIDE(
-    SUM(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[TEST_COMMUNICATIONS_WINBACKS_7DAYS]),
-    SUM(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[TEST_LAPSED_ONLY_DELIVERED_OPENED_CLICKED_7DAYS]),
-    0
-)
-Comm: sent to Lapsed (7d) = 
-    SUM ( 'SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[TEST_LAPSED_ONLY_DELIVERED_OPENED_CLICKED_7DAYS] )
-Comm: leading to Redemption = 
-    SUM ( 'SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[TEST_COMMUNICATIONS_EXISTING_CUSTOMER] )
-Comm: sent to Members (7d) = 
-    SUM ( 'SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[TEST_COMMUNICATIONS_LOYALTY_REGISTRATION_OPENED_CLICKED_7DAYS] )
-Comm: sent to Non‑Members (7d) = 
-    SUM ( 'SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[TEST_COMMUNICATIONS_REGISTERED_7_DAYS] )
-Comm: leading to Enrollment = 
-    SUM ( 'SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[TEST_COMMUNICATIONS_DIGITAL_REGISTRATION] )
-Redemption Rate 7days = 
-DIVIDE(
-    SUM(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[TEST_COMMUNICATIONS_EXISTING_CUSTOMER]),
-    SUM(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[TEST_COMMUNICATIONS_LOYALTY_REGISTRATION_OPENED_CLICKED_7DAYS]),
-    0
-)
-Enrollment Rate 7days = 
-DIVIDE(
-    SUM(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[TEST_COMMUNICATIONS_DIGITAL_REGISTRATION]),
-    SUM(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[TEST_COMMUNICATIONS_REGISTERED_7_DAYS]),
-    0
-)
-RNT Deliv. = 
-CALCULATE(
-	[Total_Opened_or_Clicked],
-    FILTER(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE,
-	SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[ACTIVITY_STATUS] = "RNT" || SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[ACTIVITY_STATUS] = "Post 30 Days RNT"
-))
-RNT TXNs = 
-CALCULATE(
-	SUM('SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[TEST_COMMUNICATIONS_WITH_ATLEAST_1_TXN_7DAYS]),
-    FILTER(SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE,
-	SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[ACTIVITY_STATUS] = "RNT" || SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE[ACTIVITY_STATUS] = "Post 30 Days RNT"
-))
-RNT TXN CR AK = DIVIDE([RNT TXNs],[RNT Deliv.],0)
-Revenue $ = 
-    SUM ( 'SJ_BI_CAMPAIGN_COMMUNICATIONS_2_V2_MYWU_UPDATE'[REVENUE] )
+CREATE OR REPLACE TABLE CAR_946_SG_TO_IN AS
+SELECT
+    COUNT(t.txn_id) AS Total_Txns,
+    COUNT(CASE WHEN t.PRICING_CHANNEL = 'APP' THEN t.txn_id END) AS APP_TXNS,
+    t.SNDCUSTOMER_KEY,  
+    t.sndcountry_code,
+    CASE WHEN t.pricing_channel IN ('APP', 'WEB') THEN 'DIGITAL' 
+    WHEN t.pricing_channel IN ('POS', 'TMT') THEN 'RETAIL' 
+    END AS channel,
+    t.RCVCOUNTRY_CODE
+FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
+WHERE UPPER(t.SNDCOUNTRY_CODE) = 'SG'
+  AND UPPER(t.RCVCOUNTRY_CODE) = 'IN'
+  AND DATE(t.RCVPAYING_DATETIME) >= '2025-03-24' AND 
+  DATE(t.RCVPAYING_DATETIME) <= '2026-03-23'
+GROUP BY ALL;
+
+------------------------------------------------------------------------
+ select COUNT(sndcustomer_key), COUNT(DISTINCT sndcustomer_key) from 
+ CAR_946_SG_TO_IN;--103519	103519
+-------------------------------------------------------------------------
+
+CREATE OR REPLACE TABLE CAR_946_SG_TO_IN_Marketability AS
+select *,
+CASE 
+           WHEN email_marketability_flag = 'Y' AND sms_marketability_flag = 'N' AND App_Marketability_Flag = 'N' THEN 'EMAIL_ONLY'
+           WHEN email_marketability_flag = 'N' AND sms_marketability_flag = 'Y' AND App_Marketability_Flag = 'N' THEN 'SMS_ONLY'
+           WHEN email_marketability_flag = 'N' AND sms_marketability_flag = 'N' AND App_Marketability_Flag = 'Y' THEN 'APP_ONLY'
+           WHEN email_marketability_flag = 'Y' AND sms_marketability_flag = 'Y' AND App_Marketability_Flag = 'N' THEN 'EMAIL_SMS'
+           WHEN email_marketability_flag = 'Y' AND sms_marketability_flag = 'N' AND App_Marketability_Flag = 'Y' THEN 'EMAIL_APP'
+           WHEN email_marketability_flag = 'N' AND sms_marketability_flag = 'Y' AND App_Marketability_Flag = 'Y' THEN 'SMS_APP'
+           WHEN email_marketability_flag = 'Y' AND sms_marketability_flag = 'Y' AND App_Marketability_Flag = 'Y' THEN 'EMAIL_SMS_APP'
+           ELSE 'OTHERS'
+       END AS MARKETING_COMBINATION,
+
+       CASE WHEN email_marketability_flag = 'Y'
+             OR sms_marketability_flag = 'Y'
+             OR App_Marketability_Flag = 'Y' THEN 'Y' ELSE 'N' END AS MARKETABILITY_FLAG
+    FROM(
+SELECT DISTINCT
+    b.SNDCUSTOMER_KEY AS gid_customer_key,
+    cm.customer_umn    AS umn_customer_key,
+    b.sndcountry_code,
+    b.rcvcountry_code,
+     cm.global_holdout,
+    
+
+    -- Marketability Flags
+    CASE 
+        WHEN cm.marketing_flag = 'Y' AND cm.email_address_on_file_flag = 'Y' AND cm.opt_email = 'I' THEN 'Y'
+        ELSE 'N'
+    END AS email_marketability_flag,
+
+    CASE 
+        WHEN cm.marketing_flag = 'Y' AND cm.mobile_number_on_file_flag = 'Y' AND cm.opt_sms = 'I' THEN 'Y'
+        ELSE 'N'
+    END AS sms_marketability_flag,
+
+    CASE WHEN APP_TXNS > 0 THEN 'Y' ELSE 'N' END AS App_Marketability_Flag
+
+
+FROM CAR_946_SG_TO_IN b
+JOIN SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
+  ON b.SNDCUSTOMER_KEY = cm.customer_key);
+
+
+  SELECT 
+    '@' || GID_CUSTOMER_KEY AS GID,
+    '@' || UMN_CUSTOMER_KEY AS UMN,
+    SNDCOUNTRY_CODE,
+    EMAIL_MARKETABILITY_FLAG,
+    SMS_MARKETABILITY_FLAG,
+    APP_MARKETABILITY_FLAG,
+    MARKETABILITY_FLAG,
+    MARKETING_COMBINATION,
+    global_holdout
+FROM CAR_946_SG_TO_IN_Marketability
+Order by GID;
