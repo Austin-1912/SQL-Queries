@@ -4,10 +4,12 @@ SELECT
     COUNT(CASE WHEN t.PRICING_CHANNEL = 'APP' THEN t.txn_id END) AS APP_TXNS,
     t.SNDCUSTOMER_KEY,  
     t.sndcountry_code,
+    t.RCVCOUNTRY_CODE,
     CASE WHEN t.pricing_channel IN ('APP', 'WEB') THEN 'DIGITAL' 
     WHEN t.pricing_channel IN ('POS', 'TMT') THEN 'RETAIL' 
     END AS channel,
-    t.RCVCOUNTRY_CODE
+    t.sndprincipal_amount
+    
 FROM SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW t
 WHERE UPPER(t.SNDCOUNTRY_CODE) = 'SG'
   AND UPPER(t.RCVCOUNTRY_CODE) = 'IN'
@@ -76,3 +78,7 @@ JOIN SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
     global_holdout
 FROM CAR_946_SG_TO_IN_Marketability
 Order by GID;
+
+i have written this script, i want you to update it for the below requirement for the below requirement:
+Requesting for customer list of active SG customers who sent atleast 1 digital txn with >$1K(t.sndprincipal_amount) transfer  to India
+in the last 12 months. Possible to share list asap
