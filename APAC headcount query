@@ -1,3 +1,275 @@
-CUSTOMER_TYPE	TOTAL_CUSTOMERS	TOTAL_TXNS	TOTAL_PRINCIPAL	TOTAL_REVENUE	TPC	PPC	RPC	PPT	RPT	TOTAL_APN_TXNS	TOTAL_APN_PRINCIPAL	TOTAL_APN_REVENUE	APN_TPC	APN_RPC	TOTAL_CASH_TXNS	TOTAL_CASH_PRINCIPAL	TOTAL_CASH_REVENUE	CASH_TPC	CASH_RPC
-APN_SENDER	3722521	51544698	22547626719.25	495008897.75	13.846718	6057.08516332	132.97679120	437.43833205	9.60348818	32912488	16437215656.93	298128311.46	8.841451	80.08774469	18632210	6110411062.32	196880586.29	5.005267	52.88904651
-NON_APN_SENDER	8845707	59730866	20542144269.58	688115113.06	6.752526	2322.27274423	77.79085528	343.91171006	11.52026011	0	0.00	0.00	0.000000	0.00000000	59730866	20542144269.58	688115113.06	6.752526	77.79085528
+-- ============================================================================
+-- SIMPLIFIED RPC ANALYSIS - ALIGNED WITH FIRST HYPOTHESIS
+-- ============================================================================
+-- Purpose: Keep it simple and aligned with the payout type comparison
+-- ============================================================================
+
+-- ============================================================================
+-- APPROACH 1: CUSTOMER-LEVEL VIEW (SIMPLE VERSION)
+-- ============================================================================
+-- Just compare APN senders vs Non-APN senders using their OVERALL metrics
+-- ============================================================================
+
+CREATE OR REPLACE TABLE CAM_1746_RPC_SIMPLE AS
+WITH customer_classification AS (
+    -- Classify customers based on whether they have any ACCOUNT transactions
+    SELECT
+        SNDCUSTOMER_KEY,
+        CASE 
+            WHEN SUM(CASE WHEN PAYOUT_TYPE = 'ACCOUNT' THEN 1 ELSE 0 END) >= 1 
+            THEN 'APN_SENDER' 
+            ELSE 'NON_APN_SENDER' 
+        END AS CUSTOMER_TYPE
+    FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+    WHERE SNDCOUNTRY_CODE = 'US'
+        AND DATE(rcvpaying_datetime) >= '2025-02-01'
+        AND DATE(rcvpaying_datetime) < '2026-02-01'
+        AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
+        AND SNDCUSTOMER_KEY IS NOT NULL
+    GROUP BY SNDCUSTOMER_KEY
+),
+customer_totals AS (
+    -- Get total metrics for each customer
+    SELECT
+        cc.CUSTOMER_TYPE,
+        txn.SNDCUSTOMER_KEY,
+        COUNT(DISTINCT txn.TXN_ID) AS CUSTOMER_TXNS,
+        SUM(txn.SNDPRINCIPAL_USD) AS CUSTOMER_PRINCIPAL,
+        SUM(txn.REVENUE) AS CUSTOMER_REVENUE
+    FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW txn
+    INNER JOIN customer_classification cc
+        ON txn.SNDCUSTOMER_KEY = cc.SNDCUSTOMER_KEY
+    WHERE txn.SNDCOUNTRY_CODE = 'US'
+        AND DATE(txn.rcvpaying_datetime) >= '2025-02-01'
+        AND DATE(txn.rcvpaying_datetime) < '2026-02-01'
+        AND txn.PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
+    GROUP BY cc.CUSTOMER_TYPE, txn.SNDCUSTOMER_KEY
+)
+SELECT
+    CUSTOMER_TYPE,
+    
+    -- Customer Count
+    COUNT(DISTINCT SNDCUSTOMER_KEY) AS TOTAL_CUSTOMERS,
+    
+    -- Aggregated Totals
+    SUM(CUSTOMER_TXNS) AS TOTAL_TXNS,
+    SUM(CUSTOMER_PRINCIPAL) AS TOTAL_PRINCIPAL,
+    SUM(CUSTOMER_REVENUE) AS TOTAL_REVENUE,
+    
+    -- Per Customer Metrics (THE KEY METRICS!)
+    ROUND(SUM(CUSTOMER_TXNS) / COUNT(DISTINCT SNDCUSTOMER_KEY), 2) AS TPC,
+    ROUND(SUM(CUSTOMER_PRINCIPAL) / COUNT(DISTINCT SNDCUSTOMER_KEY), 2) AS PPC,
+    ROUND(SUM(CUSTOMER_REVENUE) / COUNT(DISTINCT SNDCUSTOMER_KEY), 2) AS RPC,
+    
+    -- Per Transaction Metrics (for reference)
+    ROUND(SUM(CUSTOMER_PRINCIPAL) / SUM(CUSTOMER_TXNS), 2) AS PPT,
+    ROUND(SUM(CUSTOMER_REVENUE) / SUM(CUSTOMER_TXNS), 2) AS RPT
+
+FROM customer_totals
+GROUP BY CUSTOMER_TYPE;
+
+-- View Results
+SELECT * FROM CAM_1746_RPC_SIMPLE;
+
+
+-- ============================================================================
+-- VERIFICATION: DOES THIS MATCH OUR FIRST HYPOTHESIS DATA?
+-- ============================================================================
+
+-- This should show the breakdown of where the transactions are coming from
+SELECT 
+    cc.CUSTOMER_TYPE,
+    txn.PAYOUT_TYPE,
+    COUNT(DISTINCT txn.SNDCUSTOMER_KEY) AS CUSTOMERS,
+    COUNT(DISTINCT txn.TXN_ID) AS TXNS,
+    SUM(txn.SNDPRINCIPAL_USD) AS TOTAL_PRINCIPAL,
+    SUM(txn.REVENUE) AS TOTAL_REVENUE,
+    ROUND(AVG(txn.SNDPRINCIPAL_USD), 2) AS PPT,
+    ROUND(AVG(txn.REVENUE), 2) AS RPT
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW txn
+INNER JOIN (
+    SELECT
+        SNDCUSTOMER_KEY,
+        CASE 
+            WHEN SUM(CASE WHEN PAYOUT_TYPE = 'ACCOUNT' THEN 1 ELSE 0 END) >= 1 
+            THEN 'APN_SENDER' 
+            ELSE 'NON_APN_SENDER' 
+        END AS CUSTOMER_TYPE
+    FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+    WHERE SNDCOUNTRY_CODE = 'US'
+        AND DATE(rcvpaying_datetime) >= '2025-02-01'
+        AND DATE(rcvpaying_datetime) < '2026-02-01'
+        AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
+        AND SNDCUSTOMER_KEY IS NOT NULL
+    GROUP BY SNDCUSTOMER_KEY
+) cc ON txn.SNDCUSTOMER_KEY = cc.SNDCUSTOMER_KEY
+WHERE txn.SNDCOUNTRY_CODE = 'US'
+    AND DATE(txn.rcvpaying_datetime) >= '2025-02-01'
+    AND DATE(txn.rcvpaying_datetime) < '2026-02-01'
+    AND txn.PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
+GROUP BY cc.CUSTOMER_TYPE, txn.PAYOUT_TYPE
+ORDER BY cc.CUSTOMER_TYPE, txn.PAYOUT_TYPE;
+
+
+-- ============================================================================
+-- SANITY CHECK: TOTAL TRANSACTIONS SHOULD MATCH
+-- ============================================================================
+
+-- Total from payout type view (First Hypothesis)
+SELECT 
+    'PAYOUT_TYPE_VIEW' AS source,
+    PAYOUT_TYPE,
+    COUNT(DISTINCT TXN_ID) AS total_txns,
+    ROUND(AVG(SNDPRINCIPAL_USD), 2) AS ppt,
+    ROUND(AVG(REVENUE), 2) AS rpt
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+WHERE SNDCOUNTRY_CODE = 'US'
+    AND DATE(rcvpaying_datetime) >= '2025-02-01'
+    AND DATE(rcvpaying_datetime) < '2026-02-01'
+    AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
+    AND SNDCUSTOMER_KEY IS NOT NULL
+GROUP BY PAYOUT_TYPE
+
+UNION ALL
+
+-- Total from customer type view (Second Hypothesis)
+SELECT 
+    'CUSTOMER_TYPE_VIEW' AS source,
+    'ALL_TRANSACTIONS' AS payout_type,
+    SUM(TOTAL_TXNS) AS total_txns,
+    SUM(TOTAL_PRINCIPAL) / SUM(TOTAL_TXNS) AS ppt,
+    SUM(TOTAL_REVENUE) / SUM(TOTAL_TXNS) AS rpt
+FROM CAM_1746_RPC_SIMPLE
+GROUP BY source, payout_type;
+
+
+-- ============================================================================
+-- KEY INSIGHT EXPLANATION
+-- ============================================================================
+/*
+WHY THE NUMBERS ARE DIFFERENT:
+
+FIRST HYPOTHESIS (Transaction-Level):
+-------------------------------------
+- Looks at ALL ACCOUNT transactions vs ALL CASH transactions
+- ACCOUNT: 32.9M transactions
+- CASH: 78.4M transactions
+- Total: 111.3M transactions
+
+SECOND HYPOTHESIS (Customer-Level):
+-----------------------------------
+- Looks at APN_SENDERS vs NON_APN_SENDERS
+- APN_SENDERS: Customers with at least 1 ACCOUNT transaction
+  * Their transactions include: 32.9M ACCOUNT + 18.6M CASH = 51.5M total
+  * Yes! APN senders also do CASH transactions sometimes
+  
+- NON_APN_SENDERS: Customers who only do CASH
+  * Their transactions: 59.7M CASH only
+
+BREAKDOWN:
+---------
+Total CASH transactions (78.4M) = 
+  - CASH by APN senders (18.6M) + 
+  - CASH by NON-APN senders (59.7M)
+
+Total ACCOUNT transactions (32.9M) = 
+  - ACCOUNT by APN senders (32.9M) + 
+  - ACCOUNT by NON-APN senders (0)
+
+CORRECT COMPARISON FOR HYPOTHESIS 2:
+------------------------------------
+Compare the OVERALL behavior of APN senders vs Non-APN senders:
+
+Metric                          | APN Senders | Non-APN  | Difference
+--------------------------------|-------------|----------|------------
+TPC (Transactions Per Customer) | 13.85       | 6.75     | +105%
+RPC (Revenue Per Customer)      | $132.98     | $77.79   | +71%
+PPC (Principal Per Customer)    | $6,057      | $2,322   | +161%
+
+INTERPRETATION:
+- APN senders transact 2x more frequently (13.85 vs 6.75 txns/customer)
+- This higher frequency drives 71% higher revenue per customer
+- Even though their blended RPT is lower ($9.60 vs $11.52), the volume compensates
+*/
+
+
+-- ============================================================================
+-- FINAL COMPARISON TABLE FOR KEY TAKEAWAYS
+-- ============================================================================
+
+CREATE OR REPLACE TABLE CAM_1746_KEY_TAKEAWAYS_COMPARISON AS
+SELECT
+    'TPC (Transactions Per Customer)' AS metric,
+    (SELECT TPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') AS apn_senders,
+    (SELECT TPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER') AS non_apn_senders,
+    (SELECT TPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') - 
+    (SELECT TPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER') AS absolute_diff,
+    ROUND(
+        ((SELECT TPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') - 
+         (SELECT TPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER')) * 100.0 /
+        (SELECT TPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER'),
+        2
+    ) AS pct_diff
+
+UNION ALL
+
+SELECT
+    'RPC (Revenue Per Customer)' AS metric,
+    (SELECT RPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') AS apn_senders,
+    (SELECT RPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER') AS non_apn_senders,
+    (SELECT RPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') - 
+    (SELECT RPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER') AS absolute_diff,
+    ROUND(
+        ((SELECT RPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') - 
+         (SELECT RPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER')) * 100.0 /
+        (SELECT RPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER'),
+        2
+    ) AS pct_diff
+
+UNION ALL
+
+SELECT
+    'PPC (Principal Per Customer)' AS metric,
+    (SELECT PPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') AS apn_senders,
+    (SELECT PPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER') AS non_apn_senders,
+    (SELECT PPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') - 
+    (SELECT PPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER') AS absolute_diff,
+    ROUND(
+        ((SELECT PPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') - 
+         (SELECT PPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER')) * 100.0 /
+        (SELECT PPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER'),
+        2
+    ) AS pct_diff
+
+UNION ALL
+
+SELECT
+    'PPT (Principal Per Transaction)' AS metric,
+    (SELECT PPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') AS apn_senders,
+    (SELECT PPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER') AS non_apn_senders,
+    (SELECT PPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') - 
+    (SELECT PPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER') AS absolute_diff,
+    ROUND(
+        ((SELECT PPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') - 
+         (SELECT PPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER')) * 100.0 /
+        (SELECT PPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER'),
+        2
+    ) AS pct_diff
+
+UNION ALL
+
+SELECT
+    'RPT (Revenue Per Transaction)' AS metric,
+    (SELECT RPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') AS apn_senders,
+    (SELECT RPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER') AS non_apn_senders,
+    (SELECT RPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') - 
+    (SELECT RPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER') AS absolute_diff,
+    ROUND(
+        ((SELECT RPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') - 
+         (SELECT RPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER')) * 100.0 /
+        (SELECT RPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER'),
+        2
+    ) AS pct_diff;
+
+-- View the comparison
+SELECT * FROM CAM_1746_KEY_TAKEAWAYS_COMPARISON;
