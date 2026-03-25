@@ -1,3 +1,7 @@
+-- ============================================================================
+-- CORRECTED CASH VS APN ALL DIMENSIONS QUERY
+-- ============================================================================
+
 CREATE OR REPLACE TABLE CAM_1746_CASH_VS_APN_ALL_DIMENSIONS AS
 SELECT
     PAYOUT_TYPE,
@@ -46,11 +50,18 @@ SELECT
     SUM(net_foreign_exchange) AS TOTAL_FX_MARGIN,
     AVG(net_foreign_exchange) AS AVG_FX_MARGIN,
     
-    -- Calculated Percentages
-    AVG(REVENUE / NULLIF(COUNT(DISTINCT TXN_ID), 0) * 100) AS AVG_RPT,
-    AVG(SNDPRINCIPAL_USD / NULLIF(COUNT(DISTINCT TXN_ID), 0) * 100) AS AVG_PPT,    
-    AVG(total_charges_usd / NULLIF(COUNT(DISTINCT TXN_ID), 0) * 100) AS AVG_FEE_PCT_OF_PRINCIPAL,
-    AVG(net_foreign_exchange / NULLIF(COUNT(DISTINCT TXN_ID), 0) * 100) AS AVG_FX_PCT_OF_PRINCIPAL
+    -- Calculated Percentages (CORRECTED)
+    -- RPT is already AVG_REVENUE, no need to divide by txn count again
+    AVG(REVENUE) AS AVG_RPT,
+    
+    -- PPT is already AVG_PRINCIPAL, no need to divide by txn count again
+    AVG(SNDPRINCIPAL_USD) AS AVG_PPT,
+    
+    -- Fee as % of Principal (per transaction)
+    AVG(total_charges_usd / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FEE_PCT_OF_PRINCIPAL,
+    
+    -- FX as % of Principal (per transaction)
+    AVG(net_foreign_exchange / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FX_PCT_OF_PRINCIPAL
 
 FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
 WHERE SNDCOUNTRY_CODE = 'US'
@@ -58,5 +69,58 @@ WHERE SNDCOUNTRY_CODE = 'US'
     AND DATE(rcvpaying_datetime) < '2026-02-01'
     AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
     AND SNDCUSTOMER_KEY IS NOT NULL
-GROUP BY ALL
+GROUP BY PAYOUT_TYPE, CHANNEL_GROUP, PPT_BUCKET, DIRECTION
 ORDER BY PAYOUT_TYPE, CHANNEL_GROUP, PPT_BUCKET, DIRECTION;
+
+
+-- Verification Query
+SELECT * FROM CAM_1746_CASH_VS_APN_ALL_DIMENSIONS
+LIMIT 100;
+
+-- Quick Summary
+SELECT 
+    PAYOUT_TYPE,
+    SUM(TOTAL_TXNS) AS total_txns,
+    SUM(TOTAL_PRINCIPAL) / SUM(TOTAL_TXNS) AS avg_principal,
+    SUM(TOTAL_REVENUE) / SUM(TOTAL_TXNS) AS avg_revenue,
+    SUM(TOTAL_FEE) / SUM(TOTAL_TXNS) AS avg_fee,
+    SUM(TOTAL_FX_MARGIN) / SUM(TOTAL_TXNS) AS avg_fx_margin
+FROM CAM_1746_CASH_VS_APN_ALL_DIMENSIONS
+GROUP BY PAYOUT_TYPE;
+
+
+-- ============================================================================
+-- EXPLANATION OF CORRECTIONS
+-- ============================================================================
+/*
+ISSUE 1: COUNT(DISTINCT TXN_ID) in percentage calculations
+---------------------------------------------------------
+Original code had:
+    AVG(REVENUE / NULLIF(COUNT(DISTINCT TXN_ID), 0) * 100)
+
+Problem: COUNT(DISTINCT TXN_ID) is an aggregate function and can't be used 
+inside AVG() like this. It would cause a syntax error.
+
+Fix: 
+- AVG_RPT = AVG(REVENUE) - this already gives you revenue per transaction
+- AVG_PPT = AVG(SNDPRINCIPAL_USD) - this already gives you principal per transaction
+
+
+ISSUE 2: Percentage calculations
+---------------------------------
+For fee as % of principal, you want:
+    AVG(fee / principal * 100) for each transaction
+NOT:
+    AVG(fee / txn_count * 100)
+
+The corrected version calculates the percentage for each individual transaction,
+then averages those percentages across all transactions in the group.
+
+
+SUMMARY OF METRICS:
+-------------------
+AVG_RPT = Average Revenue Per Transaction = AVG(REVENUE)
+AVG_PPT = Average Principal Per Transaction = AVG(SNDPRINCIPAL_USD)
+AVG_FEE_PCT_OF_PRINCIPAL = Average (Fee/Principal * 100) per transaction
+AVG_FX_PCT_OF_PRINCIPAL = Average (FX/Principal * 100) per transaction
+*/
