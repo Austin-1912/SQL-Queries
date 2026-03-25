@@ -1,38 +1,70 @@
+-- ============================================================================
+-- CASH VS APN PRICING ANALYSIS - ENTIRE US POPULATION
+-- ============================================================================
+-- Purpose: Understand why APN has higher PPT but lower RPT compared to CASH
+-- Hypothesis: ACCOUNT payout has more competitive pricing (lower fees/FX margins)
+-- Period: Feb 2025 - Jan 2026
+-- ============================================================================
 
 -- ============================================================================
--- STEP 1: CREATE BASE TABLE - APN CUSTOMERS
+-- STEP 1: OVERALL CASH VS APN COMPARISON
 -- ============================================================================
--- Purpose: Identify customers who have had at least one APN transaction
+-- Purpose: High-level comparison of transaction behavior and pricing
 -- ============================================================================
-CREATE OR REPLACE TABLE CAM_1746_Cust_Base AS 
-SELECT 
-    SNDCUSTOMER_KEY,
-    TXN_ID,
-    DATE('2026-01-01') AS mth_yr,
-    RCVPAYING_DATETIME AS txn_dt,
-    sndcountry_code,
-    rcvcountry_code,
+
+CREATE OR REPLACE TABLE CAM_1746_CASH_VS_APN_OVERALL AS
+SELECT
     PAYOUT_TYPE,
-    SUB_PAYIN_TYPE,
-    Pricing_Channel,
-    REVENUE,
-    SNDPRINCIPAL_USD,
-    DIRECTION,
-    -- cm.age,
-    -- cm.marketing_flag,
-    CASE
-        WHEN PRICING_CHANNEL IN ('WEB', 'APP') THEN 'DIGITAL'
-        WHEN PRICING_CHANNEL IN ('POS', 'TMT', 'AIR') THEN 'RETAIL'
-        ELSE 'OTHER'
-    END AS channel_group,
-   -- APN FLAG: 1 if customer has at least one ACCOUNT transaction, 0 otherwise
-    -- CASE
-    --     WHEN COUNT(CASE WHEN PAYOUT_TYPE = 'ACCOUNT' THEN 1 END)
-    --          OVER (PARTITION BY SNDCUSTOMER_KEY) >= 1
-    --     THEN 1
-    --     ELSE 0
-    -- END AS APN_CUSTOMER_FLAG,
-    -- PPT Bucket
+    COUNT(DISTINCT SNDCUSTOMER_KEY) AS DISTINCT_CUSTOMERS,
+    COUNT(DISTINCT TXN_ID) AS TOTAL_TXNS,
+    
+    -- Principal Metrics
+    SUM(SNDPRINCIPAL_USD) AS TOTAL_PRINCIPAL,
+    AVG(SNDPRINCIPAL_USD) AS AVG_PRINCIPAL_PPT,
+    MEDIAN(SNDPRINCIPAL_USD) AS MEDIAN_PRINCIPAL_PPT,
+    
+    -- Revenue Metrics
+    SUM(REVENUE) AS TOTAL_REVENUE,
+    AVG(REVENUE) AS AVG_REVENUE_RPT,
+    MEDIAN(REVENUE) AS MEDIAN_REVENUE_RPT,
+    
+    -- Fee Metrics
+    SUM(FEE) AS TOTAL_FEE,
+    AVG(FEE) AS AVG_FEE,
+    MEDIAN(FEE) AS MEDIAN_FEE,
+    
+    -- FX Margin Metrics (if applicable)
+    SUM(FX_MARGIN) AS TOTAL_FX_MARGIN,
+    AVG(FX_MARGIN) AS AVG_FX_MARGIN,
+    MEDIAN(FX_MARGIN) AS MEDIAN_FX_MARGIN,
+    
+    -- Calculated Metrics
+    AVG(REVENUE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_REVENUE_AS_PCT_OF_PRINCIPAL,
+    AVG(FEE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FEE_AS_PCT_OF_PRINCIPAL,
+    AVG(FX_MARGIN / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FX_AS_PCT_OF_PRINCIPAL
+
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+WHERE SNDCOUNTRY_CODE = 'US'
+    AND DATE(rcvpaying_datetime) >= '2025-02-01'
+    AND DATE(rcvpaying_datetime) < '2026-02-01'
+    AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
+    AND SNDCUSTOMER_KEY IS NOT NULL
+GROUP BY PAYOUT_TYPE;
+
+-- Verification Query
+SELECT * FROM CAM_1746_CASH_VS_APN_OVERALL
+ORDER BY PAYOUT_TYPE;
+
+
+-- ============================================================================
+-- STEP 2: CASH VS APN BY PRINCIPAL BUCKET
+-- ============================================================================
+-- Purpose: Compare pricing across different principal (PPT) buckets
+-- ============================================================================
+
+CREATE OR REPLACE TABLE CAM_1746_CASH_VS_APN_BY_PPT_BUCKET AS
+SELECT
+    PAYOUT_TYPE,
     CASE
         WHEN SNDPRINCIPAL_USD < 100 THEN 'A.<$100'
         WHEN SNDPRINCIPAL_USD >= 100 AND SNDPRINCIPAL_USD < 500 THEN 'B.$100-$500'
@@ -41,498 +73,488 @@ SELECT
         WHEN SNDPRINCIPAL_USD >= 2000 AND SNDPRINCIPAL_USD < 5000 THEN 'E.$2,000-$5,000'
         WHEN SNDPRINCIPAL_USD >= 5000 THEN 'F.$5,000+'
         ELSE 'Unknown'
-    END AS PPT_bucket,
-    CASE
-        WHEN REVENUE < 5 THEN 'A.<$5'
-        WHEN REVENUE >= 5 AND REVENUE < 10 THEN 'B.$5-$10'
-        WHEN REVENUE >= 10 AND REVENUE < 15 THEN 'C.$10-$15'
-        WHEN REVENUE >= 15 AND REVENUE < 20 THEN 'D.$15-$20'
-        WHEN REVENUE >= 20 AND REVENUE < 40 THEN 'E.$20-$40'
-        WHEN REVENUE >= 40 AND REVENUE < 80 THEN 'F.$40-$80'
-        WHEN REVENUE >= 80 THEN 'G.$80+'
-        ELSE 'Unknown'
-    END AS RPT_bucket
+    END AS PPT_BUCKET,
+    
+    COUNT(DISTINCT SNDCUSTOMER_KEY) AS DISTINCT_CUSTOMERS,
+    COUNT(DISTINCT TXN_ID) AS TOTAL_TXNS,
+    
+    -- Principal
+    SUM(SNDPRINCIPAL_USD) AS TOTAL_PRINCIPAL,
+    AVG(SNDPRINCIPAL_USD) AS AVG_PRINCIPAL,
+    
+    -- Revenue
+    SUM(REVENUE) AS TOTAL_REVENUE,
+    AVG(REVENUE) AS AVG_REVENUE,
+    
+    -- Fee
+    SUM(FEE) AS TOTAL_FEE,
+    AVG(FEE) AS AVG_FEE,
+    
+    -- FX Margin
+    SUM(FX_MARGIN) AS TOTAL_FX_MARGIN,
+    AVG(FX_MARGIN) AS AVG_FX_MARGIN,
+    
+    -- Percentages
+    AVG(REVENUE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_REVENUE_PCT,
+    AVG(FEE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FEE_PCT,
+    AVG(FX_MARGIN / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FX_PCT
+
 FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
-    -- LEFT JOIN wudna.summary_gen.wudna_customer_master_vw cm
-    --     ON txn.sndcustomer_key = cm.customer_key
 WHERE SNDCOUNTRY_CODE = 'US'
     AND DATE(rcvpaying_datetime) >= '2025-02-01'
     AND DATE(rcvpaying_datetime) < '2026-02-01'
-    AND sndcustomer_key IS NOT NULL;
+    AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
+    AND SNDCUSTOMER_KEY IS NOT NULL
+GROUP BY PAYOUT_TYPE, PPT_BUCKET
+ORDER BY PPT_BUCKET, PAYOUT_TYPE;
 
-select * from CAM_1746_Cust_Base limit 100;
-select RPT_BUCKET, count(*) from CAM_1746_Cust_Base group by 1;
-select Count(distinct sndcustomer_key), count(sndcustomer_key) from CAM_1746_Cust_Base;--12,575,051	111,275,563
-select distinct age from wudna.summary_gen.wudna_customer_master_vw;
+-- Verification Query
+SELECT * FROM CAM_1746_CASH_VS_APN_BY_PPT_BUCKET
+ORDER BY PPT_BUCKET, PAYOUT_TYPE;
+
+
 -- ============================================================================
--- STEP 2: ADD MARKETABILITY FLAGS (WITH APP_TXNS CTE)
+-- STEP 3: CASH VS APN BY CHANNEL
 -- ============================================================================
-CREATE OR REPLACE TABLE CAM_1746_APN_MARKETABILITY_FLAG AS
-WITH APN_Flag AS (
-    -- Calculate APN transaction count per customer
-    SELECT
-        SNDCUSTOMER_KEY,
-        COUNT(CASE WHEN Payout_type = 'ACCOUNT' THEN TXN_ID END) AS APN_TXNS
-    FROM CAM_1746_Cust_Base 
-    GROUP BY SNDCUSTOMER_KEY 
-    ),
-app_txn_counts AS (
-    -- Calculate APP transaction count per customer
-    SELECT
-        SNDCUSTOMER_KEY,
-        COUNT(CASE WHEN PRICING_CHANNEL = 'APP' THEN TXN_ID END) AS APP_TXNS
-    FROM CAM_1746_Cust_Base 
-    GROUP BY SNDCUSTOMER_KEY
-),
-base_with_flags AS (
-    SELECT
-        b.sndcustomer_key,
-        b.mth_yr,
-        b.txn_dt,
-    CASE
-    WHEN cm.age ILIKE 'less than 18' THEN '<18'
-    WHEN cm.age ILIKE 'age 18 - age 20'
-      OR cm.age ILIKE 'age 21 - age 25' THEN '18-25'
-    WHEN cm.age ILIKE 'age 26 - age 30'
-      OR cm.age ILIKE 'age 31 - age 35'
-      OR cm.age ILIKE 'age 36 - age 40' THEN '26-40'
-    WHEN cm.age ILIKE 'age 41 - age 45'
-      OR cm.age ILIKE 'age 46 - age 50'
-      OR cm.age ILIKE 'age 51 - age 55'
-      OR cm.age ILIKE 'age 56 - age 60' THEN '41-60'
-    WHEN cm.age ILIKE 'age 61 - age 65'
-      OR cm.age ILIKE '65 above' THEN '60+'
-    WHEN cm.age IS NULL OR TRIM(cm.age) IN ('', '(blank)') THEN 'Unknown'
-    ELSE 'Unknown'
-    END AS AGE_GROUP,
-        b.TXN_ID,
-        apn.APN_TXNS,
-        b.sndcountry_code,
-        b.rcvcountry_code,
-        b.PAYOUT_TYPE,
-        b.SUB_PAYIN_TYPE,
-        b.REVENUE,
-        b.SNDPRINCIPAL_USD,
-        b.DIRECTION,
-        b.channel_group,
-        b.PPT_bucket,
-        b.RPT_bucket,
-        app.APP_TXNS,
-        -- CASE
-        --     WHEN COUNT(CASE WHEN b.PAYOUT_TYPE = 'ACCOUNT' THEN 1 END)
-        --          OVER (PARTITION BY b.SNDCUSTOMER_KEY) >= 1
-        --     THEN 1
-        --     ELSE 0
-        -- END AS APN_CUSTOMER_FLAG,
-        -- Marketability Flags
-        CASE
-            WHEN cm.marketing_flag = 'Y' AND cm.email_address_on_file_flag = 'Y' AND cm.opt_email = 'I' THEN 'Y'
-            ELSE 'N'
-        END AS email_marketability_flag,
-        CASE
-            WHEN cm.marketing_flag = 'Y' AND cm.mobile_number_on_file_flag = 'Y' AND cm.opt_sms = 'I' THEN 'Y'
-            ELSE 'N'
-        END AS sms_marketability_flag
-    FROM CAM_1746_Cust_Base b
-    JOIN APN_Flag apn
-        ON b.sndcustomer_key = apn.sndcustomer_key
-    LEFT JOIN app_txn_counts app
-        ON b.SNDCUSTOMER_KEY = app.SNDCUSTOMER_KEY
-    LEFT JOIN SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
-        ON b.SNDCUSTOMER_KEY = cm.customer_key
-)
-SELECT
-    *,
-    CASE WHEN APP_TXNS > 0 THEN 'Y' ELSE 'N' END AS App_Marketability_Flag,
-    CASE
-        WHEN email_marketability_flag = 'Y' OR sms_marketability_flag = 'Y' OR APP_TXNS > 0
-        THEN 'Y'
-        ELSE 'N'
-    END AS MARKETABILITY_FLAG
-FROM base_with_flags
-where APN_TXNS >= 1
-;
-
-select * from CAM_1746_APN_MARKETABILITY_FLAG --limit 100;
-where sndcustomer_key = '1000000000055250969';
-select * from CAM_1746_APN_MARKETABILITY_FLAG
-where payout_type = 'CASH';
-select age_group, count(*) from CAM_1746_APN_MARKETABILITY_FLAG group by 1;
-select sndcustomer_key from CAM_1746_APN_MARKETABILITY_FLAG where age_group = 'Unknown';
-select age from SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW where  customer_key = '1000000000166964178';
-
-select Count(distinct sndcustomer_key), count(sndcustomer_key) from CAM_1746_MARKETABILITY_FLAG;--12,575,051 111,275,563
-
-select Count(distinct sndcustomer_key), count(sndcustomer_key) from CAM_1746_APN_MARKETABILITY_FLAG;--3,723,729	51,531,238
-
--- CREATE OR REPLACE TABLE CAM_1746_CUSTOMERS_WITH_ATLEAST1_APN AS
--- SELECT
---     SNDCUSTOMER_KEY,
---     TXN_ID,
---     mth_yr,
---     txn_dt,
---     sndcountry_code,
---     rcvcountry_code,
---     channel_group,
---     PAYOUT_TYPE,
---     SUB_PAYIN_TYPE,
---     age,
---     REVENUE,
---     SNDPRINCIPAL_USD,
---     -- DIRECTION,
---     APN_CUSTOMER_FLAG,
---     MARKETABILITY_FLAG,
---     PPT_bucket,
---     RPT_BUCKET
--- FROM CAM_1746_MARKETABILITY_FLAG
--- WHERE APN_CUSTOMER_FLAG = 1;
-
-select * from CAM_1746_CUSTOMERS_WITH_ATLEAST1_APN limit 10;
-where sndcustomer_key = '1000000000055250969';
-
-select Count(distinct sndcustomer_key), count(sndcustomer_key) from CAM_1746_CUSTOMERS_WITH_ATLEAST1_APN;--3,723,729	51,531,238
-
-CREATE OR REPLACE TABLE CAM1746_DOMINANT_CORRIDOR AS
-SELECT *
-FROM (
-    SELECT
-        SNDCUSTOMER_KEY,
-        CONCAT(sndcountry_code, '-', rcvcountry_code) AS corridor,
-        sndcountry_code,
-        rcvcountry_code,
-        CASE WHEN Sndcountry_code = rcvcountry_code THEN 'DOMESTIC' ELSE 'CROSS BORDER' END AS DIRECTION,
-        COUNT(DISTINCT TXN_ID) AS txn_count,
-        SUM(SNDPRINCIPAL_USD) AS total_principal_usd,
-        ROW_NUMBER() OVER (
-            PARTITION BY SNDCUSTOMER_KEY
-            ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
-        ) AS rnk
-    FROM CAM_1746_APN_MARKETABILITY_FLAG
-    GROUP BY ALL
-)
-WHERE rnk = 1;
-
-select * from CAM1746_DOMINANT_CORRIDOR where sndcustomer_key = '3000000000333770599';
-
-select Count(distinct sndcustomer_key), count(sndcustomer_key) from CAM1746_DOMINANT_CORRIDOR;--3,723,729	3,723,729
-
-CREATE OR REPLACE TABLE CAM_1746_DOMINANT_PAYOUT AS
-SELECT *
-FROM (
-    SELECT
-        SNDCUSTOMER_KEY,
-        PAYOUT_TYPE,
-        --COUNT(DISTINCT TXN_ID) AS txn_count,
-        --SUM(SNDPRINCIPAL_USD) AS total_principal_usd,
-        ROW_NUMBER() OVER (
-            PARTITION BY SNDCUSTOMER_KEY
-            ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
-        ) AS rnk
-    FROM CAM_1746_APN_MARKETABILITY_FLAG
-    GROUP BY SNDCUSTOMER_KEY, PAYOUT_TYPE
-)
-WHERE rnk = 1;
-
-select Count(distinct sndcustomer_key), count(sndcustomer_key) from 
-CAM_1746_DOMINANT_PAYOUT;--3,723,729	3,723,729
-
-
-CREATE OR REPLACE TABLE CAM_1746_DOMINANT_PPT_BUCKET AS
-SELECT *
-FROM (
-    SELECT
-        SNDCUSTOMER_KEY,
-        PPT_bucket,
-        COUNT(DISTINCT TXN_ID) AS txn_count,
-        SUM(SNDPRINCIPAL_USD) AS total_principal_usd,
-        ROW_NUMBER() OVER (
-            PARTITION BY SNDCUSTOMER_KEY
-            ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
-        ) AS rnk
-    FROM CAM_1746_APN_MARKETABILITY_FLAG
-    GROUP BY SNDCUSTOMER_KEY, PPT_bucket
-)
-WHERE rnk = 1;
-
-select Count(distinct sndcustomer_key), count(sndcustomer_key) from 
-CAM_1746_DOMINANT_PPT_BUCKET;--3,723,729	3,723,729
-
-
-
-CREATE OR REPLACE TABLE CAM_1746_DOMINANT_FUNDS_IN AS
-SELECT *
-FROM (
-    SELECT
-        SNDCUSTOMER_KEY,
-        SUB_PAYIN_TYPE AS DOMINANT_FUNDS_IN,
-        COUNT(DISTINCT TXN_ID) AS txn_count,
-        SUM(SNDPRINCIPAL_USD) AS total_principal_usd,
-        ROW_NUMBER() OVER (
-            PARTITION BY SNDCUSTOMER_KEY
-            ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
-        ) AS rnk
-    FROM CAM_1746_APN_MARKETABILITY_FLAG
-    GROUP BY SNDCUSTOMER_KEY, SUB_PAYIN_TYPE
-)
-WHERE rnk = 1;
-
-select Count(distinct sndcustomer_key), count(sndcustomer_key) from 
-CAM_1746_DOMINANT_FUNDS_IN;--3,723,729	3,723,729
-
-CREATE OR REPLACE TABLE CAM_1746_DOMINANT_CHANNEL AS
-SELECT *
-FROM (
-    SELECT
-        SNDCUSTOMER_KEY,
-        channel_group AS DOMINANT_CHANNEL,
-        COUNT(DISTINCT TXN_ID) AS txn_count,
-        SUM(SNDPRINCIPAL_USD) AS total_principal_usd,
-        ROW_NUMBER() OVER (
-            PARTITION BY SNDCUSTOMER_KEY
-            ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
-        ) AS rnk
-    FROM CAM_1746_APN_MARKETABILITY_FLAG
-    GROUP BY SNDCUSTOMER_KEY, channel_group
-)
-WHERE rnk = 1;
-
-select Count(distinct sndcustomer_key), count(sndcustomer_key) from 
-CAM_1746_DOMINANT_CHANNEL;--3,723,729	3,723,729
-
-CREATE OR REPLACE TABLE CAM_1746_DOMINANT_RPT_BUCKET AS
-SELECT *
-FROM (
-    SELECT
-        SNDCUSTOMER_KEY,
-        RPT_bucket,
-        COUNT(DISTINCT TXN_ID) AS txn_count,
-        SUM(REVENUE) AS total_revenue,
-        ROW_NUMBER() OVER (
-            PARTITION BY SNDCUSTOMER_KEY
-            ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
-        ) AS rnk
-    FROM CAM_1746_APN_MARKETABILITY_FLAG
-    GROUP BY SNDCUSTOMER_KEY, RPT_bucket
-)
-WHERE rnk = 1;
-
- select Count(distinct sndcustomer_key), count(sndcustomer_key) from 
-CAM_1746_DOMINANT_RPT_BUCKET;--3,723,729	3,723,729
-
--- CREATE OR REPLACE TABLE CAM_1746_DOMINANT_DIRECTION_BUCKET AS
--- SELECT *
--- FROM (
---     SELECT
---         SNDCUSTOMER_KEY,
---         DIRECTION,
---         COUNT(DISTINCT TXN_ID) AS txn_count,
---         SUM(REVENUE) AS total_revenue,
---         ROW_NUMBER() OVER (
---             PARTITION BY SNDCUSTOMER_KEY
---             ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
---         ) AS rnk
---     FROM CAM_1746_APN_MARKETABILITY_FLAG
---     GROUP BY SNDCUSTOMER_KEY, DIRECTION
--- )
--- WHERE rnk = 1;
-
- select Count(distinct sndcustomer_key), count(sndcustomer_key) from 
-CAM_1746_DOMINANT_DIRECTION_BUCKET;--3,723,729	3,723,729
-
-CREATE OR REPLACE TABLE CAM_1746_CUSTOMER_LEVEL_METRICS AS
-SELECT
-    SNDCUSTOMER_KEY,
-    mth_yr,
-    COUNT(DISTINCT TXN_ID) AS TOTAL_TXN_COUNT,
-    SUM(SNDPRINCIPAL_USD) AS TOTAL_PRINCIPAL,
-    SUM(REVENUE) AS TOTAL_REVENUE,
-    
-    -- TPC Bucket
-    CASE
-        WHEN COUNT(DISTINCT TXN_ID) = 1 THEN 'A.1x'
-        WHEN COUNT(DISTINCT TXN_ID) = 2 THEN 'B.2x'
-        WHEN COUNT(DISTINCT TXN_ID) = 3 THEN 'C.3x'
-        WHEN COUNT(DISTINCT TXN_ID) >= 4 THEN 'D.4x+'
-        ELSE 'E.Unknown'
-    END AS TPC_BUCKET,
-    
-    -- PPC Bucket
-    CASE
-        WHEN SUM(SNDPRINCIPAL_USD) < 100 THEN 'A.<$100'
-        WHEN SUM(SNDPRINCIPAL_USD) >= 100 AND SUM(SNDPRINCIPAL_USD) < 500 THEN 'B.$100-$500'
-        WHEN SUM(SNDPRINCIPAL_USD) >= 500 AND SUM(SNDPRINCIPAL_USD) < 1000 THEN 'C.$500-$1,000'
-        WHEN SUM(SNDPRINCIPAL_USD) >= 1000 AND SUM(SNDPRINCIPAL_USD) < 2000 THEN 'D.$1,000-$2,000'
-        WHEN SUM(SNDPRINCIPAL_USD) >= 2000 AND SUM(SNDPRINCIPAL_USD) < 5000 THEN 'E.$2,000-$5,000'
-        WHEN SUM(SNDPRINCIPAL_USD) >= 5000 AND SUM(SNDPRINCIPAL_USD) < 10000 THEN 'F.$5,000-$10,000'
-        WHEN SUM(SNDPRINCIPAL_USD) >= 10000 THEN 'G.$10,000+'
-        ELSE 'Unknown'
-    END AS PPC_BUCKET,
-
-    CASE
-    WHEN SUM(REVENUE) < 20 THEN 'A.<$20'
-    WHEN SUM(REVENUE) >= 20 AND SUM(REVENUE) < 50 THEN 'B.$20-$50'
-    WHEN SUM(REVENUE) >= 50 AND SUM(REVENUE) < 80 THEN 'C.$50-$80'
-    WHEN SUM(REVENUE) >= 80 AND SUM(REVENUE) < 110 THEN 'D.$80-$110'
-    WHEN SUM(REVENUE) >= 110 THEN 'E.$110+'
-    ELSE 'Unknown'
-END AS RPC_BUCKET
-
-
-FROM CAM_1746_APN_MARKETABILITY_FLAG
-GROUP BY SNDCUSTOMER_KEY, mth_yr;
-
-select RPC_BUCKET, COUNT(*) FROM CAM_1746_CUSTOMER_LEVEL_METRICS GROUP BY 1;
-select sndcustomer_key, count(*)
-from CAM_1746_CUSTOMER_LEVEL_METRICS
-group by 1
-having count(*) > 1;
-
-select * from CAM_1746_CUSTOMER_LEVEL_METRICS
-where sndcustomer_key = '4000000000302511818';
-
-  select Count(distinct sndcustomer_key), count(sndcustomer_key) from 
-CAM_1746_CUSTOMER_LEVEL_METRICS;--3,723,729	3,723,729
-
---JOIN RFM PERSONA
-
-CREATE OR REPLACE TABLE CAM_1746_WITH_RFM AS
-SELECT
-    m.*,
-    rfm.RFM_Persona
-FROM CAM_1746_CUSTOMER_LEVEL_METRICS m
-LEFT JOIN WUDNA.CEX_SANDBOX.SK_CONSOLIDATED_PROPENSITY_SCORES rfm
-    ON m.SNDCUSTOMER_KEY = rfm.sndcustomer_key
-    AND m.mth_yr = rfm.MTH_YR
-WHERE rfm.MTH_YR = '2026-01-01';
-
- select Count(distinct sndcustomer_key), count(sndcustomer_key) from 
-CAM_1746_WITH_RFM;--3,722,156	3,722,156
-
--- JOIN LOYALTY STATUS AND NEW/EXISTING FLAG
-
-CREATE OR REPLACE TABLE CAM_1746_WITH_LOYALTY AS
-SELECT
-    r.*,
-    kpi.MYWU_STATUS AS LOYALTY_STATUS,
-    kpi.NEW_EXISTING_FLAG
-FROM CAM_1746_WITH_RFM r
-LEFT JOIN WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL kpi
-    ON r.SNDCUSTOMER_KEY = kpi.sndcustomer_key
-    AND r.mth_yr = kpi.MTH_YR
-WHERE kpi.MTH_YR = '2026-01-01';
-
- select Count(distinct sndcustomer_key), count(sndcustomer_key) from 
-CAM_1746_WITH_LOYALTY;--3,722,156	3,722,156
-
--- CREATE FINAL PROFILING TABLE
-CREATE OR REPLACE TABLE CAM_1746_FINAL_APN_PROFILING AS
-SELECT
-    DISTINCT
-    l.SNDCUSTOMER_KEY,
-    -- l.MTH_YR,
-    -- Customer Attributes
-    cust.AGE_GROUP,
-    l.LOYALTY_STATUS,
-    l.NEW_EXISTING_FLAG,
-    cust.MARKETABILITY_FLAG,
-    l.RFM_Persona,
-    
-    -- Dominant Attributes
-    corr.corridor AS DOMINANT_CORRIDOR,
-    payout.PAYOUT_TYPE AS DOMINANT_PAYOUT_TYPE,
-    funds.DOMINANT_FUNDS_IN,
-    chan.DOMINANT_CHANNEL,
-    corr.DIRECTION,
-    
-    -- Customer-Level Metrics
-    l.TOTAL_TXN_COUNT,
-    l.TOTAL_PRINCIPAL,
-    l.TOTAL_REVENUE,
-
-    
-    -- Buckets
-    l.TPC_BUCKET,
-    l.PPC_BUCKET,
-    l.RPC_BUCKET,
-    ppt_dom.PPT_bucket AS DOMINANT_PPT_BUCKET,
-    rpt_dom.RPT_bucket AS DOMINANT_RPT_BUCKET
- 
-FROM CAM_1746_WITH_LOYALTY l
-LEFT JOIN CAM1746_DOMINANT_CORRIDOR corr
-    ON l.SNDCUSTOMER_KEY = corr.SNDCUSTOMER_KEY
-LEFT JOIN CAM_1746_DOMINANT_PAYOUT payout
-    ON l.SNDCUSTOMER_KEY = payout.SNDCUSTOMER_KEY
-LEFT JOIN CAM_1746_DOMINANT_FUNDS_IN funds
-    ON l.SNDCUSTOMER_KEY = funds.SNDCUSTOMER_KEY
-LEFT JOIN CAM_1746_DOMINANT_CHANNEL chan
-    ON l.SNDCUSTOMER_KEY = chan.SNDCUSTOMER_KEY
-LEFT JOIN CAM_1746_DOMINANT_PPT_BUCKET ppt_dom
-    ON l.SNDCUSTOMER_KEY = ppt_dom.SNDCUSTOMER_KEY
-LEFT JOIN CAM_1746_DOMINANT_RPT_BUCKET rpt_dom
-    ON l.SNDCUSTOMER_KEY = rpt_dom.SNDCUSTOMER_KEY
--- LEFT JOIN CAM_1746_DOMINANT_DIRECTION_BUCKET dir_dom
---     ON l.SNDCUSTOMER_KEY = dir_dom.SNDCUSTOMER_KEY
-LEFT JOIN (
-    SELECT DISTINCT SNDCUSTOMER_KEY, age_group, MARKETABILITY_FLAG
-    FROM CAM_1746_APN_MARKETABILITY_FLAG
-) cust
-    ON l.SNDCUSTOMER_KEY = cust.SNDCUSTOMER_KEY;
-
- select Count(distinct sndcustomer_key), count(sndcustomer_key) from 
-CAM_1746_FINAL_APN_PROFILING;--3,722,156	3,722,156
-select distinct direction, count(distinct sndcustomer_key) from CAM_1746_FINAL_APN_PROFILING group by 1;
-
-select * from CAM_1746_FINAL_APN_PROFILING limit 100;
---@3000000000338709899
-select * from CAM_1746_FINAL_APN_PROFILING
-where sndcustomer_key = '1000000000055250969';
-
-select sndcustomer_key, count(*)
-from CAM_1746_FINAL_APN_PROFILING
-group by 1
-having count(*) > 1;
-
-select * from WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
-where sndcustomer_key = '1000000000055250969';
-
- select * from SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW
- where customer_key = '1000000000055250969';
-
- select * from WUDNA.CEX_SANDBOX.YN_VA_KPI_2020_OUTPUT_ENGAGEMENT_CUST_LEVEL
- where sndcustomer_key = '1000000000055250969'
- AND MTH_YR = '2026-01-01';
-
- select * from WUDNA.CEX_SANDBOX.SK_CONSOLIDATED_PROPENSITY_SCORES
- where sndcustomer_key = '1000000000055250969'
- AND MTH_YR = '2026-01-01';
+-- Purpose: Compare pricing by channel (Digital vs Retail)
 -- ============================================================================
--- STEP 14: CREATE AGGREGATED COUNTS
--- ============================================================================
-CREATE OR REPLACE TABLE CAM_1746_APN_COUNTS AS
+
+CREATE OR REPLACE TABLE CAM_1746_CASH_VS_APN_BY_CHANNEL AS
 SELECT
-    -- MTH_YR,
-    LOYALTY_STATUS,
-    NEW_EXISTING_FLAG,
-    MARKETABILITY_FLAG,
-    RFM_Persona,
-    DOMINANT_CHANNEL,
-    DIRECTION as DOMINANT_DIRECTION,
-    DOMINANT_CORRIDOR,
-    DOMINANT_PAYOUT_TYPE,
-    DOMINANT_FUNDS_IN,
-    AGE_GROUP,
-    TPC_BUCKET,
-    PPC_BUCKET,
-    RPC_BUCKET,
-    DOMINANT_PPT_BUCKET,
-    DOMINANT_RPT_BUCKET,
+    PAYOUT_TYPE,
+    CASE
+        WHEN PRICING_CHANNEL IN ('WEB', 'APP') THEN 'DIGITAL'
+        WHEN PRICING_CHANNEL IN ('POS', 'TMT', 'AIR') THEN 'RETAIL'
+        ELSE 'OTHER'
+    END AS CHANNEL_GROUP,
+    
     COUNT(DISTINCT SNDCUSTOMER_KEY) AS DISTINCT_CUSTOMERS,
-    SUM(TOTAL_TXN_COUNT) AS TOTAL_TXNS,
-    SUM(TOTAL_PRINCIPAL) AS TOTAL_PRINCIPAL,
-    SUM(TOTAL_REVENUE) AS TOTAL_REVENUE,
-FROM CAM_1746_FINAL_APN_PROFILING
-GROUP BY ALL
-ORDER BY DOMINANT_CHANNEL, RFM_Persona;
- 
-SELECT * FROM CAM_1746_APN_COUNTS;
-SELECT DOMINANT_DIRECTION ,SUM(DISTINCT_CUSTOMERS) FROM CAM_1746_APN_COUNTS group by 1;
+    COUNT(DISTINCT TXN_ID) AS TOTAL_TXNS,
+    
+    -- Principal
+    AVG(SNDPRINCIPAL_USD) AS AVG_PRINCIPAL,
+    MEDIAN(SNDPRINCIPAL_USD) AS MEDIAN_PRINCIPAL,
+    
+    -- Revenue
+    AVG(REVENUE) AS AVG_REVENUE,
+    MEDIAN(REVENUE) AS MEDIAN_REVENUE,
+    
+    -- Fee
+    AVG(FEE) AS AVG_FEE,
+    MEDIAN(FEE) AS MEDIAN_FEE,
+    
+    -- FX Margin
+    AVG(FX_MARGIN) AS AVG_FX_MARGIN,
+    MEDIAN(FX_MARGIN) AS MEDIAN_FX_MARGIN,
+    
+    -- Percentages
+    AVG(REVENUE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_REVENUE_PCT,
+    AVG(FEE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FEE_PCT,
+    AVG(FX_MARGIN / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FX_PCT
+
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+WHERE SNDCOUNTRY_CODE = 'US'
+    AND DATE(rcvpaying_datetime) >= '2025-02-01'
+    AND DATE(rcvpaying_datetime) < '2026-02-01'
+    AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
+    AND SNDCUSTOMER_KEY IS NOT NULL
+GROUP BY PAYOUT_TYPE, CHANNEL_GROUP
+ORDER BY CHANNEL_GROUP, PAYOUT_TYPE;
+
+-- Verification Query
+SELECT * FROM CAM_1746_CASH_VS_APN_BY_CHANNEL
+ORDER BY CHANNEL_GROUP, PAYOUT_TYPE;
+
+
+-- ============================================================================
+-- STEP 4: CASH VS APN BY CORRIDOR TYPE (IMT vs DMT)
+-- ============================================================================
+-- Purpose: Compare pricing for International vs Domestic transactions
+-- ============================================================================
+
+CREATE OR REPLACE TABLE CAM_1746_CASH_VS_APN_BY_CORRIDOR_TYPE AS
+SELECT
+    PAYOUT_TYPE,
+    CASE 
+        WHEN SNDCOUNTRY_CODE = RCVCOUNTRY_CODE THEN 'DOMESTIC' 
+        ELSE 'CROSS BORDER' 
+    END AS DIRECTION,
+    
+    COUNT(DISTINCT SNDCUSTOMER_KEY) AS DISTINCT_CUSTOMERS,
+    COUNT(DISTINCT TXN_ID) AS TOTAL_TXNS,
+    
+    -- Principal
+    AVG(SNDPRINCIPAL_USD) AS AVG_PRINCIPAL,
+    MEDIAN(SNDPRINCIPAL_USD) AS MEDIAN_PRINCIPAL,
+    
+    -- Revenue
+    AVG(REVENUE) AS AVG_REVENUE,
+    MEDIAN(REVENUE) AS MEDIAN_REVENUE,
+    
+    -- Fee
+    AVG(FEE) AS AVG_FEE,
+    MEDIAN(FEE) AS MEDIAN_FEE,
+    
+    -- FX Margin
+    AVG(FX_MARGIN) AS AVG_FX_MARGIN,
+    MEDIAN(FX_MARGIN) AS MEDIAN_FX_MARGIN,
+    
+    -- Percentages
+    AVG(REVENUE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_REVENUE_PCT,
+    AVG(FEE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FEE_PCT,
+    AVG(FX_MARGIN / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FX_PCT
+
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+WHERE SNDCOUNTRY_CODE = 'US'
+    AND DATE(rcvpaying_datetime) >= '2025-02-01'
+    AND DATE(rcvpaying_datetime) < '2026-02-01'
+    AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
+    AND SNDCUSTOMER_KEY IS NOT NULL
+GROUP BY PAYOUT_TYPE, DIRECTION
+ORDER BY DIRECTION, PAYOUT_TYPE;
+
+-- Verification Query
+SELECT * FROM CAM_1746_CASH_VS_APN_BY_CORRIDOR_TYPE
+ORDER BY DIRECTION, PAYOUT_TYPE;
+
+
+-- ============================================================================
+-- STEP 5: DETAILED REVENUE COMPOSITION BREAKDOWN
+-- ============================================================================
+-- Purpose: Understand the composition of revenue (Fee vs FX)
+-- ============================================================================
+
+CREATE OR REPLACE TABLE CAM_1746_REVENUE_COMPOSITION AS
+SELECT
+    PAYOUT_TYPE,
+    
+    -- Transaction Counts
+    COUNT(DISTINCT TXN_ID) AS TOTAL_TXNS,
+    
+    -- Revenue Components
+    SUM(REVENUE) AS TOTAL_REVENUE,
+    SUM(FEE) AS TOTAL_FEE,
+    SUM(FX_MARGIN) AS TOTAL_FX_MARGIN,
+    
+    -- Averages
+    AVG(REVENUE) AS AVG_REVENUE,
+    AVG(FEE) AS AVG_FEE,
+    AVG(FX_MARGIN) AS AVG_FX_MARGIN,
+    
+    -- Revenue Composition (what % comes from Fee vs FX)
+    SUM(FEE) / NULLIF(SUM(REVENUE), 0) * 100 AS FEE_PCT_OF_REVENUE,
+    SUM(FX_MARGIN) / NULLIF(SUM(REVENUE), 0) * 100 AS FX_PCT_OF_REVENUE,
+    
+    -- As % of Principal
+    AVG(FEE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FEE_AS_PCT_PRINCIPAL,
+    AVG(FX_MARGIN / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FX_AS_PCT_PRINCIPAL,
+    AVG(REVENUE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_REVENUE_AS_PCT_PRINCIPAL
+
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+WHERE SNDCOUNTRY_CODE = 'US'
+    AND DATE(rcvpaying_datetime) >= '2025-02-01'
+    AND DATE(rcvpaying_datetime) < '2026-02-01'
+    AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
+    AND SNDCUSTOMER_KEY IS NOT NULL
+GROUP BY PAYOUT_TYPE;
+
+-- Verification Query
+SELECT * FROM CAM_1746_REVENUE_COMPOSITION
+ORDER BY PAYOUT_TYPE;
+
+
+-- ============================================================================
+-- STEP 6: COMBINED DIMENSIONAL ANALYSIS (CHANNEL + PPT BUCKET)
+-- ============================================================================
+-- Purpose: Deep dive into pricing across multiple dimensions
+-- ============================================================================
+
+CREATE OR REPLACE TABLE CAM_1746_CASH_VS_APN_DETAILED AS
+SELECT
+    PAYOUT_TYPE,
+    CASE
+        WHEN PRICING_CHANNEL IN ('WEB', 'APP') THEN 'DIGITAL'
+        WHEN PRICING_CHANNEL IN ('POS', 'TMT', 'AIR') THEN 'RETAIL'
+        ELSE 'OTHER'
+    END AS CHANNEL_GROUP,
+    CASE
+        WHEN SNDPRINCIPAL_USD < 100 THEN 'A.<$100'
+        WHEN SNDPRINCIPAL_USD >= 100 AND SNDPRINCIPAL_USD < 500 THEN 'B.$100-$500'
+        WHEN SNDPRINCIPAL_USD >= 500 AND SNDPRINCIPAL_USD < 1000 THEN 'C.$500-$1,000'
+        WHEN SNDPRINCIPAL_USD >= 1000 AND SNDPRINCIPAL_USD < 2000 THEN 'D.$1,000-$2,000'
+        WHEN SNDPRINCIPAL_USD >= 2000 AND SNDPRINCIPAL_USD < 5000 THEN 'E.$2,000-$5,000'
+        WHEN SNDPRINCIPAL_USD >= 5000 THEN 'F.$5,000+'
+        ELSE 'Unknown'
+    END AS PPT_BUCKET,
+    
+    COUNT(DISTINCT TXN_ID) AS TOTAL_TXNS,
+    
+    AVG(SNDPRINCIPAL_USD) AS AVG_PRINCIPAL,
+    AVG(REVENUE) AS AVG_REVENUE,
+    AVG(FEE) AS AVG_FEE,
+    AVG(FX_MARGIN) AS AVG_FX_MARGIN,
+    
+    AVG(REVENUE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_REVENUE_PCT,
+    AVG(FEE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FEE_PCT
+
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+WHERE SNDCOUNTRY_CODE = 'US'
+    AND DATE(rcvpaying_datetime) >= '2025-02-01'
+    AND DATE(rcvpaying_datetime) < '2026-02-01'
+    AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
+    AND SNDCUSTOMER_KEY IS NOT NULL
+GROUP BY PAYOUT_TYPE, CHANNEL_GROUP, PPT_BUCKET
+ORDER BY CHANNEL_GROUP, PPT_BUCKET, PAYOUT_TYPE;
+
+-- Verification Query
+SELECT * FROM CAM_1746_CASH_VS_APN_DETAILED
+WHERE CHANNEL_GROUP = 'DIGITAL'
+ORDER BY PPT_BUCKET, PAYOUT_TYPE;
+
+
+-- ============================================================================
+-- STEP 7: MONTH-OVER-MONTH TREND ANALYSIS
+-- ============================================================================
+-- Purpose: See if pricing differences are consistent over time
+-- ============================================================================
+
+CREATE OR REPLACE TABLE CAM_1746_CASH_VS_APN_MONTHLY_TREND AS
+SELECT
+    DATE_TRUNC('MONTH', rcvpaying_datetime) AS MTH_YR,
+    PAYOUT_TYPE,
+    
+    COUNT(DISTINCT SNDCUSTOMER_KEY) AS DISTINCT_CUSTOMERS,
+    COUNT(DISTINCT TXN_ID) AS TOTAL_TXNS,
+    
+    AVG(SNDPRINCIPAL_USD) AS AVG_PRINCIPAL,
+    AVG(REVENUE) AS AVG_REVENUE,
+    AVG(FEE) AS AVG_FEE,
+    AVG(FX_MARGIN) AS AVG_FX_MARGIN,
+    
+    AVG(REVENUE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_REVENUE_PCT,
+    AVG(FEE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FEE_PCT
+
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+WHERE SNDCOUNTRY_CODE = 'US'
+    AND DATE(rcvpaying_datetime) >= '2025-02-01'
+    AND DATE(rcvpaying_datetime) < '2026-02-01'
+    AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
+    AND SNDCUSTOMER_KEY IS NOT NULL
+GROUP BY MTH_YR, PAYOUT_TYPE
+ORDER BY MTH_YR, PAYOUT_TYPE;
+
+-- Verification Query
+SELECT * FROM CAM_1746_CASH_VS_APN_MONTHLY_TREND
+ORDER BY MTH_YR, PAYOUT_TYPE;
+
+
+-- ============================================================================
+-- STEP 8: TOP CORRIDORS COMPARISON
+-- ============================================================================
+-- Purpose: Compare pricing for the top 10 corridors
+-- ============================================================================
+
+CREATE OR REPLACE TABLE CAM_1746_CASH_VS_APN_TOP_CORRIDORS AS
+WITH top_corridors AS (
+    SELECT 
+        CONCAT(SNDCOUNTRY_CODE, '-', RCVCOUNTRY_CODE) AS CORRIDOR,
+        COUNT(DISTINCT TXN_ID) AS txn_count
+    FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+    WHERE SNDCOUNTRY_CODE = 'US'
+        AND DATE(rcvpaying_datetime) >= '2025-02-01'
+        AND DATE(rcvpaying_datetime) < '2026-02-01'
+        AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
+    GROUP BY CORRIDOR
+    ORDER BY txn_count DESC
+    LIMIT 10
+)
+SELECT
+    txn.PAYOUT_TYPE,
+    CONCAT(txn.SNDCOUNTRY_CODE, '-', txn.RCVCOUNTRY_CODE) AS CORRIDOR,
+    
+    COUNT(DISTINCT txn.TXN_ID) AS TOTAL_TXNS,
+    
+    AVG(txn.SNDPRINCIPAL_USD) AS AVG_PRINCIPAL,
+    AVG(txn.REVENUE) AS AVG_REVENUE,
+    AVG(txn.FEE) AS AVG_FEE,
+    AVG(txn.FX_MARGIN) AS AVG_FX_MARGIN,
+    
+    AVG(txn.REVENUE / NULLIF(txn.SNDPRINCIPAL_USD, 0) * 100) AS AVG_REVENUE_PCT,
+    AVG(txn.FEE / NULLIF(txn.SNDPRINCIPAL_USD, 0) * 100) AS AVG_FEE_PCT
+
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW txn
+INNER JOIN top_corridors tc
+    ON CONCAT(txn.SNDCOUNTRY_CODE, '-', txn.RCVCOUNTRY_CODE) = tc.CORRIDOR
+WHERE txn.SNDCOUNTRY_CODE = 'US'
+    AND DATE(txn.rcvpaying_datetime) >= '2025-02-01'
+    AND DATE(txn.rcvpaying_datetime) < '2026-02-01'
+    AND txn.PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
+GROUP BY txn.PAYOUT_TYPE, CORRIDOR
+ORDER BY CORRIDOR, txn.PAYOUT_TYPE;
+
+-- Verification Query
+SELECT * FROM CAM_1746_CASH_VS_APN_TOP_CORRIDORS
+ORDER BY CORRIDOR, PAYOUT_TYPE;
+
+
+-- ============================================================================
+-- STEP 9: SUMMARY COMPARISON VIEW
+-- ============================================================================
+-- Purpose: Side-by-side comparison for easy Excel export
+-- ============================================================================
+
+CREATE OR REPLACE TABLE CAM_1746_CASH_VS_APN_SUMMARY_PIVOT AS
+WITH cash_data AS (
+    SELECT
+        'CASH' AS payout_type,
+        COUNT(DISTINCT SNDCUSTOMER_KEY) AS customers,
+        COUNT(DISTINCT TXN_ID) AS txns,
+        AVG(SNDPRINCIPAL_USD) AS avg_principal,
+        AVG(REVENUE) AS avg_revenue,
+        AVG(FEE) AS avg_fee,
+        AVG(FX_MARGIN) AS avg_fx,
+        AVG(REVENUE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS revenue_pct,
+        AVG(FEE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS fee_pct
+    FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+    WHERE SNDCOUNTRY_CODE = 'US'
+        AND DATE(rcvpaying_datetime) >= '2025-02-01'
+        AND DATE(rcvpaying_datetime) < '2026-02-01'
+        AND PAYOUT_TYPE = 'CASH'
+        AND SNDCUSTOMER_KEY IS NOT NULL
+),
+account_data AS (
+    SELECT
+        'ACCOUNT' AS payout_type,
+        COUNT(DISTINCT SNDCUSTOMER_KEY) AS customers,
+        COUNT(DISTINCT TXN_ID) AS txns,
+        AVG(SNDPRINCIPAL_USD) AS avg_principal,
+        AVG(REVENUE) AS avg_revenue,
+        AVG(FEE) AS avg_fee,
+        AVG(FX_MARGIN) AS avg_fx,
+        AVG(REVENUE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS revenue_pct,
+        AVG(FEE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS fee_pct
+    FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+    WHERE SNDCOUNTRY_CODE = 'US'
+        AND DATE(rcvpaying_datetime) >= '2025-02-01'
+        AND DATE(rcvpaying_datetime) < '2026-02-01'
+        AND PAYOUT_TYPE = 'ACCOUNT'
+        AND SNDCUSTOMER_KEY IS NOT NULL
+)
+SELECT
+    'Customers' AS metric,
+    c.customers AS cash_value,
+    a.customers AS account_value,
+    a.customers - c.customers AS difference,
+    ROUND((a.customers - c.customers) * 100.0 / NULLIF(c.customers, 0), 2) AS pct_difference
+FROM cash_data c, account_data a
+
+UNION ALL
+
+SELECT
+    'Transactions' AS metric,
+    c.txns AS cash_value,
+    a.txns AS account_value,
+    a.txns - c.txns AS difference,
+    ROUND((a.txns - c.txns) * 100.0 / NULLIF(c.txns, 0), 2) AS pct_difference
+FROM cash_data c, account_data a
+
+UNION ALL
+
+SELECT
+    'Avg Principal (PPT)' AS metric,
+    c.avg_principal AS cash_value,
+    a.avg_principal AS account_value,
+    a.avg_principal - c.avg_principal AS difference,
+    ROUND((a.avg_principal - c.avg_principal) * 100.0 / NULLIF(c.avg_principal, 0), 2) AS pct_difference
+FROM cash_data c, account_data a
+
+UNION ALL
+
+SELECT
+    'Avg Revenue (RPT)' AS metric,
+    c.avg_revenue AS cash_value,
+    a.avg_revenue AS account_value,
+    a.avg_revenue - c.avg_revenue AS difference,
+    ROUND((a.avg_revenue - c.avg_revenue) * 100.0 / NULLIF(c.avg_revenue, 0), 2) AS pct_difference
+FROM cash_data c, account_data a
+
+UNION ALL
+
+SELECT
+    'Avg Fee' AS metric,
+    c.avg_fee AS cash_value,
+    a.avg_fee AS account_value,
+    a.avg_fee - c.avg_fee AS difference,
+    ROUND((a.avg_fee - c.avg_fee) * 100.0 / NULLIF(c.avg_fee, 0), 2) AS pct_difference
+FROM cash_data c, account_data a
+
+UNION ALL
+
+SELECT
+    'Avg FX Margin' AS metric,
+    c.avg_fx AS cash_value,
+    a.avg_fx AS account_value,
+    a.avg_fx - c.avg_fx AS difference,
+    ROUND((a.avg_fx - c.avg_fx) * 100.0 / NULLIF(c.avg_fx, 0), 2) AS pct_difference
+FROM cash_data c, account_data a
+
+UNION ALL
+
+SELECT
+    'Revenue as % of Principal' AS metric,
+    c.revenue_pct AS cash_value,
+    a.revenue_pct AS account_value,
+    a.revenue_pct - c.revenue_pct AS difference,
+    ROUND((a.revenue_pct - c.revenue_pct) * 100.0 / NULLIF(c.revenue_pct, 0), 2) AS pct_difference
+FROM cash_data c, account_data a
+
+UNION ALL
+
+SELECT
+    'Fee as % of Principal' AS metric,
+    c.fee_pct AS cash_value,
+    a.fee_pct AS account_value,
+    a.fee_pct - c.fee_pct AS difference,
+    ROUND((a.fee_pct - c.fee_pct) * 100.0 / NULLIF(c.fee_pct, 0), 2) AS pct_difference
+FROM cash_data c, account_data a;
+
+-- Verification Query
+SELECT * FROM CAM_1746_CASH_VS_APN_SUMMARY_PIVOT;
+
+
+-- ============================================================================
+-- QUICK ANALYSIS QUERIES
+-- ============================================================================
+
+-- Quick Check 1: Overall comparison
+SELECT * FROM CAM_1746_CASH_VS_APN_OVERALL;
+
+-- Quick Check 2: Which has higher fees?
+SELECT 
+    PAYOUT_TYPE,
+    AVG(FEE) AS avg_fee,
+    AVG(FX_MARGIN) AS avg_fx_margin,
+    AVG(REVENUE) AS avg_revenue
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+WHERE SNDCOUNTRY_CODE = 'US'
+    AND DATE(rcvpaying_datetime) >= '2025-02-01'
+    AND DATE(rcvpaying_datetime) < '2026-02-01'
+    AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
+GROUP BY PAYOUT_TYPE;
+
+-- Quick Check 3: Principal distribution
+SELECT 
+    PAYOUT_TYPE,
+    CASE
+        WHEN SNDPRINCIPAL_USD < 100 THEN '<$100'
+        WHEN SNDPRINCIPAL_USD >= 100 AND SNDPRINCIPAL_USD < 500 THEN '$100-$500'
+        WHEN SNDPRINCIPAL_USD >= 500 AND SNDPRINCIPAL_USD < 1000 THEN '$500-$1,000'
+        WHEN SNDPRINCIPAL_USD >= 1000 THEN '$1,000+'
+    END AS principal_bucket,
+    COUNT(DISTINCT TXN_ID) AS txns,
+    AVG(FEE) AS avg_fee,
+    AVG(REVENUE) AS avg_revenue
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+WHERE SNDCOUNTRY_CODE = 'US'
+    AND DATE(rcvpaying_datetime) >= '2025-02-01'
+    AN
