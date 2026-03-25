@@ -1,275 +1,318 @@
 -- ============================================================================
--- SIMPLIFIED RPC ANALYSIS - ALIGNED WITH FIRST HYPOTHESIS
+-- VALIDATION: NEGATIVE FX MARGIN FOR ACCOUNT + RETAIL
 -- ============================================================================
--- Purpose: Keep it simple and aligned with the payout type comparison
--- ============================================================================
-
--- ============================================================================
--- APPROACH 1: CUSTOMER-LEVEL VIEW (SIMPLE VERSION)
--- ============================================================================
--- Just compare APN senders vs Non-APN senders using their OVERALL metrics
+-- Purpose: Investigate why FX per transaction is -0.04 for ACCOUNT + RETAIL
 -- ============================================================================
 
-CREATE OR REPLACE TABLE CAM_1746_RPC_SIMPLE AS
-WITH customer_classification AS (
-    -- Classify customers based on whether they have any ACCOUNT transactions
-    SELECT
-        SNDCUSTOMER_KEY,
-        CASE 
-            WHEN SUM(CASE WHEN PAYOUT_TYPE = 'ACCOUNT' THEN 1 ELSE 0 END) >= 1 
-            THEN 'APN_SENDER' 
-            ELSE 'NON_APN_SENDER' 
-        END AS CUSTOMER_TYPE
-    FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
-    WHERE SNDCOUNTRY_CODE = 'US'
-        AND DATE(rcvpaying_datetime) >= '2025-02-01'
-        AND DATE(rcvpaying_datetime) < '2026-02-01'
-        AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
-        AND SNDCUSTOMER_KEY IS NOT NULL
-    GROUP BY SNDCUSTOMER_KEY
-),
-customer_totals AS (
-    -- Get total metrics for each customer
-    SELECT
-        cc.CUSTOMER_TYPE,
-        txn.SNDCUSTOMER_KEY,
-        COUNT(DISTINCT txn.TXN_ID) AS CUSTOMER_TXNS,
-        SUM(txn.SNDPRINCIPAL_USD) AS CUSTOMER_PRINCIPAL,
-        SUM(txn.REVENUE) AS CUSTOMER_REVENUE
-    FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW txn
-    INNER JOIN customer_classification cc
-        ON txn.SNDCUSTOMER_KEY = cc.SNDCUSTOMER_KEY
-    WHERE txn.SNDCOUNTRY_CODE = 'US'
-        AND DATE(txn.rcvpaying_datetime) >= '2025-02-01'
-        AND DATE(txn.rcvpaying_datetime) < '2026-02-01'
-        AND txn.PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
-    GROUP BY cc.CUSTOMER_TYPE, txn.SNDCUSTOMER_KEY
-)
-SELECT
-    CUSTOMER_TYPE,
-    
-    -- Customer Count
-    COUNT(DISTINCT SNDCUSTOMER_KEY) AS TOTAL_CUSTOMERS,
-    
-    -- Aggregated Totals
-    SUM(CUSTOMER_TXNS) AS TOTAL_TXNS,
-    SUM(CUSTOMER_PRINCIPAL) AS TOTAL_PRINCIPAL,
-    SUM(CUSTOMER_REVENUE) AS TOTAL_REVENUE,
-    
-    -- Per Customer Metrics (THE KEY METRICS!)
-    ROUND(SUM(CUSTOMER_TXNS) / COUNT(DISTINCT SNDCUSTOMER_KEY), 2) AS TPC,
-    ROUND(SUM(CUSTOMER_PRINCIPAL) / COUNT(DISTINCT SNDCUSTOMER_KEY), 2) AS PPC,
-    ROUND(SUM(CUSTOMER_REVENUE) / COUNT(DISTINCT SNDCUSTOMER_KEY), 2) AS RPC,
-    
-    -- Per Transaction Metrics (for reference)
-    ROUND(SUM(CUSTOMER_PRINCIPAL) / SUM(CUSTOMER_TXNS), 2) AS PPT,
-    ROUND(SUM(CUSTOMER_REVENUE) / SUM(CUSTOMER_TXNS), 2) AS RPT
-
-FROM customer_totals
-GROUP BY CUSTOMER_TYPE;
-
--- View Results
-SELECT * FROM CAM_1746_RPC_SIMPLE;
-
-
 -- ============================================================================
--- VERIFICATION: DOES THIS MATCH OUR FIRST HYPOTHESIS DATA?
+-- STEP 1: VERIFY THE FINDING FROM AGGREGATED TABLE
 -- ============================================================================
 
--- This should show the breakdown of where the transactions are coming from
 SELECT 
-    cc.CUSTOMER_TYPE,
-    txn.PAYOUT_TYPE,
-    COUNT(DISTINCT txn.SNDCUSTOMER_KEY) AS CUSTOMERS,
-    COUNT(DISTINCT txn.TXN_ID) AS TXNS,
-    SUM(txn.SNDPRINCIPAL_USD) AS TOTAL_PRINCIPAL,
-    SUM(txn.REVENUE) AS TOTAL_REVENUE,
-    ROUND(AVG(txn.SNDPRINCIPAL_USD), 2) AS PPT,
-    ROUND(AVG(txn.REVENUE), 2) AS RPT
-FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW txn
-INNER JOIN (
-    SELECT
-        SNDCUSTOMER_KEY,
-        CASE 
-            WHEN SUM(CASE WHEN PAYOUT_TYPE = 'ACCOUNT' THEN 1 ELSE 0 END) >= 1 
-            THEN 'APN_SENDER' 
-            ELSE 'NON_APN_SENDER' 
-        END AS CUSTOMER_TYPE
-    FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
-    WHERE SNDCOUNTRY_CODE = 'US'
-        AND DATE(rcvpaying_datetime) >= '2025-02-01'
-        AND DATE(rcvpaying_datetime) < '2026-02-01'
-        AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
-        AND SNDCUSTOMER_KEY IS NOT NULL
-    GROUP BY SNDCUSTOMER_KEY
-) cc ON txn.SNDCUSTOMER_KEY = cc.SNDCUSTOMER_KEY
-WHERE txn.SNDCOUNTRY_CODE = 'US'
-    AND DATE(txn.rcvpaying_datetime) >= '2025-02-01'
-    AND DATE(txn.rcvpaying_datetime) < '2026-02-01'
-    AND txn.PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
-GROUP BY cc.CUSTOMER_TYPE, txn.PAYOUT_TYPE
-ORDER BY cc.CUSTOMER_TYPE, txn.PAYOUT_TYPE;
-
-
--- ============================================================================
--- SANITY CHECK: TOTAL TRANSACTIONS SHOULD MATCH
--- ============================================================================
-
--- Total from payout type view (First Hypothesis)
-SELECT 
-    'PAYOUT_TYPE_VIEW' AS source,
     PAYOUT_TYPE,
+    CHANNEL_GROUP,
+    SUM(TOTAL_TXNS) AS total_txns,
+    SUM(TOTAL_PRINCIPAL) / SUM(TOTAL_TXNS) AS PPT,
+    SUM(TOTAL_REVENUE) / SUM(TOTAL_TXNS) AS RPT,
+    SUM(TOTAL_FEE) / SUM(TOTAL_TXNS) AS FPT,
+    SUM(TOTAL_FX_MARGIN) / SUM(TOTAL_TXNS) AS FXPT,
+    
+    -- Check the percentage
+    (SUM(TOTAL_FX_MARGIN) / SUM(TOTAL_TXNS)) / (SUM(TOTAL_PRINCIPAL) / SUM(TOTAL_TXNS)) * 100 AS FX_PCT_OF_PRINCIPAL
+    
+FROM CAM_1746_CASH_VS_APN_ALL_DIMENSIONS
+WHERE PAYOUT_TYPE = 'ACCOUNT' AND CHANNEL_GROUP = 'RETAIL'
+GROUP BY PAYOUT_TYPE, CHANNEL_GROUP;
+
+
+-- ============================================================================
+-- STEP 2: DIRECT QUERY TO VALIDATE RAW DATA
+-- ============================================================================
+
+SELECT 
+    PAYOUT_TYPE,
+    CASE
+        WHEN PRICING_CHANNEL IN ('WEB', 'APP') THEN 'DIGITAL'
+        WHEN PRICING_CHANNEL IN ('POS', 'TMT', 'AIR') THEN 'RETAIL'
+        ELSE 'OTHER'
+    END AS CHANNEL_GROUP,
+    
     COUNT(DISTINCT TXN_ID) AS total_txns,
-    ROUND(AVG(SNDPRINCIPAL_USD), 2) AS ppt,
-    ROUND(AVG(REVENUE), 2) AS rpt
+    
+    AVG(SNDPRINCIPAL_USD) AS avg_principal,
+    AVG(REVENUE) AS avg_revenue,
+    AVG(total_charges_usd) AS avg_fee,
+    AVG(net_foreign_exchange) AS avg_fx,
+    
+    -- Distribution checks
+    MIN(net_foreign_exchange) AS min_fx,
+    MAX(net_foreign_exchange) AS max_fx,
+    MEDIAN(net_foreign_exchange) AS median_fx,
+    
+    -- Count negative FX transactions
+    COUNT(CASE WHEN net_foreign_exchange < 0 THEN 1 END) AS negative_fx_txns,
+    COUNT(CASE WHEN net_foreign_exchange = 0 THEN 1 END) AS zero_fx_txns,
+    COUNT(CASE WHEN net_foreign_exchange > 0 THEN 1 END) AS positive_fx_txns
+
 FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
 WHERE SNDCOUNTRY_CODE = 'US'
     AND DATE(rcvpaying_datetime) >= '2025-02-01'
     AND DATE(rcvpaying_datetime) < '2026-02-01'
-    AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
+    AND PAYOUT_TYPE = 'ACCOUNT'
+    AND PRICING_CHANNEL IN ('POS', 'TMT', 'AIR')
     AND SNDCUSTOMER_KEY IS NOT NULL
-GROUP BY PAYOUT_TYPE
-
-UNION ALL
-
--- Total from customer type view (Second Hypothesis)
-SELECT 
-    'CUSTOMER_TYPE_VIEW' AS source,
-    'ALL_TRANSACTIONS' AS payout_type,
-    SUM(TOTAL_TXNS) AS total_txns,
-    SUM(TOTAL_PRINCIPAL) / SUM(TOTAL_TXNS) AS ppt,
-    SUM(TOTAL_REVENUE) / SUM(TOTAL_TXNS) AS rpt
-FROM CAM_1746_RPC_SIMPLE
-GROUP BY source, payout_type;
+GROUP BY PAYOUT_TYPE, CHANNEL_GROUP;
 
 
 -- ============================================================================
--- KEY INSIGHT EXPLANATION
+-- STEP 3: INVESTIGATE CUSTOMER SAMPLE WITH NEGATIVE FX
+-- ============================================================================
+
+CREATE OR REPLACE TABLE CAM_1746_ACCOUNT_RETAIL_NEGATIVE_FX_SAMPLE AS
+SELECT 
+    SNDCUSTOMER_KEY,
+    TXN_ID,
+    DATE(rcvpaying_datetime) AS txn_date,
+    PRICING_CHANNEL,
+    SNDCOUNTRY_CODE,
+    RCVCOUNTRY_CODE,
+    CASE 
+        WHEN SNDCOUNTRY_CODE = RCVCOUNTRY_CODE THEN 'DOMESTIC' 
+        ELSE 'CROSS BORDER' 
+    END AS DIRECTION,
+    PAYOUT_TYPE,
+    SNDPRINCIPAL_USD,
+    REVENUE,
+    total_charges_usd AS fee,
+    net_foreign_exchange AS fx_margin,
+    
+    -- Calculate components
+    REVENUE - total_charges_usd AS calculated_fx,
+    net_foreign_exchange / NULLIF(SNDPRINCIPAL_USD, 0) * 100 AS fx_pct_of_principal
+
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+WHERE SNDCOUNTRY_CODE = 'US'
+    AND DATE(rcvpaying_datetime) >= '2025-02-01'
+    AND DATE(rcvpaying_datetime) < '2026-02-01'
+    AND PAYOUT_TYPE = 'ACCOUNT'
+    AND PRICING_CHANNEL IN ('POS', 'TMT', 'AIR')
+    AND SNDCUSTOMER_KEY IS NOT NULL
+ORDER BY net_foreign_exchange ASC
+LIMIT 10000;
+
+-- View sample
+SELECT * FROM CAM_1746_ACCOUNT_RETAIL_NEGATIVE_FX_SAMPLE
+LIMIT 100;
+
+
+-- ============================================================================
+-- STEP 4: BREAKDOWN BY DIRECTION (IMT vs DMT)
+-- ============================================================================
+
+SELECT 
+    PAYOUT_TYPE,
+    CASE
+        WHEN PRICING_CHANNEL IN ('WEB', 'APP') THEN 'DIGITAL'
+        WHEN PRICING_CHANNEL IN ('POS', 'TMT', 'AIR') THEN 'RETAIL'
+        ELSE 'OTHER'
+    END AS CHANNEL_GROUP,
+    CASE 
+        WHEN SNDCOUNTRY_CODE = RCVCOUNTRY_CODE THEN 'DOMESTIC' 
+        ELSE 'CROSS BORDER' 
+    END AS DIRECTION,
+    
+    COUNT(DISTINCT TXN_ID) AS total_txns,
+    
+    AVG(SNDPRINCIPAL_USD) AS avg_principal,
+    AVG(REVENUE) AS avg_revenue,
+    AVG(total_charges_usd) AS avg_fee,
+    AVG(net_foreign_exchange) AS avg_fx,
+    
+    -- FX distribution
+    COUNT(CASE WHEN net_foreign_exchange < 0 THEN 1 END) AS negative_fx_count,
+    COUNT(CASE WHEN net_foreign_exchange = 0 THEN 1 END) AS zero_fx_count,
+    COUNT(CASE WHEN net_foreign_exchange > 0 THEN 1 END) AS positive_fx_count
+
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+WHERE SNDCOUNTRY_CODE = 'US'
+    AND DATE(rcvpaying_datetime) >= '2025-02-01'
+    AND DATE(rcvpaying_datetime) < '2026-02-01'
+    AND PAYOUT_TYPE = 'ACCOUNT'
+    AND PRICING_CHANNEL IN ('POS', 'TMT', 'AIR')
+    AND SNDCUSTOMER_KEY IS NOT NULL
+GROUP BY PAYOUT_TYPE, CHANNEL_GROUP, DIRECTION
+ORDER BY CHANNEL_GROUP, DIRECTION;
+
+
+-- ============================================================================
+-- STEP 5: CHECK SPECIFIC PRICING CHANNELS
+-- ============================================================================
+
+SELECT 
+    PAYOUT_TYPE,
+    PRICING_CHANNEL,
+    
+    COUNT(DISTINCT TXN_ID) AS total_txns,
+    AVG(SNDPRINCIPAL_USD) AS avg_principal,
+    AVG(total_charges_usd) AS avg_fee,
+    AVG(net_foreign_exchange) AS avg_fx,
+    
+    -- Distribution
+    COUNT(CASE WHEN net_foreign_exchange < 0 THEN 1 END) AS negative_fx_count,
+    COUNT(CASE WHEN net_foreign_exchange = 0 THEN 1 END) AS zero_fx_count,
+    COUNT(CASE WHEN net_foreign_exchange > 0 THEN 1 END) AS positive_fx_count,
+    
+    -- Percentages
+    ROUND(COUNT(CASE WHEN net_foreign_exchange < 0 THEN 1 END) * 100.0 / COUNT(*), 2) AS pct_negative,
+    ROUND(COUNT(CASE WHEN net_foreign_exchange = 0 THEN 1 END) * 100.0 / COUNT(*), 2) AS pct_zero,
+    ROUND(COUNT(CASE WHEN net_foreign_exchange > 0 THEN 1 END) * 100.0 / COUNT(*), 2) AS pct_positive
+
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+WHERE SNDCOUNTRY_CODE = 'US'
+    AND DATE(rcvpaying_datetime) >= '2025-02-01'
+    AND DATE(rcvpaying_datetime) < '2026-02-01'
+    AND PAYOUT_TYPE = 'ACCOUNT'
+    AND PRICING_CHANNEL IN ('POS', 'TMT', 'AIR')
+    AND SNDCUSTOMER_KEY IS NOT NULL
+GROUP BY PAYOUT_TYPE, PRICING_CHANNEL
+ORDER BY PRICING_CHANNEL;
+
+
+-- ============================================================================
+-- STEP 6: FIND CUSTOMERS WITH CONSISTENTLY NEGATIVE FX
+-- ============================================================================
+
+CREATE OR REPLACE TABLE CAM_1746_CUSTOMERS_WITH_NEGATIVE_FX AS
+WITH customer_fx_summary AS (
+    SELECT 
+        SNDCUSTOMER_KEY,
+        COUNT(DISTINCT TXN_ID) AS total_txns,
+        AVG(net_foreign_exchange) AS avg_fx,
+        MIN(net_foreign_exchange) AS min_fx,
+        MAX(net_foreign_exchange) AS max_fx,
+        SUM(CASE WHEN net_foreign_exchange < 0 THEN 1 ELSE 0 END) AS negative_fx_txns,
+        SUM(CASE WHEN net_foreign_exchange = 0 THEN 1 ELSE 0 END) AS zero_fx_txns,
+        SUM(CASE WHEN net_foreign_exchange > 0 THEN 1 ELSE 0 END) AS positive_fx_txns
+    FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+    WHERE SNDCOUNTRY_CODE = 'US'
+        AND DATE(rcvpaying_datetime) >= '2025-02-01'
+        AND DATE(rcvpaying_datetime) < '2026-02-01'
+        AND PAYOUT_TYPE = 'ACCOUNT'
+        AND PRICING_CHANNEL IN ('POS', 'TMT', 'AIR')
+        AND SNDCUSTOMER_KEY IS NOT NULL
+    GROUP BY SNDCUSTOMER_KEY
+)
+SELECT *
+FROM customer_fx_summary
+WHERE avg_fx < 0  -- Customers with average negative FX
+ORDER BY avg_fx ASC
+LIMIT 1000;
+
+-- View customers with negative FX
+SELECT * FROM CAM_1746_CUSTOMERS_WITH_NEGATIVE_FX
+LIMIT 50;
+
+
+-- ============================================================================
+-- STEP 7: DETAILED TRANSACTION VIEW FOR SPECIFIC CUSTOMERS
+-- ============================================================================
+
+-- Pick one customer with negative FX and see all their transactions
+SELECT 
+    txn.SNDCUSTOMER_KEY,
+    txn.TXN_ID,
+    DATE(txn.rcvpaying_datetime) AS txn_date,
+    txn.PRICING_CHANNEL,
+    CONCAT(txn.SNDCOUNTRY_CODE, '-', txn.RCVCOUNTRY_CODE) AS corridor,
+    txn.PAYOUT_TYPE,
+    txn.SNDPRINCIPAL_USD AS principal,
+    txn.REVENUE,
+    txn.total_charges_usd AS fee,
+    txn.net_foreign_exchange AS fx_margin,
+    
+    -- Check if revenue = fee + fx
+    txn.total_charges_usd + txn.net_foreign_exchange AS calculated_revenue,
+    ABS(txn.REVENUE - (txn.total_charges_usd + txn.net_foreign_exchange)) AS revenue_variance
+
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW txn
+INNER JOIN CAM_1746_CUSTOMERS_WITH_NEGATIVE_FX cust
+    ON txn.SNDCUSTOMER_KEY = cust.SNDCUSTOMER_KEY
+WHERE txn.SNDCOUNTRY_CODE = 'US'
+    AND DATE(txn.rcvpaying_datetime) >= '2025-02-01'
+    AND DATE(txn.rcvpaying_datetime) < '2026-02-01'
+    AND txn.PAYOUT_TYPE = 'ACCOUNT'
+    AND txn.PRICING_CHANNEL IN ('POS', 'TMT', 'AIR')
+LIMIT 100;
+
+
+-- ============================================================================
+-- STEP 8: COMPARE ACCOUNT RETAIL vs ACCOUNT DIGITAL
+-- ============================================================================
+
+SELECT 
+    PAYOUT_TYPE,
+    CASE
+        WHEN PRICING_CHANNEL IN ('WEB', 'APP') THEN 'DIGITAL'
+        WHEN PRICING_CHANNEL IN ('POS', 'TMT', 'AIR') THEN 'RETAIL'
+        ELSE 'OTHER'
+    END AS CHANNEL_GROUP,
+    
+    COUNT(DISTINCT TXN_ID) AS total_txns,
+    ROUND(AVG(SNDPRINCIPAL_USD), 2) AS avg_principal,
+    ROUND(AVG(REVENUE), 2) AS avg_revenue,
+    ROUND(AVG(total_charges_usd), 2) AS avg_fee,
+    ROUND(AVG(net_foreign_exchange), 2) AS avg_fx,
+    
+    -- Transaction mix by corridor type
+    COUNT(CASE WHEN SNDCOUNTRY_CODE = RCVCOUNTRY_CODE THEN 1 END) AS domestic_txns,
+    COUNT(CASE WHEN SNDCOUNTRY_CODE != RCVCOUNTRY_CODE THEN 1 END) AS cross_border_txns,
+    
+    ROUND(COUNT(CASE WHEN SNDCOUNTRY_CODE = RCVCOUNTRY_CODE THEN 1 END) * 100.0 / COUNT(*), 2) AS pct_domestic
+
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+WHERE SNDCOUNTRY_CODE = 'US'
+    AND DATE(rcvpaying_datetime) >= '2025-02-01'
+    AND DATE(rcvpaying_datetime) < '2026-02-01'
+    AND PAYOUT_TYPE = 'ACCOUNT'
+    AND SNDCUSTOMER_KEY IS NOT NULL
+GROUP BY PAYOUT_TYPE, CHANNEL_GROUP
+ORDER BY CHANNEL_GROUP;
+
+
+-- ============================================================================
+-- KEY QUESTIONS TO ANSWER
 -- ============================================================================
 /*
-WHY THE NUMBERS ARE DIFFERENT:
+1. Is the -0.04 FX real or a data quality issue?
+   → Check Step 2 results
 
-FIRST HYPOTHESIS (Transaction-Level):
--------------------------------------
-- Looks at ALL ACCOUNT transactions vs ALL CASH transactions
-- ACCOUNT: 32.9M transactions
-- CASH: 78.4M transactions
-- Total: 111.3M transactions
+2. Is it driven by domestic transactions (which have zero FX)?
+   → Check Step 4 results (IMT vs DMT breakdown)
 
-SECOND HYPOTHESIS (Customer-Level):
------------------------------------
-- Looks at APN_SENDERS vs NON_APN_SENDERS
-- APN_SENDERS: Customers with at least 1 ACCOUNT transaction
-  * Their transactions include: 32.9M ACCOUNT + 18.6M CASH = 51.5M total
-  * Yes! APN senders also do CASH transactions sometimes
-  
-- NON_APN_SENDERS: Customers who only do CASH
-  * Their transactions: 59.7M CASH only
+3. Are there transactions with actual negative FX margins?
+   → Check Step 3 sample table
 
-BREAKDOWN:
----------
-Total CASH transactions (78.4M) = 
-  - CASH by APN senders (18.6M) + 
-  - CASH by NON-APN senders (59.7M)
+4. Is it specific to certain retail channels (POS vs TMT vs AIR)?
+   → Check Step 5 results
 
-Total ACCOUNT transactions (32.9M) = 
-  - ACCOUNT by APN senders (32.9M) + 
-  - ACCOUNT by NON-APN senders (0)
+5. Which customers have negative FX consistently?
+   → Check Step 6 results
 
-CORRECT COMPARISON FOR HYPOTHESIS 2:
-------------------------------------
-Compare the OVERALL behavior of APN senders vs Non-APN senders:
-
-Metric                          | APN Senders | Non-APN  | Difference
---------------------------------|-------------|----------|------------
-TPC (Transactions Per Customer) | 13.85       | 6.75     | +105%
-RPC (Revenue Per Customer)      | $132.98     | $77.79   | +71%
-PPC (Principal Per Customer)    | $6,057      | $2,322   | +161%
-
-INTERPRETATION:
-- APN senders transact 2x more frequently (13.85 vs 6.75 txns/customer)
-- This higher frequency drives 71% higher revenue per customer
-- Even though their blended RPT is lower ($9.60 vs $11.52), the volume compensates
+POSSIBLE EXPLANATIONS:
+---------------------
+A. DOMESTIC TRANSACTIONS:
+   - US-to-US domestic transfers have zero FX
+   - If ACCOUNT+RETAIL has more domestic %, avg FX will be near zero
+   
+B. PROMOTIONAL PRICING:
+   - Some transactions may have FX discounts or promotions
+   - This could create negative FX margins temporarily
+   
+C. DATA QUALITY:
+   - FX margin calculation may have issues for certain transaction types
+   - Check if REVENUE = FEE + FX holds true
+   
+D. CHANNEL MIX:
+   - Retail ACCOUNT may skew heavily toward domestic
+   - Digital ACCOUNT may skew toward cross-border
 */
-
-
--- ============================================================================
--- FINAL COMPARISON TABLE FOR KEY TAKEAWAYS
--- ============================================================================
-
-CREATE OR REPLACE TABLE CAM_1746_KEY_TAKEAWAYS_COMPARISON AS
-SELECT
-    'TPC (Transactions Per Customer)' AS metric,
-    (SELECT TPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') AS apn_senders,
-    (SELECT TPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER') AS non_apn_senders,
-    (SELECT TPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') - 
-    (SELECT TPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER') AS absolute_diff,
-    ROUND(
-        ((SELECT TPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') - 
-         (SELECT TPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER')) * 100.0 /
-        (SELECT TPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER'),
-        2
-    ) AS pct_diff
-
-UNION ALL
-
-SELECT
-    'RPC (Revenue Per Customer)' AS metric,
-    (SELECT RPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') AS apn_senders,
-    (SELECT RPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER') AS non_apn_senders,
-    (SELECT RPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') - 
-    (SELECT RPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER') AS absolute_diff,
-    ROUND(
-        ((SELECT RPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') - 
-         (SELECT RPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER')) * 100.0 /
-        (SELECT RPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER'),
-        2
-    ) AS pct_diff
-
-UNION ALL
-
-SELECT
-    'PPC (Principal Per Customer)' AS metric,
-    (SELECT PPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') AS apn_senders,
-    (SELECT PPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER') AS non_apn_senders,
-    (SELECT PPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') - 
-    (SELECT PPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER') AS absolute_diff,
-    ROUND(
-        ((SELECT PPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') - 
-         (SELECT PPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER')) * 100.0 /
-        (SELECT PPC FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER'),
-        2
-    ) AS pct_diff
-
-UNION ALL
-
-SELECT
-    'PPT (Principal Per Transaction)' AS metric,
-    (SELECT PPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') AS apn_senders,
-    (SELECT PPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER') AS non_apn_senders,
-    (SELECT PPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') - 
-    (SELECT PPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER') AS absolute_diff,
-    ROUND(
-        ((SELECT PPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') - 
-         (SELECT PPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER')) * 100.0 /
-        (SELECT PPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER'),
-        2
-    ) AS pct_diff
-
-UNION ALL
-
-SELECT
-    'RPT (Revenue Per Transaction)' AS metric,
-    (SELECT RPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') AS apn_senders,
-    (SELECT RPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER') AS non_apn_senders,
-    (SELECT RPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') - 
-    (SELECT RPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER') AS absolute_diff,
-    ROUND(
-        ((SELECT RPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'APN_SENDER') - 
-         (SELECT RPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER')) * 100.0 /
-        (SELECT RPT FROM CAM_1746_RPC_SIMPLE WHERE CUSTOMER_TYPE = 'NON_APN_SENDER'),
-        2
-    ) AS pct_diff;
-
--- View the comparison
-SELECT * FROM CAM_1746_KEY_TAKEAWAYS_COMPARISON;
