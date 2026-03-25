@@ -1,13 +1,27 @@
-Payout Type	DISTINCT_CUSTOMERS	TOTAL_TXNS	TOTAL_PRINCIPAL	AVG_PRINCIPAL_PPT	TOTAL_REVENUE	AVG_REVENUE_RPT	TOTAL_FEE	AVG_FEE	TOTAL_FX_MARGIN	AVG_FX_MARGIN
-ACCOUNT	 3,722,521 	 32,912,488 	 16,437,215,657 	 499 	 298,128,311 	 9.06 	 182,416,469 	 5.54 	 115,711,842 	 3.52 
-CASH	 10,515,987 	 78,363,076 	 26,652,555,332 	 340 	 884,995,699 	 11.29 	 696,422,533 	 8.89 	 188,573,166 	 2.41 
+Hi there,
 
+We would like to conduct a campaign measurement of Abandoned Cart Journey before launching into the A/B testing into US Market. The objective is to understand the performance impact of including a 50% off promo code on fees in Wave 2.
 
-PAYOUT_TYPE	CHANNEL_GROUP	TOTAL_TXNS	PPT	RPT	FPT	FXPT
-CASH	DIGITAL	 27,865,269 	 267.3 	 11.67 	 7.80 	 3.87 
-ACCOUNT	RETAIL	 9,367,405 	 638.9 	 11.20 	 11.24 	 (0.04)
-CASH	RETAIL	 50,497,807 	 380.3 	 11.09 	 9.49 	 1.60 
-ACCOUNT	DIGITAL	 23,545,083 	 443.9 	 8.21 	 3.28 	 4.93 
+Submitted
 
-if we check these two out we would see fx of CASH having higher fx rate than fx of account , 
-however in the first table we see fx of account having higher fx rate than fx of cash, why is that , please help me understand.
+Campaign Launch Date
+
+Campaign Name
+
+2023-12-21
+
+2024-05-24
+
+RevampedAbandonedCart
+
+Journey flow:
+
+Wave 1: Customer receives a generic reminder to complete their transaction.
+
+Wave 2: If they still don’t complete it, three days later they receive the next message.
+
+In the current logic, they would receive a 50% off promo code only if they haven’t received a promo in their past three entries.
+
+As per some strategies, there are different conditions per country, some countries have 50% promo codes, some other countries have only one wave and no promo codes
+
+Goal: Determine which version delivers higher conversion and overall performance.
