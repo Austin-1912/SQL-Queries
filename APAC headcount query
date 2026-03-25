@@ -1,70 +1,22 @@
 -- ============================================================================
--- CASH VS APN PRICING ANALYSIS - ENTIRE US POPULATION
+-- MERGED MULTI-DIMENSIONAL CASH VS APN ANALYSIS
 -- ============================================================================
--- Purpose: Understand why APN has higher PPT but lower RPT compared to CASH
--- Hypothesis: ACCOUNT payout has more competitive pricing (lower fees/FX margins)
--- Period: Feb 2025 - Jan 2026
--- ============================================================================
-
--- ============================================================================
--- STEP 1: OVERALL CASH VS APN COMPARISON
--- ============================================================================
--- Purpose: High-level comparison of transaction behavior and pricing
+-- Purpose: Single comprehensive query with all dimensions
+-- Dimensions: Payout Type + Channel + Principal Bucket + IMT/DMT
 -- ============================================================================
 
-CREATE OR REPLACE TABLE CAM_1746_CASH_VS_APN_OVERALL AS
+CREATE OR REPLACE TABLE CAM_1746_CASH_VS_APN_ALL_DIMENSIONS AS
 SELECT
     PAYOUT_TYPE,
-    COUNT(DISTINCT SNDCUSTOMER_KEY) AS DISTINCT_CUSTOMERS,
-    COUNT(DISTINCT TXN_ID) AS TOTAL_TXNS,
     
-    -- Principal Metrics
-    SUM(SNDPRINCIPAL_USD) AS TOTAL_PRINCIPAL,
-    AVG(SNDPRINCIPAL_USD) AS AVG_PRINCIPAL_PPT,
-    MEDIAN(SNDPRINCIPAL_USD) AS MEDIAN_PRINCIPAL_PPT,
+    -- Channel Dimension
+    CASE
+        WHEN PRICING_CHANNEL IN ('WEB', 'APP') THEN 'DIGITAL'
+        WHEN PRICING_CHANNEL IN ('POS', 'TMT', 'AIR') THEN 'RETAIL'
+        ELSE 'OTHER'
+    END AS CHANNEL_GROUP,
     
-    -- Revenue Metrics
-    SUM(REVENUE) AS TOTAL_REVENUE,
-    AVG(REVENUE) AS AVG_REVENUE_RPT,
-    MEDIAN(REVENUE) AS MEDIAN_REVENUE_RPT,
-    
-    -- Fee Metrics
-    SUM(FEE) AS TOTAL_FEE,
-    AVG(FEE) AS AVG_FEE,
-    MEDIAN(FEE) AS MEDIAN_FEE,
-    
-    -- FX Margin Metrics (if applicable)
-    SUM(FX_MARGIN) AS TOTAL_FX_MARGIN,
-    AVG(FX_MARGIN) AS AVG_FX_MARGIN,
-    MEDIAN(FX_MARGIN) AS MEDIAN_FX_MARGIN,
-    
-    -- Calculated Metrics
-    AVG(REVENUE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_REVENUE_AS_PCT_OF_PRINCIPAL,
-    AVG(FEE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FEE_AS_PCT_OF_PRINCIPAL,
-    AVG(FX_MARGIN / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FX_AS_PCT_OF_PRINCIPAL
-
-FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
-WHERE SNDCOUNTRY_CODE = 'US'
-    AND DATE(rcvpaying_datetime) >= '2025-02-01'
-    AND DATE(rcvpaying_datetime) < '2026-02-01'
-    AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
-    AND SNDCUSTOMER_KEY IS NOT NULL
-GROUP BY PAYOUT_TYPE;
-
--- Verification Query
-SELECT * FROM CAM_1746_CASH_VS_APN_OVERALL
-ORDER BY PAYOUT_TYPE;
-
-
--- ============================================================================
--- STEP 2: CASH VS APN BY PRINCIPAL BUCKET
--- ============================================================================
--- Purpose: Compare pricing across different principal (PPT) buckets
--- ============================================================================
-
-CREATE OR REPLACE TABLE CAM_1746_CASH_VS_APN_BY_PPT_BUCKET AS
-SELECT
-    PAYOUT_TYPE,
+    -- Principal Bucket Dimension
     CASE
         WHEN SNDPRINCIPAL_USD < 100 THEN 'A.<$100'
         WHEN SNDPRINCIPAL_USD >= 100 AND SNDPRINCIPAL_USD < 500 THEN 'B.$100-$500'
@@ -75,30 +27,175 @@ SELECT
         ELSE 'Unknown'
     END AS PPT_BUCKET,
     
+    -- Corridor Type Dimension (IMT/DMT)
+    CASE 
+        WHEN SNDCOUNTRY_CODE = RCVCOUNTRY_CODE THEN 'DOMESTIC' 
+        ELSE 'CROSS BORDER' 
+    END AS DIRECTION,
+    
+    -- Counts
     COUNT(DISTINCT SNDCUSTOMER_KEY) AS DISTINCT_CUSTOMERS,
     COUNT(DISTINCT TXN_ID) AS TOTAL_TXNS,
     
-    -- Principal
+    -- Principal Metrics
     SUM(SNDPRINCIPAL_USD) AS TOTAL_PRINCIPAL,
     AVG(SNDPRINCIPAL_USD) AS AVG_PRINCIPAL,
+    MEDIAN(SNDPRINCIPAL_USD) AS MEDIAN_PRINCIPAL,
     
-    -- Revenue
+    -- Revenue Metrics
     SUM(REVENUE) AS TOTAL_REVENUE,
     AVG(REVENUE) AS AVG_REVENUE,
+    MEDIAN(REVENUE) AS MEDIAN_REVENUE,
     
-    -- Fee
+    -- Fee Metrics
     SUM(FEE) AS TOTAL_FEE,
     AVG(FEE) AS AVG_FEE,
+    MEDIAN(FEE) AS MEDIAN_FEE,
     
-    -- FX Margin
+    -- FX Margin Metrics
     SUM(FX_MARGIN) AS TOTAL_FX_MARGIN,
     AVG(FX_MARGIN) AS AVG_FX_MARGIN,
+    MEDIAN(FX_MARGIN) AS MEDIAN_FX_MARGIN,
     
-    -- Percentages
-    AVG(REVENUE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_REVENUE_PCT,
-    AVG(FEE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FEE_PCT,
-    AVG(FX_MARGIN / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FX_PCT
+    -- Calculated Percentages
+    AVG(REVENUE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_REVENUE_PCT_OF_PRINCIPAL,
+    AVG(FEE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FEE_PCT_OF_PRINCIPAL,
+    AVG(FX_MARGIN / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FX_PCT_OF_PRINCIPAL,
+    
+    -- Revenue Composition
+    SUM(FEE) / NULLIF(SUM(REVENUE), 0) * 100 AS FEE_PCT_OF_REVENUE,
+    SUM(FX_MARGIN) / NULLIF(SUM(REVENUE), 0) * 100 AS FX_PCT_OF_REVENUE
 
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+WHERE SNDCOUNTRY_CODE = 'US'
+    AND DATE(rcvpaying_datetime) >= '2025-02-01'
+    AND DATE(rcvpaying_datetime) < '2026-02-01'
+    AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
+    AND SNDCUSTOMER_KEY IS NOT NULL
+GROUP BY PAYOUT_TYPE, CHANNEL_GROUP, PPT_BUCKET, DIRECTION
+ORDER BY PAYOUT_TYPE, CHANNEL_GROUP, PPT_BUCKET, DIRECTION;
+
+-- Quick view
+SELECT * FROM CAM_1746_CASH_VS_APN_ALL_DIMENSIONS
+LIMIT 100;
+
+
+-- ============================================================================
+-- VERIFICATION QUERIES
+-- ============================================================================
+-- Purpose: Ensure that averages from the merged query match individual queries
+-- ============================================================================
+
+-- -------------------------------------------------------
+-- VERIFICATION 1: Check PAYOUT_TYPE level aggregation
+-- -------------------------------------------------------
+-- This should match CAM_1746_CASH_VS_APN_OVERALL
+
+SELECT 
+    'From Merged Query' AS source,
+    PAYOUT_TYPE,
+    SUM(TOTAL_TXNS) AS total_txns,
+    SUM(TOTAL_PRINCIPAL) / SUM(TOTAL_TXNS) AS avg_principal,
+    SUM(TOTAL_REVENUE) / SUM(TOTAL_TXNS) AS avg_revenue,
+    SUM(TOTAL_FEE) / SUM(TOTAL_TXNS) AS avg_fee,
+    SUM(TOTAL_FX_MARGIN) / SUM(TOTAL_TXNS) AS avg_fx_margin
+FROM CAM_1746_CASH_VS_APN_ALL_DIMENSIONS
+GROUP BY PAYOUT_TYPE
+ORDER BY PAYOUT_TYPE;
+
+-- Compare with direct query
+SELECT 
+    'Direct Query' AS source,
+    PAYOUT_TYPE,
+    COUNT(DISTINCT TXN_ID) AS total_txns,
+    AVG(SNDPRINCIPAL_USD) AS avg_principal,
+    AVG(REVENUE) AS avg_revenue,
+    AVG(FEE) AS avg_fee,
+    AVG(FX_MARGIN) AS avg_fx_margin
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+WHERE SNDCOUNTRY_CODE = 'US'
+    AND DATE(rcvpaying_datetime) >= '2025-02-01'
+    AND DATE(rcvpaying_datetime) < '2026-02-01'
+    AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
+    AND SNDCUSTOMER_KEY IS NOT NULL
+GROUP BY PAYOUT_TYPE
+ORDER BY PAYOUT_TYPE;
+
+
+-- -------------------------------------------------------
+-- VERIFICATION 2: Check CHANNEL level aggregation
+-- -------------------------------------------------------
+-- This should match CAM_1746_CASH_VS_APN_BY_CHANNEL
+
+SELECT 
+    'From Merged Query' AS source,
+    PAYOUT_TYPE,
+    CHANNEL_GROUP,
+    SUM(TOTAL_TXNS) AS total_txns,
+    SUM(TOTAL_PRINCIPAL) / SUM(TOTAL_TXNS) AS avg_principal,
+    SUM(TOTAL_REVENUE) / SUM(TOTAL_TXNS) AS avg_revenue,
+    SUM(TOTAL_FEE) / SUM(TOTAL_TXNS) AS avg_fee
+FROM CAM_1746_CASH_VS_APN_ALL_DIMENSIONS
+GROUP BY PAYOUT_TYPE, CHANNEL_GROUP
+ORDER BY PAYOUT_TYPE, CHANNEL_GROUP;
+
+-- Compare with direct query
+SELECT 
+    'Direct Query' AS source,
+    PAYOUT_TYPE,
+    CASE
+        WHEN PRICING_CHANNEL IN ('WEB', 'APP') THEN 'DIGITAL'
+        WHEN PRICING_CHANNEL IN ('POS', 'TMT', 'AIR') THEN 'RETAIL'
+        ELSE 'OTHER'
+    END AS CHANNEL_GROUP,
+    COUNT(DISTINCT TXN_ID) AS total_txns,
+    AVG(SNDPRINCIPAL_USD) AS avg_principal,
+    AVG(REVENUE) AS avg_revenue,
+    AVG(FEE) AS avg_fee
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+WHERE SNDCOUNTRY_CODE = 'US'
+    AND DATE(rcvpaying_datetime) >= '2025-02-01'
+    AND DATE(rcvpaying_datetime) < '2026-02-01'
+    AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
+    AND SNDCUSTOMER_KEY IS NOT NULL
+GROUP BY PAYOUT_TYPE, CHANNEL_GROUP
+ORDER BY PAYOUT_TYPE, CHANNEL_GROUP;
+
+
+-- -------------------------------------------------------
+-- VERIFICATION 3: Check PPT_BUCKET level aggregation
+-- -------------------------------------------------------
+-- This should match CAM_1746_CASH_VS_APN_BY_PPT_BUCKET
+
+SELECT 
+    'From Merged Query' AS source,
+    PAYOUT_TYPE,
+    PPT_BUCKET,
+    SUM(TOTAL_TXNS) AS total_txns,
+    SUM(TOTAL_PRINCIPAL) / SUM(TOTAL_TXNS) AS avg_principal,
+    SUM(TOTAL_REVENUE) / SUM(TOTAL_TXNS) AS avg_revenue,
+    SUM(TOTAL_FEE) / SUM(TOTAL_TXNS) AS avg_fee
+FROM CAM_1746_CASH_VS_APN_ALL_DIMENSIONS
+GROUP BY PAYOUT_TYPE, PPT_BUCKET
+ORDER BY PPT_BUCKET, PAYOUT_TYPE;
+
+-- Compare with direct query
+SELECT 
+    'Direct Query' AS source,
+    PAYOUT_TYPE,
+    CASE
+        WHEN SNDPRINCIPAL_USD < 100 THEN 'A.<$100'
+        WHEN SNDPRINCIPAL_USD >= 100 AND SNDPRINCIPAL_USD < 500 THEN 'B.$100-$500'
+        WHEN SNDPRINCIPAL_USD >= 500 AND SNDPRINCIPAL_USD < 1000 THEN 'C.$500-$1,000'
+        WHEN SNDPRINCIPAL_USD >= 1000 AND SNDPRINCIPAL_USD < 2000 THEN 'D.$1,000-$2,000'
+        WHEN SNDPRINCIPAL_USD >= 2000 AND SNDPRINCIPAL_USD < 5000 THEN 'E.$2,000-$5,000'
+        WHEN SNDPRINCIPAL_USD >= 5000 THEN 'F.$5,000+'
+        ELSE 'Unknown'
+    END AS PPT_BUCKET,
+    COUNT(DISTINCT TXN_ID) AS total_txns,
+    AVG(SNDPRINCIPAL_USD) AS avg_principal,
+    AVG(REVENUE) AS avg_revenue,
+    AVG(FEE) AS avg_fee
 FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
 WHERE SNDCOUNTRY_CODE = 'US'
     AND DATE(rcvpaying_datetime) >= '2025-02-01'
@@ -108,102 +205,38 @@ WHERE SNDCOUNTRY_CODE = 'US'
 GROUP BY PAYOUT_TYPE, PPT_BUCKET
 ORDER BY PPT_BUCKET, PAYOUT_TYPE;
 
--- Verification Query
-SELECT * FROM CAM_1746_CASH_VS_APN_BY_PPT_BUCKET
-ORDER BY PPT_BUCKET, PAYOUT_TYPE;
 
+-- -------------------------------------------------------
+-- VERIFICATION 4: Check DIRECTION level aggregation
+-- -------------------------------------------------------
+-- This should match CAM_1746_CASH_VS_APN_BY_CORRIDOR_TYPE
 
--- ============================================================================
--- STEP 3: CASH VS APN BY CHANNEL
--- ============================================================================
--- Purpose: Compare pricing by channel (Digital vs Retail)
--- ============================================================================
-
-CREATE OR REPLACE TABLE CAM_1746_CASH_VS_APN_BY_CHANNEL AS
-SELECT
+SELECT 
+    'From Merged Query' AS source,
     PAYOUT_TYPE,
-    CASE
-        WHEN PRICING_CHANNEL IN ('WEB', 'APP') THEN 'DIGITAL'
-        WHEN PRICING_CHANNEL IN ('POS', 'TMT', 'AIR') THEN 'RETAIL'
-        ELSE 'OTHER'
-    END AS CHANNEL_GROUP,
-    
-    COUNT(DISTINCT SNDCUSTOMER_KEY) AS DISTINCT_CUSTOMERS,
-    COUNT(DISTINCT TXN_ID) AS TOTAL_TXNS,
-    
-    -- Principal
-    AVG(SNDPRINCIPAL_USD) AS AVG_PRINCIPAL,
-    MEDIAN(SNDPRINCIPAL_USD) AS MEDIAN_PRINCIPAL,
-    
-    -- Revenue
-    AVG(REVENUE) AS AVG_REVENUE,
-    MEDIAN(REVENUE) AS MEDIAN_REVENUE,
-    
-    -- Fee
-    AVG(FEE) AS AVG_FEE,
-    MEDIAN(FEE) AS MEDIAN_FEE,
-    
-    -- FX Margin
-    AVG(FX_MARGIN) AS AVG_FX_MARGIN,
-    MEDIAN(FX_MARGIN) AS MEDIAN_FX_MARGIN,
-    
-    -- Percentages
-    AVG(REVENUE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_REVENUE_PCT,
-    AVG(FEE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FEE_PCT,
-    AVG(FX_MARGIN / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FX_PCT
+    DIRECTION,
+    SUM(TOTAL_TXNS) AS total_txns,
+    SUM(TOTAL_PRINCIPAL) / SUM(TOTAL_TXNS) AS avg_principal,
+    SUM(TOTAL_REVENUE) / SUM(TOTAL_TXNS) AS avg_revenue,
+    SUM(TOTAL_FEE) / SUM(TOTAL_TXNS) AS avg_fee,
+    SUM(TOTAL_FX_MARGIN) / SUM(TOTAL_TXNS) AS avg_fx_margin
+FROM CAM_1746_CASH_VS_APN_ALL_DIMENSIONS
+GROUP BY PAYOUT_TYPE, DIRECTION
+ORDER BY DIRECTION, PAYOUT_TYPE;
 
-FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
-WHERE SNDCOUNTRY_CODE = 'US'
-    AND DATE(rcvpaying_datetime) >= '2025-02-01'
-    AND DATE(rcvpaying_datetime) < '2026-02-01'
-    AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
-    AND SNDCUSTOMER_KEY IS NOT NULL
-GROUP BY PAYOUT_TYPE, CHANNEL_GROUP
-ORDER BY CHANNEL_GROUP, PAYOUT_TYPE;
-
--- Verification Query
-SELECT * FROM CAM_1746_CASH_VS_APN_BY_CHANNEL
-ORDER BY CHANNEL_GROUP, PAYOUT_TYPE;
-
-
--- ============================================================================
--- STEP 4: CASH VS APN BY CORRIDOR TYPE (IMT vs DMT)
--- ============================================================================
--- Purpose: Compare pricing for International vs Domestic transactions
--- ============================================================================
-
-CREATE OR REPLACE TABLE CAM_1746_CASH_VS_APN_BY_CORRIDOR_TYPE AS
-SELECT
+-- Compare with direct query
+SELECT 
+    'Direct Query' AS source,
     PAYOUT_TYPE,
     CASE 
         WHEN SNDCOUNTRY_CODE = RCVCOUNTRY_CODE THEN 'DOMESTIC' 
         ELSE 'CROSS BORDER' 
     END AS DIRECTION,
-    
-    COUNT(DISTINCT SNDCUSTOMER_KEY) AS DISTINCT_CUSTOMERS,
-    COUNT(DISTINCT TXN_ID) AS TOTAL_TXNS,
-    
-    -- Principal
-    AVG(SNDPRINCIPAL_USD) AS AVG_PRINCIPAL,
-    MEDIAN(SNDPRINCIPAL_USD) AS MEDIAN_PRINCIPAL,
-    
-    -- Revenue
-    AVG(REVENUE) AS AVG_REVENUE,
-    MEDIAN(REVENUE) AS MEDIAN_REVENUE,
-    
-    -- Fee
-    AVG(FEE) AS AVG_FEE,
-    MEDIAN(FEE) AS MEDIAN_FEE,
-    
-    -- FX Margin
-    AVG(FX_MARGIN) AS AVG_FX_MARGIN,
-    MEDIAN(FX_MARGIN) AS MEDIAN_FX_MARGIN,
-    
-    -- Percentages
-    AVG(REVENUE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_REVENUE_PCT,
-    AVG(FEE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FEE_PCT,
-    AVG(FX_MARGIN / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FX_PCT
-
+    COUNT(DISTINCT TXN_ID) AS total_txns,
+    AVG(SNDPRINCIPAL_USD) AS avg_principal,
+    AVG(REVENUE) AS avg_revenue,
+    AVG(FEE) AS avg_fee,
+    AVG(FX_MARGIN) AS avg_fx_margin
 FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
 WHERE SNDCOUNTRY_CODE = 'US'
     AND DATE(rcvpaying_datetime) >= '2025-02-01'
@@ -213,348 +246,167 @@ WHERE SNDCOUNTRY_CODE = 'US'
 GROUP BY PAYOUT_TYPE, DIRECTION
 ORDER BY DIRECTION, PAYOUT_TYPE;
 
--- Verification Query
-SELECT * FROM CAM_1746_CASH_VS_APN_BY_CORRIDOR_TYPE
-ORDER BY DIRECTION, PAYOUT_TYPE;
+
+-- ============================================================================
+-- COMPREHENSIVE VERIFICATION SUMMARY
+-- ============================================================================
+-- Purpose: Single view to check if all levels match
+-- ============================================================================
+
+CREATE OR REPLACE TABLE CAM_1746_VERIFICATION_SUMMARY AS
+
+-- Overall Level
+SELECT 
+    'OVERALL' AS aggregation_level,
+    PAYOUT_TYPE AS dimension_value,
+    SUM(TOTAL_TXNS) AS txn_count,
+    SUM(TOTAL_PRINCIPAL) / SUM(TOTAL_TXNS) AS avg_principal_from_merged,
+    SUM(TOTAL_REVENUE) / SUM(TOTAL_TXNS) AS avg_revenue_from_merged,
+    SUM(TOTAL_FEE) / SUM(TOTAL_TXNS) AS avg_fee_from_merged
+FROM CAM_1746_CASH_VS_APN_ALL_DIMENSIONS
+GROUP BY PAYOUT_TYPE
+
+UNION ALL
+
+-- Channel Level
+SELECT 
+    'CHANNEL' AS aggregation_level,
+    CONCAT(PAYOUT_TYPE, ' - ', CHANNEL_GROUP) AS dimension_value,
+    SUM(TOTAL_TXNS) AS txn_count,
+    SUM(TOTAL_PRINCIPAL) / SUM(TOTAL_TXNS) AS avg_principal_from_merged,
+    SUM(TOTAL_REVENUE) / SUM(TOTAL_TXNS) AS avg_revenue_from_merged,
+    SUM(TOTAL_FEE) / SUM(TOTAL_TXNS) AS avg_fee_from_merged
+FROM CAM_1746_CASH_VS_APN_ALL_DIMENSIONS
+GROUP BY PAYOUT_TYPE, CHANNEL_GROUP
+
+UNION ALL
+
+-- PPT Bucket Level
+SELECT 
+    'PPT_BUCKET' AS aggregation_level,
+    CONCAT(PAYOUT_TYPE, ' - ', PPT_BUCKET) AS dimension_value,
+    SUM(TOTAL_TXNS) AS txn_count,
+    SUM(TOTAL_PRINCIPAL) / SUM(TOTAL_TXNS) AS avg_principal_from_merged,
+    SUM(TOTAL_REVENUE) / SUM(TOTAL_TXNS) AS avg_revenue_from_merged,
+    SUM(TOTAL_FEE) / SUM(TOTAL_TXNS) AS avg_fee_from_merged
+FROM CAM_1746_CASH_VS_APN_ALL_DIMENSIONS
+GROUP BY PAYOUT_TYPE, PPT_BUCKET
+
+UNION ALL
+
+-- Direction Level
+SELECT 
+    'DIRECTION' AS aggregation_level,
+    CONCAT(PAYOUT_TYPE, ' - ', DIRECTION) AS dimension_value,
+    SUM(TOTAL_TXNS) AS txn_count,
+    SUM(TOTAL_PRINCIPAL) / SUM(TOTAL_TXNS) AS avg_principal_from_merged,
+    SUM(TOTAL_REVENUE) / SUM(TOTAL_TXNS) AS avg_revenue_from_merged,
+    SUM(TOTAL_FEE) / SUM(TOTAL_TXNS) AS avg_fee_from_merged
+FROM CAM_1746_CASH_VS_APN_ALL_DIMENSIONS
+GROUP BY PAYOUT_TYPE, DIRECTION
+
+ORDER BY aggregation_level, dimension_value;
+
+-- View the summary
+SELECT * FROM CAM_1746_VERIFICATION_SUMMARY
+ORDER BY aggregation_level, dimension_value;
 
 
 -- ============================================================================
--- STEP 5: DETAILED REVENUE COMPOSITION BREAKDOWN
+-- IMPORTANT NOTE ON AVERAGES
 -- ============================================================================
--- Purpose: Understand the composition of revenue (Fee vs FX)
+/*
+KEY CONCEPT: Why averages match when properly aggregated
+
+The merged query stores granular metrics at the most detailed level
+(PAYOUT_TYPE + CHANNEL + PPT_BUCKET + DIRECTION).
+
+When you roll up to a higher level, you need to use WEIGHTED AVERAGES:
+- Correct: SUM(TOTAL_PRINCIPAL) / SUM(TOTAL_TXNS)
+- Incorrect: AVG(AVG_PRINCIPAL)
+
+Example:
+  Group A: 100 txns, avg principal = $200
+  Group B: 10 txns, avg principal = $1000
+  
+  Correct overall average = (100*$200 + 10*$1000) / (100+10) = $272.73
+  Incorrect average = ($200 + $1000) / 2 = $600
+
+The verification queries above use the correct weighted average approach,
+so they should match the individual dimension queries exactly.
+
+To get the same results from the merged table at any aggregation level:
+1. SUM the totals (TOTAL_TXNS, TOTAL_PRINCIPAL, TOTAL_REVENUE, etc.)
+2. Divide SUM(TOTAL_PRINCIPAL) / SUM(TOTAL_TXNS) to get AVG_PRINCIPAL
+3. Never use AVG(AVG_PRINCIPAL) - this will give incorrect results!
+*/
+
+
+-- ============================================================================
+-- USEFUL ROLLUP QUERIES FROM THE MERGED TABLE
 -- ============================================================================
 
-CREATE OR REPLACE TABLE CAM_1746_REVENUE_COMPOSITION AS
-SELECT
+-- Example 1: Get overall Cash vs APN comparison
+SELECT 
     PAYOUT_TYPE,
-    
-    -- Transaction Counts
-    COUNT(DISTINCT TXN_ID) AS TOTAL_TXNS,
-    
-    -- Revenue Components
-    SUM(REVENUE) AS TOTAL_REVENUE,
-    SUM(FEE) AS TOTAL_FEE,
-    SUM(FX_MARGIN) AS TOTAL_FX_MARGIN,
-    
-    -- Averages
-    AVG(REVENUE) AS AVG_REVENUE,
-    AVG(FEE) AS AVG_FEE,
-    AVG(FX_MARGIN) AS AVG_FX_MARGIN,
-    
-    -- Revenue Composition (what % comes from Fee vs FX)
-    SUM(FEE) / NULLIF(SUM(REVENUE), 0) * 100 AS FEE_PCT_OF_REVENUE,
-    SUM(FX_MARGIN) / NULLIF(SUM(REVENUE), 0) * 100 AS FX_PCT_OF_REVENUE,
-    
-    -- As % of Principal
-    AVG(FEE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FEE_AS_PCT_PRINCIPAL,
-    AVG(FX_MARGIN / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FX_AS_PCT_PRINCIPAL,
-    AVG(REVENUE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_REVENUE_AS_PCT_PRINCIPAL
-
-FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
-WHERE SNDCOUNTRY_CODE = 'US'
-    AND DATE(rcvpaying_datetime) >= '2025-02-01'
-    AND DATE(rcvpaying_datetime) < '2026-02-01'
-    AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
-    AND SNDCUSTOMER_KEY IS NOT NULL
+    SUM(TOTAL_TXNS) AS total_txns,
+    SUM(TOTAL_PRINCIPAL) / SUM(TOTAL_TXNS) AS avg_principal,
+    SUM(TOTAL_REVENUE) / SUM(TOTAL_TXNS) AS avg_revenue,
+    SUM(TOTAL_FEE) / SUM(TOTAL_TXNS) AS avg_fee
+FROM CAM_1746_CASH_VS_APN_ALL_DIMENSIONS
 GROUP BY PAYOUT_TYPE;
 
--- Verification Query
-SELECT * FROM CAM_1746_REVENUE_COMPOSITION
-ORDER BY PAYOUT_TYPE;
-
-
--- ============================================================================
--- STEP 6: COMBINED DIMENSIONAL ANALYSIS (CHANNEL + PPT BUCKET)
--- ============================================================================
--- Purpose: Deep dive into pricing across multiple dimensions
--- ============================================================================
-
-CREATE OR REPLACE TABLE CAM_1746_CASH_VS_APN_DETAILED AS
-SELECT
+-- Example 2: Get Channel breakdown only
+SELECT 
     PAYOUT_TYPE,
-    CASE
-        WHEN PRICING_CHANNEL IN ('WEB', 'APP') THEN 'DIGITAL'
-        WHEN PRICING_CHANNEL IN ('POS', 'TMT', 'AIR') THEN 'RETAIL'
-        ELSE 'OTHER'
-    END AS CHANNEL_GROUP,
-    CASE
-        WHEN SNDPRINCIPAL_USD < 100 THEN 'A.<$100'
-        WHEN SNDPRINCIPAL_USD >= 100 AND SNDPRINCIPAL_USD < 500 THEN 'B.$100-$500'
-        WHEN SNDPRINCIPAL_USD >= 500 AND SNDPRINCIPAL_USD < 1000 THEN 'C.$500-$1,000'
-        WHEN SNDPRINCIPAL_USD >= 1000 AND SNDPRINCIPAL_USD < 2000 THEN 'D.$1,000-$2,000'
-        WHEN SNDPRINCIPAL_USD >= 2000 AND SNDPRINCIPAL_USD < 5000 THEN 'E.$2,000-$5,000'
-        WHEN SNDPRINCIPAL_USD >= 5000 THEN 'F.$5,000+'
-        ELSE 'Unknown'
-    END AS PPT_BUCKET,
-    
-    COUNT(DISTINCT TXN_ID) AS TOTAL_TXNS,
-    
-    AVG(SNDPRINCIPAL_USD) AS AVG_PRINCIPAL,
-    AVG(REVENUE) AS AVG_REVENUE,
-    AVG(FEE) AS AVG_FEE,
-    AVG(FX_MARGIN) AS AVG_FX_MARGIN,
-    
-    AVG(REVENUE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_REVENUE_PCT,
-    AVG(FEE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FEE_PCT
+    CHANNEL_GROUP,
+    SUM(TOTAL_TXNS) AS total_txns,
+    SUM(TOTAL_PRINCIPAL) / SUM(TOTAL_TXNS) AS avg_principal,
+    SUM(TOTAL_REVENUE) / SUM(TOTAL_TXNS) AS avg_revenue
+FROM CAM_1746_CASH_VS_APN_ALL_DIMENSIONS
+GROUP BY PAYOUT_TYPE, CHANNEL_GROUP;
 
-FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
-WHERE SNDCOUNTRY_CODE = 'US'
-    AND DATE(rcvpaying_datetime) >= '2025-02-01'
-    AND DATE(rcvpaying_datetime) < '2026-02-01'
-    AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
-    AND SNDCUSTOMER_KEY IS NOT NULL
+-- Example 3: Get PPT Bucket breakdown only
+SELECT 
+    PAYOUT_TYPE,
+    PPT_BUCKET,
+    SUM(TOTAL_TXNS) AS total_txns,
+    SUM(TOTAL_PRINCIPAL) / SUM(TOTAL_TXNS) AS avg_principal,
+    SUM(TOTAL_REVENUE) / SUM(TOTAL_TXNS) AS avg_revenue
+FROM CAM_1746_CASH_VS_APN_ALL_DIMENSIONS
+GROUP BY PAYOUT_TYPE, PPT_BUCKET
+ORDER BY PPT_BUCKET;
+
+-- Example 4: Get Direction breakdown only
+SELECT 
+    PAYOUT_TYPE,
+    DIRECTION,
+    SUM(TOTAL_TXNS) AS total_txns,
+    SUM(TOTAL_PRINCIPAL) / SUM(TOTAL_TXNS) AS avg_principal,
+    SUM(TOTAL_REVENUE) / SUM(TOTAL_TXNS) AS avg_revenue,
+    SUM(TOTAL_FX_MARGIN) / SUM(TOTAL_TXNS) AS avg_fx_margin
+FROM CAM_1746_CASH_VS_APN_ALL_DIMENSIONS
+GROUP BY PAYOUT_TYPE, DIRECTION;
+
+-- Example 5: Get Channel + Direction (2 dimensions)
+SELECT 
+    PAYOUT_TYPE,
+    CHANNEL_GROUP,
+    DIRECTION,
+    SUM(TOTAL_TXNS) AS total_txns,
+    SUM(TOTAL_PRINCIPAL) / SUM(TOTAL_TXNS) AS avg_principal,
+    SUM(TOTAL_REVENUE) / SUM(TOTAL_TXNS) AS avg_revenue
+FROM CAM_1746_CASH_VS_APN_ALL_DIMENSIONS
+GROUP BY PAYOUT_TYPE, CHANNEL_GROUP, DIRECTION;
+
+-- Example 6: Get Channel + PPT Bucket (2 dimensions)
+SELECT 
+    PAYOUT_TYPE,
+    CHANNEL_GROUP,
+    PPT_BUCKET,
+    SUM(TOTAL_TXNS) AS total_txns,
+    SUM(TOTAL_PRINCIPAL) / SUM(TOTAL_TXNS) AS avg_principal,
+    SUM(TOTAL_REVENUE) / SUM(TOTAL_TXNS) AS avg_revenue
+FROM CAM_1746_CASH_VS_APN_ALL_DIMENSIONS
 GROUP BY PAYOUT_TYPE, CHANNEL_GROUP, PPT_BUCKET
-ORDER BY CHANNEL_GROUP, PPT_BUCKET, PAYOUT_TYPE;
-
--- Verification Query
-SELECT * FROM CAM_1746_CASH_VS_APN_DETAILED
-WHERE CHANNEL_GROUP = 'DIGITAL'
-ORDER BY PPT_BUCKET, PAYOUT_TYPE;
-
-
--- ============================================================================
--- STEP 7: MONTH-OVER-MONTH TREND ANALYSIS
--- ============================================================================
--- Purpose: See if pricing differences are consistent over time
--- ============================================================================
-
-CREATE OR REPLACE TABLE CAM_1746_CASH_VS_APN_MONTHLY_TREND AS
-SELECT
-    DATE_TRUNC('MONTH', rcvpaying_datetime) AS MTH_YR,
-    PAYOUT_TYPE,
-    
-    COUNT(DISTINCT SNDCUSTOMER_KEY) AS DISTINCT_CUSTOMERS,
-    COUNT(DISTINCT TXN_ID) AS TOTAL_TXNS,
-    
-    AVG(SNDPRINCIPAL_USD) AS AVG_PRINCIPAL,
-    AVG(REVENUE) AS AVG_REVENUE,
-    AVG(FEE) AS AVG_FEE,
-    AVG(FX_MARGIN) AS AVG_FX_MARGIN,
-    
-    AVG(REVENUE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_REVENUE_PCT,
-    AVG(FEE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS AVG_FEE_PCT
-
-FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
-WHERE SNDCOUNTRY_CODE = 'US'
-    AND DATE(rcvpaying_datetime) >= '2025-02-01'
-    AND DATE(rcvpaying_datetime) < '2026-02-01'
-    AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
-    AND SNDCUSTOMER_KEY IS NOT NULL
-GROUP BY MTH_YR, PAYOUT_TYPE
-ORDER BY MTH_YR, PAYOUT_TYPE;
-
--- Verification Query
-SELECT * FROM CAM_1746_CASH_VS_APN_MONTHLY_TREND
-ORDER BY MTH_YR, PAYOUT_TYPE;
-
-
--- ============================================================================
--- STEP 8: TOP CORRIDORS COMPARISON
--- ============================================================================
--- Purpose: Compare pricing for the top 10 corridors
--- ============================================================================
-
-CREATE OR REPLACE TABLE CAM_1746_CASH_VS_APN_TOP_CORRIDORS AS
-WITH top_corridors AS (
-    SELECT 
-        CONCAT(SNDCOUNTRY_CODE, '-', RCVCOUNTRY_CODE) AS CORRIDOR,
-        COUNT(DISTINCT TXN_ID) AS txn_count
-    FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
-    WHERE SNDCOUNTRY_CODE = 'US'
-        AND DATE(rcvpaying_datetime) >= '2025-02-01'
-        AND DATE(rcvpaying_datetime) < '2026-02-01'
-        AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
-    GROUP BY CORRIDOR
-    ORDER BY txn_count DESC
-    LIMIT 10
-)
-SELECT
-    txn.PAYOUT_TYPE,
-    CONCAT(txn.SNDCOUNTRY_CODE, '-', txn.RCVCOUNTRY_CODE) AS CORRIDOR,
-    
-    COUNT(DISTINCT txn.TXN_ID) AS TOTAL_TXNS,
-    
-    AVG(txn.SNDPRINCIPAL_USD) AS AVG_PRINCIPAL,
-    AVG(txn.REVENUE) AS AVG_REVENUE,
-    AVG(txn.FEE) AS AVG_FEE,
-    AVG(txn.FX_MARGIN) AS AVG_FX_MARGIN,
-    
-    AVG(txn.REVENUE / NULLIF(txn.SNDPRINCIPAL_USD, 0) * 100) AS AVG_REVENUE_PCT,
-    AVG(txn.FEE / NULLIF(txn.SNDPRINCIPAL_USD, 0) * 100) AS AVG_FEE_PCT
-
-FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW txn
-INNER JOIN top_corridors tc
-    ON CONCAT(txn.SNDCOUNTRY_CODE, '-', txn.RCVCOUNTRY_CODE) = tc.CORRIDOR
-WHERE txn.SNDCOUNTRY_CODE = 'US'
-    AND DATE(txn.rcvpaying_datetime) >= '2025-02-01'
-    AND DATE(txn.rcvpaying_datetime) < '2026-02-01'
-    AND txn.PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
-GROUP BY txn.PAYOUT_TYPE, CORRIDOR
-ORDER BY CORRIDOR, txn.PAYOUT_TYPE;
-
--- Verification Query
-SELECT * FROM CAM_1746_CASH_VS_APN_TOP_CORRIDORS
-ORDER BY CORRIDOR, PAYOUT_TYPE;
-
-
--- ============================================================================
--- STEP 9: SUMMARY COMPARISON VIEW
--- ============================================================================
--- Purpose: Side-by-side comparison for easy Excel export
--- ============================================================================
-
-CREATE OR REPLACE TABLE CAM_1746_CASH_VS_APN_SUMMARY_PIVOT AS
-WITH cash_data AS (
-    SELECT
-        'CASH' AS payout_type,
-        COUNT(DISTINCT SNDCUSTOMER_KEY) AS customers,
-        COUNT(DISTINCT TXN_ID) AS txns,
-        AVG(SNDPRINCIPAL_USD) AS avg_principal,
-        AVG(REVENUE) AS avg_revenue,
-        AVG(FEE) AS avg_fee,
-        AVG(FX_MARGIN) AS avg_fx,
-        AVG(REVENUE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS revenue_pct,
-        AVG(FEE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS fee_pct
-    FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
-    WHERE SNDCOUNTRY_CODE = 'US'
-        AND DATE(rcvpaying_datetime) >= '2025-02-01'
-        AND DATE(rcvpaying_datetime) < '2026-02-01'
-        AND PAYOUT_TYPE = 'CASH'
-        AND SNDCUSTOMER_KEY IS NOT NULL
-),
-account_data AS (
-    SELECT
-        'ACCOUNT' AS payout_type,
-        COUNT(DISTINCT SNDCUSTOMER_KEY) AS customers,
-        COUNT(DISTINCT TXN_ID) AS txns,
-        AVG(SNDPRINCIPAL_USD) AS avg_principal,
-        AVG(REVENUE) AS avg_revenue,
-        AVG(FEE) AS avg_fee,
-        AVG(FX_MARGIN) AS avg_fx,
-        AVG(REVENUE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS revenue_pct,
-        AVG(FEE / NULLIF(SNDPRINCIPAL_USD, 0) * 100) AS fee_pct
-    FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
-    WHERE SNDCOUNTRY_CODE = 'US'
-        AND DATE(rcvpaying_datetime) >= '2025-02-01'
-        AND DATE(rcvpaying_datetime) < '2026-02-01'
-        AND PAYOUT_TYPE = 'ACCOUNT'
-        AND SNDCUSTOMER_KEY IS NOT NULL
-)
-SELECT
-    'Customers' AS metric,
-    c.customers AS cash_value,
-    a.customers AS account_value,
-    a.customers - c.customers AS difference,
-    ROUND((a.customers - c.customers) * 100.0 / NULLIF(c.customers, 0), 2) AS pct_difference
-FROM cash_data c, account_data a
-
-UNION ALL
-
-SELECT
-    'Transactions' AS metric,
-    c.txns AS cash_value,
-    a.txns AS account_value,
-    a.txns - c.txns AS difference,
-    ROUND((a.txns - c.txns) * 100.0 / NULLIF(c.txns, 0), 2) AS pct_difference
-FROM cash_data c, account_data a
-
-UNION ALL
-
-SELECT
-    'Avg Principal (PPT)' AS metric,
-    c.avg_principal AS cash_value,
-    a.avg_principal AS account_value,
-    a.avg_principal - c.avg_principal AS difference,
-    ROUND((a.avg_principal - c.avg_principal) * 100.0 / NULLIF(c.avg_principal, 0), 2) AS pct_difference
-FROM cash_data c, account_data a
-
-UNION ALL
-
-SELECT
-    'Avg Revenue (RPT)' AS metric,
-    c.avg_revenue AS cash_value,
-    a.avg_revenue AS account_value,
-    a.avg_revenue - c.avg_revenue AS difference,
-    ROUND((a.avg_revenue - c.avg_revenue) * 100.0 / NULLIF(c.avg_revenue, 0), 2) AS pct_difference
-FROM cash_data c, account_data a
-
-UNION ALL
-
-SELECT
-    'Avg Fee' AS metric,
-    c.avg_fee AS cash_value,
-    a.avg_fee AS account_value,
-    a.avg_fee - c.avg_fee AS difference,
-    ROUND((a.avg_fee - c.avg_fee) * 100.0 / NULLIF(c.avg_fee, 0), 2) AS pct_difference
-FROM cash_data c, account_data a
-
-UNION ALL
-
-SELECT
-    'Avg FX Margin' AS metric,
-    c.avg_fx AS cash_value,
-    a.avg_fx AS account_value,
-    a.avg_fx - c.avg_fx AS difference,
-    ROUND((a.avg_fx - c.avg_fx) * 100.0 / NULLIF(c.avg_fx, 0), 2) AS pct_difference
-FROM cash_data c, account_data a
-
-UNION ALL
-
-SELECT
-    'Revenue as % of Principal' AS metric,
-    c.revenue_pct AS cash_value,
-    a.revenue_pct AS account_value,
-    a.revenue_pct - c.revenue_pct AS difference,
-    ROUND((a.revenue_pct - c.revenue_pct) * 100.0 / NULLIF(c.revenue_pct, 0), 2) AS pct_difference
-FROM cash_data c, account_data a
-
-UNION ALL
-
-SELECT
-    'Fee as % of Principal' AS metric,
-    c.fee_pct AS cash_value,
-    a.fee_pct AS account_value,
-    a.fee_pct - c.fee_pct AS difference,
-    ROUND((a.fee_pct - c.fee_pct) * 100.0 / NULLIF(c.fee_pct, 0), 2) AS pct_difference
-FROM cash_data c, account_data a;
-
--- Verification Query
-SELECT * FROM CAM_1746_CASH_VS_APN_SUMMARY_PIVOT;
-
-
--- ============================================================================
--- QUICK ANALYSIS QUERIES
--- ============================================================================
-
--- Quick Check 1: Overall comparison
-SELECT * FROM CAM_1746_CASH_VS_APN_OVERALL;
-
--- Quick Check 2: Which has higher fees?
-SELECT 
-    PAYOUT_TYPE,
-    AVG(FEE) AS avg_fee,
-    AVG(FX_MARGIN) AS avg_fx_margin,
-    AVG(REVENUE) AS avg_revenue
-FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
-WHERE SNDCOUNTRY_CODE = 'US'
-    AND DATE(rcvpaying_datetime) >= '2025-02-01'
-    AND DATE(rcvpaying_datetime) < '2026-02-01'
-    AND PAYOUT_TYPE IN ('ACCOUNT', 'CASH')
-GROUP BY PAYOUT_TYPE;
-
--- Quick Check 3: Principal distribution
-SELECT 
-    PAYOUT_TYPE,
-    CASE
-        WHEN SNDPRINCIPAL_USD < 100 THEN '<$100'
-        WHEN SNDPRINCIPAL_USD >= 100 AND SNDPRINCIPAL_USD < 500 THEN '$100-$500'
-        WHEN SNDPRINCIPAL_USD >= 500 AND SNDPRINCIPAL_USD < 1000 THEN '$500-$1,000'
-        WHEN SNDPRINCIPAL_USD >= 1000 THEN '$1,000+'
-    END AS principal_bucket,
-    COUNT(DISTINCT TXN_ID) AS txns,
-    AVG(FEE) AS avg_fee,
-    AVG(REVENUE) AS avg_revenue
-FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
-WHERE SNDCOUNTRY_CODE = 'US'
-    AND DATE(rcvpaying_datetime) >= '2025-02-01'
-    AN
+ORDER BY CHANNEL_GROUP, PPT_BUCKET;
