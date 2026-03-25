@@ -119,3 +119,13 @@ SELECT
     SUM(TOTAL_FX_MARGIN) / SUM(TOTAL_TXNS) AS FXPT
 FROM CAM_1746_CASH_VS_APN_ALL_DIMENSIONS
 GROUP BY ALL;
+
+PAYOUT_TYPE	TOTAL_TXNS	PPT	RPT	FPT	FXPT
+ACCOUNT	32912488	499.42185036	9.05821254	5.5424697473	3.5157427907
+CASH	78363076	340.11624725	11.29352936	8.8871260393	2.4064033182
+From the above data we can say that even if the Average principal sent per txn is higher , the revenue generated for each 
+txn is lower due to the lower fee charged for each txn in account compared with cash though the average FX is higher for 
+account. Articulate the above as well
+Now another hypothesis that i want to check is The Revenue generated per customer (RPC) is higher for APN senders when compared
+to overall, this could be due to the higher number of txns by APN Senders , could we do a simple hypothesis like the above for this as 
+well. So we can write some key takeaways.
