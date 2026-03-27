@@ -19,3 +19,22 @@ FROM (
 ) t
 WHERE registered_flag = 'F'
   AND COALESCE(verified_flag, '') != 'Y';
+Hi Team,
+
+for the MEPA region, we would need List of GID and UMN of customers who have registered and not Verified. across below market
+
+UAE
+
+Saudi Arabia
+
+Jordan
+
+Bahrain
+
+Kuwait
+
+Qatar
+
+Would need the GID and UMN market wise along with the email and app marketable. help me create the entire script , 
+keep the first table as it is then join it with the customer master table and use the logic for email marketable & 
+the global holdout flag and then create the final pull.
