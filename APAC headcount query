@@ -1,27 +1,63 @@
-Hi there,
+CAR-960
 
-We would like to conduct a campaign measurement of Abandoned Cart Journey before launching into the A/B testing into US Market. The objective is to understand the performance impact of including a 50% off promo code on fees in Wave 2.
+ID of customers in Spain for CEM
+Description
+We need to have a list of Galactic IDs of digital and retail active and lapsed customers
+that are resident or transact at least once in the last 2 year (R24) form the following cities:
+Madrid, Vitoria, Valencia, Marbella, Coruña and Pontevedra.
 
-Submitted
+Hi @Camilla Lanz ,
 
-Campaign Launch Date
+Could you please help me understand the objective of this request? Are we planning to use this audience for a specific campaign? If so, could you share what the campaign is about and how this targeting will be applied?
 
-Campaign Name
+Additionally, I wanted to clarify the criteria you mentioned regarding “resident or transacted.” Does this mean you would like to include:
 
-2023-12-21
+Customers who are registered in the listed cities (Madrid, Vitoria, Valencia, Marbella, Coruña, and Pontevedra), regardless of whether they have transacted, and
 
-2024-05-24
+Customers who may not be registered in these cities but have transacted at least once there?
 
-RevampedAbandonedCart
+Finally, for the segmentation:
 
-Journey flow:
+Active refers to R12 Active,
 
-Wave 1: Customer receives a generic reminder to complete their transaction.
+Lapsed refers to R13–R24, correct?
 
-Wave 2: If they still don’t complete it, three days later they receive the next message.
+Please let me know if my understanding aligns with your requirements.
 
-In the current logic, they would receive a 50% off promo code only if they haven’t received a promo in their past three entries.
+Thanks!
 
-As per some strategies, there are different conditions per country, some countries have 50% promo codes, some other countries have only one wave and no promo codes
+CC:@Subhabrata Paul @Ashish Jadhav @Shanker Choudhary 
 
-Goal: Determine which version delivers higher conversion and overall performance.
+
+
+
+Reply
+
+Edit
+
+Delete
+
+Camilla Lanz
+
+8 minutes ago
+@Austin Mathew Hi, sure let me clarify.
+
+The campaign is about showing all the services that are present in our owned stores in Spain. For this we want to target all the customers (digital and retail) that live in the cities where we have owned stores.
+
+Resident and transact means both points listed by you:
+
+Customers who are registered in the listed cities (Madrid, Vitoria, Valencia, Marbella, Coruña, and Pontevedra), regardless of whether they have transacted, and
+
+Customers who may not be registered in these cities but have transacted at least once there
+
+Finally segmentation is fine:
+
+Finally, for the segmentation:
+
+Active refers to R12 Active,
+
+Lapsed refers to R13–R24
+
+Thanks
+
+Camilla
