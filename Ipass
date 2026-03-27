@@ -1,40 +1,16 @@
-CREATE OR REPLACE TABLE CAR_963_REGISTERED_NOT_VERFIED_CUSTS AS
-SELECT *
-FROM (
-    SELECT DISTINCT 
-        cu.galactic_id, 
-        cu.customer_umn,
-        cu.customer_category AS registered_flag,
-        cv.verification_status AS verified_flag
-    FROM WUDATA_UCD.WUDNA.VW_PUBLIC_CUSTOMER cu
-    INNER JOIN WUDATA_UCD.WUDNA.VW_PUBLIC_ADDRESS_RAW ar 
-        ON ar.customer_id = cu.customer_id 
-        AND UPPER(ar.country_code) IN ('AE','SA','JO','BH','KW','QA')
-    LEFT JOIN WUDATA_UCD.WUDNA.VW_PUBLIC_CUSTOMER_VERIFICATION cv 
-        ON cv.customer_id = cu.customer_id
-        AND cv.verification_flag_type_id = 1
-        AND cv.channel_type = 1
-    WHERE DATE(cu.customer_created_date) >= '2025-03-25'
-      AND DATE(cu.customer_created_date) < '2026-03-25'
-) t
-WHERE registered_flag = 'F'
-  AND COALESCE(verified_flag, '') != 'Y';
-Hi Team,
-
-for the MEPA region, we would need List of GID and UMN of customers who have registered and not Verified. across below market
-
-UAE
-
-Saudi Arabia
-
-Jordan
-
-Bahrain
-
-Kuwait
-
-Qatar
-
-Would need the GID and UMN market wise along with the email and app marketable. help me create the entire script , 
-keep the first table as it is then join it with the customer master table and use the logic for email marketable & 
-the global holdout flag and then create the final pull.
+SELECT
+    c.customer_key,
+    c.country_code,
+    CASE
+        WHEN c.marketing_flag             = 'Y'
+         AND c.email_address_on_file_flag = 'Y'
+         AND c.opt_email                  = 'I'            THEN 'Y'
+        ELSE 'N'
+    END                                                     AS email_marketable_flag,
+    CASE
+        WHEN c.marketing_flag             = 'Y'
+         AND c.mobile_number_on_file_flag = 'Y'
+         AND c.opt_sms                    = 'I'            THEN 'Y'
+        ELSE 'N'
+    END                                                     AS sms_marketable_flag
+FROM  WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c 
