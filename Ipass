@@ -14,3 +14,5 @@ SELECT
         ELSE 'N'
     END                                                     AS sms_marketable_flag
 FROM  WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c 
+This is how we get the marketability from WUDNA_CUSTOMER_MASTER_VW table. we can join this table and the 
+first table on customer_key and galatic_id.
