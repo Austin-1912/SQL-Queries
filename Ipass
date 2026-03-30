@@ -1,166 +1,86 @@
-Hi @Camilla Lanz ,
+Got it — much cleaner. Customer master as the spine (for holdout), left join the two txn tables, flags derived directly, simple CASE for segment.
 
-Could you please help me understand the objective of this request? Are we planning to use this audience for a specific campaign? If so, could you share what the campaign is about and how this targeting will be applied?
-
-Additionally, I wanted to clarify the criteria you mentioned regarding “resident or transacted.” Does this mean you would like to include:
-
-Customers who are registered in the listed cities (Madrid, Vitoria, Valencia, Marbella, Coruña, and Pontevedra), regardless of whether they have transacted, and
-
-Customers who may not be registered in these cities but have transacted at least once there?
-
-Finally, for the segmentation:
-
-Active refers to R12 Active,
-
-Lapsed refers to R13–R24, correct?
-RNT - Customers who have registered but have not transacted
-
-Please let me know if my understanding aligns with your requirements.
-
-Thanks!
-
-CC:@Subhabrata Paul @Ashish Jadhav @Shanker Choudhary 
+```sql
+-- ================================================================
+-- CAR_960 | Spain Owned Stores | Target Audience Build
+-- ================================================================
 
 
-
-
-Reply
-
-Edit
-
-Delete
-
-Camilla Lanz
-
-4 days ago
-@Austin Mathew Hi, sure let me clarify.
-
-The campaign is about showing all the services that are present in our owned stores in Spain. For this we want to target all the customers (digital and retail) that live in the cities where we have owned stores.
-
-Resident and transact means both points listed by you:
-
-Customers who are registered in the listed cities (Madrid, Vitoria, Valencia, Marbella, Coruña, and Pontevedra), regardless of whether they have transacted, and
-
-Customers who may not be registered in these cities but have transacted at least once there
-
-Finally segmentation is fine:
-
-Finally, for the segmentation:
-
-Active refers to R12 Active,
-
-Lapsed refers to R13–R24
-RNT refers to customers who have registered in last 2 years but have not transacted in the last 2 years
-
-Thanks
-
-Camilla
-
-The code for the digital txns is as below:
-SELECT DISTINCT opacket_sc_galacticid, opacket_sender_city
+-- Table 1: Digital transactions — one row per customer, most recent txn date
+CREATE OR REPLACE TABLE CAR_960_DIGITAL_TXN AS
+SELECT
+    opacket_sc_galacticid               AS customer_key,
+    MAX(DATE(opacket_transactiontime))  AS last_digital_txn_date
 FROM WUDNA.SUMMARY_GEN.MATCHEDTRANSACTION_OPACKET_VW
 WHERE opacket_sender_country = 'ES'
   AND opacket_sender_city IN (
-        'MADRID CAPITAL',
-        'LA CORUÑA',
-        'MOLLABAO PONTEVEDRA',
-        'SAN PEDRO MARBELLA',
-        'LLUTXENT- VALENCIA',
-        'PROVINCIA DE MADRID',
-        'MUNICIPIO DE MADRID',
-        'ALDAIA VALENCIA',
-        'ALBAL VALENCIA',
-        'VALENCIA CAPITAL',
-        'OPORTO MADRID',
-        'EL PERELLONET-VALENCIA',
-        'LA ELIANA VALENCIA',
-        'LAS ROZAS  DE MADRID',
-        'LEGANÉS MADRID',
-        'MADRID, ALCOBENDAS',
-        'MARBELLA NUEVA ANDALUCIA',
-        'PUZOL VALENCIA',
-        'BUNOL VALENCIA',
-        'VALENCIA CENTRO',
-        'BENIMACLET - VALENCIA',
-        'ALCOBENDAS MADRID',
-        'ROCAFORT, VALENCIA',
-        'TORRENT VALENCIA',
-        'VALENCIA CATARROJA',
-        'VITORIA- GASTEIZ',
-        'GANDIA , VALENCIA',
-        'BUNOL-VALENCIA',
-        'MADRID MOSTOLES',
-        'MADRID GETAFE',
-        'VALENCIA ESPAÑA',
-        'BENIMAMET-VALENCIA',
-        'NAQUERA VALENCIA',
-        'MARBELLA',
-        'BARRO PONTEVEDRA',
-        'TRES CANTOS- MADRID',
-        'MADRID',
-        'MAJADAHONDA MADRID',
-        'VIGO PONTEVEDRA',
-        'MADRID MADRID',
-        'CHESTE VALENCIA',
-        'PONTEVEDRA CAPITAL',
-        'ENGUERA VALENCIA',
-        'VITORIA-GASTEIZ',
-        'VALENCIA ALCASSER',
-        'ALGINET VALENCIA',
-        'VITORIA',
-        'COMUNIDAD DE MADRID',
-        'VALDEMORO, MADRID',
-        'PONTEVEDRA',
-        'A CORUÑA',
-        'CORUÑA',
-        'LAS ROZAS DE MADRID',
-        'MISLATA VALENCIA',
-        'NUEVA ANDALUCIA, MARBELLA',
-        'MADRID CITY',
-        'HUMANES DE MADRID',
-        'LALIN PONTEVEDRA',
-        'RIO REAL MARBELLA',
-        'MADRID CENTRO',
-        'MARIN PONTEVEDRA',
-        'Madrid',
-        'PARLA MADRID',
-        'MISLATA, VALENCIA',
-        'VALENCIA, BENIMACLET',
-        'CIUDAD DE VALENCIA',
-        'VALENCIA',
-        'VALENCIA ALFAFAR',
-        'MADRID, MADRID, ESPANA'
+        'MADRID CAPITAL','LA CORUÑA','MOLLABAO PONTEVEDRA','SAN PEDRO MARBELLA',
+        'LLUTXENT- VALENCIA','PROVINCIA DE MADRID','MUNICIPIO DE MADRID','ALDAIA VALENCIA',
+        'ALBAL VALENCIA','VALENCIA CAPITAL','OPORTO MADRID','EL PERELLONET-VALENCIA',
+        'LA ELIANA VALENCIA','LAS ROZAS  DE MADRID','LEGANÉS MADRID','MADRID, ALCOBENDAS',
+        'MARBELLA NUEVA ANDALUCIA','PUZOL VALENCIA','BUNOL VALENCIA','VALENCIA CENTRO',
+        'BENIMACLET - VALENCIA','ALCOBENDAS MADRID','ROCAFORT, VALENCIA','TORRENT VALENCIA',
+        'VALENCIA CATARROJA','VITORIA- GASTEIZ','GANDIA , VALENCIA','BUNOL-VALENCIA',
+        'MADRID MOSTOLES','MADRID GETAFE','VALENCIA ESPAÑA','BENIMAMET-VALENCIA',
+        'NAQUERA VALENCIA','MARBELLA','BARRO PONTEVEDRA','TRES CANTOS- MADRID',
+        'MADRID','MAJADAHONDA MADRID','VIGO PONTEVEDRA','MADRID MADRID','CHESTE VALENCIA',
+        'PONTEVEDRA CAPITAL','ENGUERA VALENCIA','VITORIA-GASTEIZ','VALENCIA ALCASSER',
+        'ALGINET VALENCIA','VITORIA','COMUNIDAD DE MADRID','VALDEMORO, MADRID','PONTEVEDRA',
+        'A CORUÑA','CORUÑA','LAS ROZAS DE MADRID','MISLATA VALENCIA',
+        'NUEVA ANDALUCIA, MARBELLA','MADRID CITY','HUMANES DE MADRID','LALIN PONTEVEDRA',
+        'RIO REAL MARBELLA','MADRID CENTRO','MARIN PONTEVEDRA','Madrid','PARLA MADRID',
+        'MISLATA, VALENCIA','VALENCIA, BENIMACLET','CIUDAD DE VALENCIA','VALENCIA',
+        'VALENCIA ALFAFAR','MADRID, MADRID, ESPANA'
   )
   AND DATE(opacket_transactiontime) >= '2024-03-25'
-  AND DATE(opacket_transactiontime) <  '2026-03-25';
+  AND DATE(opacket_transactiontime) <  '2026-03-25'
+GROUP BY 1;
 
-The code for retail txn is as below: 
-SELECT DISTINCT
-       tx.sndcustomer_key,
-       ag.city
+
+-- Table 2: Retail transactions — one row per customer, most recent txn date
+CREATE OR REPLACE TABLE CAR_960_RETAIL_TXN AS
+SELECT
+    tx.sndcustomer_key                  AS customer_key,
+    MAX(DATE(tx.RCVPAYING_DATETIME))    AS last_retail_txn_date
 FROM WUDNA.SUMMARY_GEN.AGENT_SUMMARY_VW ag
 JOIN WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW tx
   ON ag.agent_number = tx.sndagent_number
-WHERE UPPER(TRIM(ag.city)) IN (
-        'MADRID',
-        'VITORIA',
-        'VALENCIA',
-        'MARBELLA',
-        'CORUNA',
-        'PONTEVEDRA'
-      )
-and DATE(RCVPAYING_DATETIME)  >= '2024-03-25'
-  AND DATE(RCVPAYING_DATETIME) <  '2026-03-25';
+WHERE UPPER(TRIM(ag.city)) IN ('MADRID','VITORIA','VALENCIA','MARBELLA','CORUNA','PONTEVEDRA')
+  AND DATE(tx.RCVPAYING_DATETIME) >= '2024-03-25'
+  AND DATE(tx.RCVPAYING_DATETIME) <  '2026-03-25'
+GROUP BY 1;
 
-And for the registered Customers list for the mentioned cities the code is as below:
-select distinct customer_key, city from WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW 
-where city in ('Madrid', 'Vitoria', 'Valencia',' Marbella', 'CORUNA', 'Pontevedra')
-and date(first_registration_date) >= '2024-03-25'
-  AND DATE(first_registration_date) <  '2026-03-25';
 
-Now these are the 3 tables that we are going to use and we are going to join these three tables based on opacket_sc_galactic_id, 
-sndcustomer_key and customer_key. Also we need to created the segments in the transacted tables like R12 Active and R24 lapsed,
-Also RNT would be customers who are present in the customer master table but are not present in either digital txn or retail txn ,
-they would be considered as RNT Customers. Please create a structured SQL Script for me , 
-Create short and simple tables which proper data flow for this.
-CREATE OR REPLACE TABLE CAR_960_ begin the table names in this format.
+-- Table 3: Final output
+-- Base: all customers registered in target cities (drives RNT + pulls holdout)
+-- Left join both txn tables → flags + segment assignment
+CREATE OR REPLACE TABLE CAR_960_FINAL AS
+SELECT
+    cm.customer_key,
+    cm.global_holdout_flag,
+    DATE(cm.first_registration_date)    AS first_registration_date,
+    d.last_digital_txn_date,
+    rt.last_retail_txn_date,
+    CASE WHEN d.customer_key  IS NOT NULL THEN 1 ELSE 0 END AS is_digital_txn,
+    CASE WHEN rt.customer_key IS NOT NULL THEN 1 ELSE 0 END AS is_retail_txn,
+    CASE
+        WHEN d.customer_key IS NULL
+         AND rt.customer_key IS NULL
+         AND DATE(cm.first_registration_date) >= '2024-03-25'  THEN 'RNT'
+        WHEN d.last_digital_txn_date  >= '2025-03-25'
+          OR rt.last_retail_txn_date  >= '2025-03-25'          THEN 'R12 Active'
+        ELSE 'R13-R24 Lapsed'
+    END AS segment
+FROM WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
+LEFT JOIN CAR_960_DIGITAL_TXN  d  ON d.customer_key  = cm.customer_key
+LEFT JOIN CAR_960_RETAIL_TXN   rt ON rt.customer_key = cm.customer_key
+WHERE UPPER(TRIM(cm.city)) IN ('MADRID','VITORIA','VALENCIA','MARBELLA','CORUNA','PONTEVEDRA');
+```
+
+---
+
+Two things to note:
+
+**RNT scope** — RNT only fires for customers registered within the last 2 years (`>= '2024-03-25'`). Customers registered earlier with no transactions fall into `'R13-R24 Lapsed'` by the ELSE. If you want to exclude those entirely, add `WHERE segment != 'R13-R24 Lapsed' OR last_digital_txn_date IS NOT NULL OR last_retail_txn_date IS NOT NULL` — but flag it with Camilla first.
+
+**Transacted-not-registered** — since customer master is the LEFT spine, customers who transacted in these cities but registered with a different city won't appear. If Camilla confirms those should be included, we'd need a small UNION on the spine before the final join.
