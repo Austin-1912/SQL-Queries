@@ -1,19 +1,11 @@
-Got it — much cleaner. Customer master as the spine (for holdout), left join the two txn tables, flags derived directly, simple CASE for segment.
-
-```sql
--- ================================================================
--- CAR_960 | Spain Owned Stores | Target Audience Build
--- ================================================================
-
-
--- Table 1: Digital transactions — one row per customer, most recent txn date
+- Table 1: Digital transactions — one row per customer, most recent txn date
 CREATE OR REPLACE TABLE CAR_960_DIGITAL_TXN AS
 SELECT
     opacket_sc_galacticid               AS customer_key,
     MAX(DATE(opacket_transactiontime))  AS last_digital_txn_date
 FROM WUDNA.SUMMARY_GEN.MATCHEDTRANSACTION_OPACKET_VW
 WHERE opacket_sender_country = 'ES'
-  AND opacket_sender_city IN (
+  AND UPPER(opacket_sender_city) IN (
         'MADRID CAPITAL','LA CORUÑA','MOLLABAO PONTEVEDRA','SAN PEDRO MARBELLA',
         'LLUTXENT- VALENCIA','PROVINCIA DE MADRID','MUNICIPIO DE MADRID','ALDAIA VALENCIA',
         'ALBAL VALENCIA','VALENCIA CAPITAL','OPORTO MADRID','EL PERELLONET-VALENCIA',
@@ -36,7 +28,6 @@ WHERE opacket_sender_country = 'ES'
   AND DATE(opacket_transactiontime) <  '2026-03-25'
 GROUP BY 1;
 
-
 -- Table 2: Retail transactions — one row per customer, most recent txn date
 CREATE OR REPLACE TABLE CAR_960_RETAIL_TXN AS
 SELECT
@@ -45,42 +36,75 @@ SELECT
 FROM WUDNA.SUMMARY_GEN.AGENT_SUMMARY_VW ag
 JOIN WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW tx
   ON ag.agent_number = tx.sndagent_number
-WHERE UPPER(TRIM(ag.city)) IN ('MADRID','VITORIA','VALENCIA','MARBELLA','CORUNA','PONTEVEDRA')
+WHERE UPPER(ag.city) IN ('MADRID','VITORIA','VALENCIA','MARBELLA','CORUNA','PONTEVEDRA')
   AND DATE(tx.RCVPAYING_DATETIME) >= '2024-03-25'
   AND DATE(tx.RCVPAYING_DATETIME) <  '2026-03-25'
 GROUP BY 1;
 
+-- Table 3: Final UNION
+CREATE OR REPLACE TABLE CAR_960_BASE_CUSTOMERS AS
+SELECT customer_key FROM CAR_960_DIGITAL_TXN
+UNION
+SELECT customer_key FROM CAR_960_RETAIL_TXN
+UNION
+SELECT customer_key
+FROM WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW
+WHERE UPPER(city) IN (
+  'MADRID','VITORIA','VALENCIA','MARBELLA','CORUNA','PONTEVEDRA')
+  and DATE(first_registration_date) >= '2024-03-25'
+  and DATE(first_registration_date) < '2026-03-25'
+;
 
--- Table 3: Final output
--- Base: all customers registered in target cities (drives RNT + pulls holdout)
--- Left join both txn tables → flags + segment assignment
 CREATE OR REPLACE TABLE CAR_960_FINAL AS
 SELECT
-    cm.customer_key,
-    cm.global_holdout_flag,
-    DATE(cm.first_registration_date)    AS first_registration_date,
+    base.customer_key,
+
+    cm.global_holdout,
+    DATE(cm.first_registration_date) AS first_registration_date,
+
     d.last_digital_txn_date,
     rt.last_retail_txn_date,
+
     CASE WHEN d.customer_key  IS NOT NULL THEN 1 ELSE 0 END AS is_digital_txn,
     CASE WHEN rt.customer_key IS NOT NULL THEN 1 ELSE 0 END AS is_retail_txn,
+
     CASE
         WHEN d.customer_key IS NULL
          AND rt.customer_key IS NULL
-         AND DATE(cm.first_registration_date) >= '2024-03-25'  THEN 'RNT'
-        WHEN d.last_digital_txn_date  >= '2025-03-25'
-          OR rt.last_retail_txn_date  >= '2025-03-25'          THEN 'R12 Active'
-        ELSE 'R13-R24 Lapsed'
+         AND cm.customer_key IS NOT NULL
+         AND DATE(cm.first_registration_date) >= '2024-03-25'
+            THEN 'RNT'
+
+        WHEN d.last_digital_txn_date >= '2025-03-25'
+          OR rt.last_retail_txn_date >= '2025-03-25'
+            THEN 'R12 Active'
+
+        WHEN d.last_digital_txn_date >= '2024-03-25'
+          OR rt.last_retail_txn_date >= '2024-03-25'
+            THEN 'R13-R24 Lapsed'
+
+        ELSE 'OTHER'
     END AS segment
-FROM WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
-LEFT JOIN CAR_960_DIGITAL_TXN  d  ON d.customer_key  = cm.customer_key
-LEFT JOIN CAR_960_RETAIL_TXN   rt ON rt.customer_key = cm.customer_key
-WHERE UPPER(TRIM(cm.city)) IN ('MADRID','VITORIA','VALENCIA','MARBELLA','CORUNA','PONTEVEDRA');
-```
 
----
+FROM CAR_960_BASE_CUSTOMERS base
+LEFT JOIN WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
+       ON base.customer_key = cm.customer_key
+LEFT JOIN CAR_960_DIGITAL_TXN d
+       ON base.customer_key = d.customer_key
+LEFT JOIN CAR_960_RETAIL_TXN rt
+       ON base.customer_key = rt.customer_key;
 
-Two things to note:
+select * from CAR_960_FINAL;
 
-**RNT scope** — RNT only fires for customers registered within the last 2 years (`>= '2024-03-25'`). Customers registered earlier with no transactions fall into `'R13-R24 Lapsed'` by the ELSE. If you want to exclude those entirely, add `WHERE segment != 'R13-R24 Lapsed' OR last_digital_txn_date IS NOT NULL OR last_retail_txn_date IS NOT NULL` — but flag it with Camilla first.
-
-**Transacted-not-registered** — since customer master is the LEFT spine, customers who transacted in these cities but registered with a different city won't appear. If Camilla confirms those should be included, we'd need a small UNION on the spine before the final join.
+i somewhat changed the code, the reason for that was the current logic was Audience must be customers whose registered city is one of these locations.
+however the logic should be Customers who either reside in OR transact in these cities. This is the reason i have updated the code, 
+however there's another issue i am facing is to show validation on date.
+select customer_key, min(last_digital_txn_date), min(last_retail_txn_date),
+max(last_digital_txn_date), max(last_retail_txn_date)
+from  CAR_960_FINAL
+where segment = 'R12 Active'
+group by 1; when i run this code , i can see the min date to be 2024 march , the reason for this is as we have written 
+d.last_digital_txn_date >= '2025-03-25'
+          OR rt.last_retail_txn_date >= '2025-03-25'
+            THEN 'R12 Active' so how can i show the validations , help me do that, also am i missing any data from digital 
+or retail txn tables ? please check the code.
