@@ -1,7 +1,8 @@
-- Table 1: Digital transactions — one row per customer, most recent txn date
+-- Table 1: Digital transactions — one row per customer, most recent txn date
 CREATE OR REPLACE TABLE CAR_960_DIGITAL_TXN AS
 SELECT
     opacket_sc_galacticid               AS customer_key,
+    opacket_sender_city as city,
     MAX(DATE(opacket_transactiontime))  AS last_digital_txn_date
 FROM WUDNA.SUMMARY_GEN.MATCHEDTRANSACTION_OPACKET_VW
 WHERE opacket_sender_country = 'ES'
@@ -26,12 +27,13 @@ WHERE opacket_sender_country = 'ES'
   )
   AND DATE(opacket_transactiontime) >= '2024-03-25'
   AND DATE(opacket_transactiontime) <  '2026-03-25'
-GROUP BY 1;
+GROUP BY ALL;
 
 -- Table 2: Retail transactions — one row per customer, most recent txn date
 CREATE OR REPLACE TABLE CAR_960_RETAIL_TXN AS
 SELECT
     tx.sndcustomer_key                  AS customer_key,
+    ag.city,
     MAX(DATE(tx.RCVPAYING_DATETIME))    AS last_retail_txn_date
 FROM WUDNA.SUMMARY_GEN.AGENT_SUMMARY_VW ag
 JOIN WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW tx
@@ -39,15 +41,15 @@ JOIN WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW tx
 WHERE UPPER(ag.city) IN ('MADRID','VITORIA','VALENCIA','MARBELLA','CORUNA','PONTEVEDRA')
   AND DATE(tx.RCVPAYING_DATETIME) >= '2024-03-25'
   AND DATE(tx.RCVPAYING_DATETIME) <  '2026-03-25'
-GROUP BY 1;
+GROUP BY all;
 
 -- Table 3: Final UNION
 CREATE OR REPLACE TABLE CAR_960_BASE_CUSTOMERS AS
-SELECT customer_key FROM CAR_960_DIGITAL_TXN
+SELECT customer_key,city  FROM CAR_960_DIGITAL_TXN
 UNION
-SELECT customer_key FROM CAR_960_RETAIL_TXN
+SELECT customer_key, city FROM CAR_960_RETAIL_TXN
 UNION
-SELECT customer_key
+SELECT customer_key, city
 FROM WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW
 WHERE UPPER(city) IN (
   'MADRID','VITORIA','VALENCIA','MARBELLA','CORUNA','PONTEVEDRA')
@@ -56,8 +58,9 @@ WHERE UPPER(city) IN (
 ;
 
 CREATE OR REPLACE TABLE CAR_960_FINAL AS
-SELECT
+SELECT DISTINCT
     base.customer_key,
+    base.city,
 
     cm.global_holdout,
     DATE(cm.first_registration_date) AS first_registration_date,
@@ -92,19 +95,12 @@ LEFT JOIN WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
 LEFT JOIN CAR_960_DIGITAL_TXN d
        ON base.customer_key = d.customer_key
 LEFT JOIN CAR_960_RETAIL_TXN rt
-       ON base.customer_key = rt.customer_key;
+       ON base.customer_key = rt.customer_key
+where base.customer_key is not null;
 
 select * from CAR_960_FINAL;
 
 i somewhat changed the code, the reason for that was the current logic was Audience must be customers whose registered city is one of these locations.
 however the logic should be Customers who either reside in OR transact in these cities. This is the reason i have updated the code, 
-however there's another issue i am facing is to show validation on date.
-select customer_key, min(last_digital_txn_date), min(last_retail_txn_date),
-max(last_digital_txn_date), max(last_retail_txn_date)
-from  CAR_960_FINAL
-where segment = 'R12 Active'
-group by 1; when i run this code , i can see the min date to be 2024 march , the reason for this is as we have written 
-d.last_digital_txn_date >= '2025-03-25'
-          OR rt.last_retail_txn_date >= '2025-03-25'
-            THEN 'R12 Active' so how can i show the validations , help me do that, also am i missing any data from digital 
-or retail txn tables ? please check the code.
+however there's another issue i am facing is there are duplicate customer_key due to the different cities , which is why i want you to take
+the last txn date from whichever channel it is through so that it will give only one row per customer.
