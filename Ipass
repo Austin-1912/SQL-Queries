@@ -1,79 +1,76 @@
-Clean and simple. Here's the streamlined version:
-
-```sql
-/* ============================================================
-   CAR_963 | MEPA: Registered & Not Verified Customers
-   Markets : UAE, Saudi Arabia, Jordan, Bahrain, Kuwait, Qatar
-   ============================================================ */
-
-/* ----------------------------------------------------------
-   STEP 1 | Base population — Registered & Not Verified
-   ---------------------------------------------------------- */
-CREATE OR REPLACE TABLE CAR_963_REGISTERED_NOT_VERFIED_CUSTS AS
-SELECT *
-FROM (
-    SELECT DISTINCT 
-        cu.galactic_id, 
-        cu.customer_umn,
-        cu.customer_category AS registered_flag,
-        cv.verification_status AS verified_flag
-    FROM WUDATA_UCD.WUDNA.VW_PUBLIC_CUSTOMER cu
-    INNER JOIN WUDATA_UCD.WUDNA.VW_PUBLIC_ADDRESS_RAW ar 
-        ON ar.customer_id = cu.customer_id 
-        AND UPPER(ar.country_code) IN ('AE','SA','JO','BH','KW','QA')
-    LEFT JOIN WUDATA_UCD.WUDNA.VW_PUBLIC_CUSTOMER_VERIFICATION cv 
-        ON cv.customer_id = cu.customer_id
-        AND cv.verification_flag_type_id = 1
-        AND cv.channel_type = 1
-    WHERE DATE(cu.customer_created_date) >= '2025-03-25'
-      AND DATE(cu.customer_created_date) < '2026-03-25'
-) t
-WHERE registered_flag = 'F'
-  AND COALESCE(verified_flag, '') != 'Y';
-
-
-/* ----------------------------------------------------------
-   STEP 2 | Final Pull — Join to customer master for
-            marketability & global holdout
-   ---------------------------------------------------------- */
-CREATE OR REPLACE TABLE CAR_963_FINAL_PULL AS
-
-SELECT
-    base.galactic_id,
-    base.customer_umn,
-    c.country_code,
-    CASE
-        WHEN c.marketing_flag             = 'Y'
-         AND c.email_address_on_file_flag = 'Y'
-         AND c.opt_email                  = 'I' THEN 'Y'
-        ELSE 'N'
-    END AS email_marketable_flag,
-    CASE
-        WHEN c.marketing_flag             = 'Y'
-         AND c.mobile_number_on_file_flag = 'Y'
-         AND c.opt_sms                    = 'I' THEN 'Y'
-        ELSE 'N'
-    END AS sms_marketable_flag,
-    c.global_holdout_flag
-
-FROM      CAR_963_REGISTERED_NOT_VERFIED_CUSTS  base
-LEFT JOIN WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW c
-    ON c.customer_key = base.galactic_id
-
-WHERE COALESCE(c.global_holdout_flag, 'N') != 'Y';
-
-
-/* ----------------------------------------------------------
-   STEP 3 | Sense-check — counts by country
-   ---------------------------------------------------------- */
-SELECT
-    country_code,
-    COUNT(DISTINCT galactic_id)                                                 AS total_customers,
-    COUNT(DISTINCT CASE WHEN email_marketable_flag = 'Y' THEN galactic_id END) AS email_marketable_custs,
-    COUNT(DISTINCT CASE WHEN sms_marketable_flag   = 'Y' THEN galactic_id END) AS sms_marketable_custs
-FROM CAR_963_FINAL_PULL
-GROUP BY country_code
-ORDER BY country_code;
-```
-
-Much leaner — Step 1 stays untouched, Step 2 is a direct join with the marketability logic and global holdout filter inline, no CTEs needed. Let me know if `global_holdout_flag` has a different column name in the master view.
+SELECT DISTINCT opacket_sender_city
+FROM WUDNA.SUMMARY_GEN.MATCHEDTRANSACTION_OPACKET_VW
+WHERE opacket_sender_country = 'ES'
+  AND opacket_sender_city IN (
+        'MADRID CAPITAL',
+        'LA CORUÑA',
+        'MOLLABAO PONTEVEDRA',
+        'SAN PEDRO MARBELLA',
+        'LLUTXENT- VALENCIA',
+        'PROVINCIA DE MADRID',
+        'MUNICIPIO DE MADRID',
+        'ALDAIA VALENCIA',
+        'ALBAL VALENCIA',
+        'VALENCIA CAPITAL',
+        'OPORTO MADRID',
+        'EL PERELLONET-VALENCIA',
+        'LA ELIANA VALENCIA',
+        'LAS ROZAS  DE MADRID',
+        'LEGANÉS MADRID',
+        'MADRID, ALCOBENDAS',
+        'MARBELLA NUEVA ANDALUCIA',
+        'PUZOL VALENCIA',
+        'BUNOL VALENCIA',
+        'VALENCIA CENTRO',
+        'BENIMACLET - VALENCIA',
+        'ALCOBENDAS MADRID',
+        'ROCAFORT, VALENCIA',
+        'TORRENT VALENCIA',
+        'VALENCIA CATARROJA',
+        'VITORIA- GASTEIZ',
+        'GANDIA , VALENCIA',
+        'BUNOL-VALENCIA',
+        'MADRID MOSTOLES',
+        'MADRID GETAFE',
+        'VALENCIA ESPAÑA',
+        'BENIMAMET-VALENCIA',
+        'NAQUERA VALENCIA',
+        'MARBELLA',
+        'BARRO PONTEVEDRA',
+        'TRES CANTOS- MADRID',
+        'MADRID',
+        'MAJADAHONDA MADRID',
+        'VIGO PONTEVEDRA',
+        'MADRID MADRID',
+        'CHESTE VALENCIA',
+        'PONTEVEDRA CAPITAL',
+        'ENGUERA VALENCIA',
+        'VITORIA-GASTEIZ',
+        'VALENCIA ALCASSER',
+        'ALGINET VALENCIA',
+        'VITORIA',
+        'COMUNIDAD DE MADRID',
+        'VALDEMORO, MADRID',
+        'PONTEVEDRA',
+        'A CORUÑA',
+        'CORUÑA',
+        'LAS ROZAS DE MADRID',
+        'MISLATA VALENCIA',
+        'NUEVA ANDALUCIA, MARBELLA',
+        'MADRID CITY',
+        'HUMANES DE MADRID',
+        'LALIN PONTEVEDRA',
+        'RIO REAL MARBELLA',
+        'MADRID CENTRO',
+        'MARIN PONTEVEDRA',
+        'Madrid',
+        'PARLA MADRID',
+        'MISLATA, VALENCIA',
+        'VALENCIA, BENIMACLET',
+        'CIUDAD DE VALENCIA',
+        'VALENCIA',
+        'VALENCIA ALFAFAR',
+        'MADRID, MADRID, ESPANA'
+  )
+  AND DATE(opacket_transactiontime) >= '2024-03-25'
+  AND DATE(opacket_transactiontime) <  '2026-03-25';
