@@ -1,106 +1,16 @@
--- Table 1: Digital transactions — one row per customer, most recent txn date
-CREATE OR REPLACE TABLE CAR_960_DIGITAL_TXN AS
-SELECT
-    opacket_sc_galacticid               AS customer_key,
-    opacket_sender_city as city,
-    MAX(DATE(opacket_transactiontime))  AS last_digital_txn_date
-FROM WUDNA.SUMMARY_GEN.MATCHEDTRANSACTION_OPACKET_VW
-WHERE opacket_sender_country = 'ES'
-  AND UPPER(opacket_sender_city) IN (
-        'MADRID CAPITAL','LA CORUÑA','MOLLABAO PONTEVEDRA','SAN PEDRO MARBELLA',
-        'LLUTXENT- VALENCIA','PROVINCIA DE MADRID','MUNICIPIO DE MADRID','ALDAIA VALENCIA',
-        'ALBAL VALENCIA','VALENCIA CAPITAL','OPORTO MADRID','EL PERELLONET-VALENCIA',
-        'LA ELIANA VALENCIA','LAS ROZAS  DE MADRID','LEGANÉS MADRID','MADRID, ALCOBENDAS',
-        'MARBELLA NUEVA ANDALUCIA','PUZOL VALENCIA','BUNOL VALENCIA','VALENCIA CENTRO',
-        'BENIMACLET - VALENCIA','ALCOBENDAS MADRID','ROCAFORT, VALENCIA','TORRENT VALENCIA',
-        'VALENCIA CATARROJA','VITORIA- GASTEIZ','GANDIA , VALENCIA','BUNOL-VALENCIA',
-        'MADRID MOSTOLES','MADRID GETAFE','VALENCIA ESPAÑA','BENIMAMET-VALENCIA',
-        'NAQUERA VALENCIA','MARBELLA','BARRO PONTEVEDRA','TRES CANTOS- MADRID',
-        'MADRID','MAJADAHONDA MADRID','VIGO PONTEVEDRA','MADRID MADRID','CHESTE VALENCIA',
-        'PONTEVEDRA CAPITAL','ENGUERA VALENCIA','VITORIA-GASTEIZ','VALENCIA ALCASSER',
-        'ALGINET VALENCIA','VITORIA','COMUNIDAD DE MADRID','VALDEMORO, MADRID','PONTEVEDRA',
-        'A CORUÑA','CORUÑA','LAS ROZAS DE MADRID','MISLATA VALENCIA',
-        'NUEVA ANDALUCIA, MARBELLA','MADRID CITY','HUMANES DE MADRID','LALIN PONTEVEDRA',
-        'RIO REAL MARBELLA','MADRID CENTRO','MARIN PONTEVEDRA','Madrid','PARLA MADRID',
-        'MISLATA, VALENCIA','VALENCIA, BENIMACLET','CIUDAD DE VALENCIA','VALENCIA',
-        'VALENCIA ALFAFAR','MADRID, MADRID, ESPANA'
-  )
-  AND DATE(opacket_transactiontime) >= '2024-03-25'
-  AND DATE(opacket_transactiontime) <  '2026-03-25'
-GROUP BY ALL;
+Need to get the marketability flag for all the customers , we can get email and sms marketable flag through customer master table. include
+the below logic in the script
+CASE
+        WHEN c.marketing_flag             = 'Y'
+         AND c.email_address_on_file_flag = 'Y'
+         AND c.opt_email                  = 'I' THEN 'Y'
+        ELSE 'N'
+    END AS email_marketable_flag,
+     CASE
+         WHEN c.marketing_flag             = 'Y'
+          AND c.mobile_number_on_file_flag = 'Y'
+          AND c.opt_sms                    = 'I' THEN 'Y'
+         ELSE 'N'
+    END AS sms_marketable_flag,
 
--- Table 2: Retail transactions — one row per customer, most recent txn date
-CREATE OR REPLACE TABLE CAR_960_RETAIL_TXN AS
-SELECT
-    tx.sndcustomer_key                  AS customer_key,
-    ag.city,
-    MAX(DATE(tx.RCVPAYING_DATETIME))    AS last_retail_txn_date
-FROM WUDNA.SUMMARY_GEN.AGENT_SUMMARY_VW ag
-JOIN WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW tx
-  ON ag.agent_number = tx.sndagent_number
-WHERE UPPER(ag.city) IN ('MADRID','VITORIA','VALENCIA','MARBELLA','CORUNA','PONTEVEDRA')
-  AND DATE(tx.RCVPAYING_DATETIME) >= '2024-03-25'
-  AND DATE(tx.RCVPAYING_DATETIME) <  '2026-03-25'
-GROUP BY all;
-
--- Table 3: Final UNION
-CREATE OR REPLACE TABLE CAR_960_BASE_CUSTOMERS AS
-SELECT customer_key,city  FROM CAR_960_DIGITAL_TXN
-UNION
-SELECT customer_key, city FROM CAR_960_RETAIL_TXN
-UNION
-SELECT customer_key, city
-FROM WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW
-WHERE UPPER(city) IN (
-  'MADRID','VITORIA','VALENCIA','MARBELLA','CORUNA','PONTEVEDRA')
-  and DATE(first_registration_date) >= '2024-03-25'
-  and DATE(first_registration_date) < '2026-03-25'
-;
-
-CREATE OR REPLACE TABLE CAR_960_FINAL AS
-SELECT DISTINCT
-    base.customer_key,
-    base.city,
-
-    cm.global_holdout,
-    DATE(cm.first_registration_date) AS first_registration_date,
-
-    d.last_digital_txn_date,
-    rt.last_retail_txn_date,
-
-    CASE WHEN d.customer_key  IS NOT NULL THEN 1 ELSE 0 END AS is_digital_txn,
-    CASE WHEN rt.customer_key IS NOT NULL THEN 1 ELSE 0 END AS is_retail_txn,
-
-    CASE
-        WHEN d.customer_key IS NULL
-         AND rt.customer_key IS NULL
-         AND cm.customer_key IS NOT NULL
-         AND DATE(cm.first_registration_date) >= '2024-03-25'
-            THEN 'RNT'
-
-        WHEN d.last_digital_txn_date >= '2025-03-25'
-          OR rt.last_retail_txn_date >= '2025-03-25'
-            THEN 'R12 Active'
-
-        WHEN d.last_digital_txn_date >= '2024-03-25'
-          OR rt.last_retail_txn_date >= '2024-03-25'
-            THEN 'R13-R24 Lapsed'
-
-        ELSE 'OTHER'
-    END AS segment
-
-FROM CAR_960_BASE_CUSTOMERS base
-LEFT JOIN WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW cm
-       ON base.customer_key = cm.customer_key
-LEFT JOIN CAR_960_DIGITAL_TXN d
-       ON base.customer_key = d.customer_key
-LEFT JOIN CAR_960_RETAIL_TXN rt
-       ON base.customer_key = rt.customer_key
-where base.customer_key is not null;
-
-select * from CAR_960_FINAL;
-
-i somewhat changed the code, the reason for that was the current logic was Audience must be customers whose registered city is one of these locations.
-however the logic should be Customers who either reside in OR transact in these cities. This is the reason i have updated the code, 
-however there's another issue i am facing is there are duplicate customer_key due to the different cities , which is why i want you to take
-the last txn date from whichever channel it is through so that it will give only one row per customer.
+CASE WHEN b.email_marketable_flag = 'Y' OR b.sms_marketable_flag = 'Y' THEN 'YES' ELSE 'NO' END AS Marketability_Flag, 
