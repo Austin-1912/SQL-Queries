@@ -22,8 +22,8 @@ FROM (
             ORDER BY rcvpaying_datetime ASC
         ) AS rn
     FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
-    WHERE DATE(rcvpaying_datetime) >= '2025-02-17'
-      AND DATE(rcvpaying_datetime) <= '2025-03-22'
+    WHERE DATE(rcvpaying_datetime) >= '2026-02-17'
+      AND DATE(rcvpaying_datetime) <= '2026-03-22'
       AND UPPER(send_country_name) = 'CANADA'
       AND UPPER(rcv_country_name) IN (
         'INDIA', 'PAKISTAN', 'TURKEY', 'BANGLADESH', 'UNITED ARAB EMIRATES',
@@ -38,7 +38,7 @@ FROM (
 WHERE rn = 1
 ;
 
-select count(distinct sndcustomer_key) from CAR_975_BASE;--121,507
+select count(sndcustomer_key) ,count(distinct sndcustomer_key) from CAR_975_BASE;--107,459
 
 -- ============================================================
 -- STEP 2: HISTORY
@@ -47,25 +47,26 @@ SELECT
     sndcustomer_key,
     send_country_name,
     rcv_country_name,
-    MAX(CASE WHEN DATE(rcvpaying_datetime) >= '2024-02-17' AND DATE(rcvpaying_datetime) <= '2025-02-16' THEN 1 ELSE 0 END) AS r12_active,
-    MAX(CASE WHEN DATE(rcvpaying_datetime) >= '2023-02-17' AND DATE(rcvpaying_datetime) <= '2024-02-16' THEN 1 ELSE 0 END) AS r13_24_active,
-    MAX(CASE WHEN DATE(rcvpaying_datetime) >= '2022-02-17' AND DATE(rcvpaying_datetime) <= '2023-02-16' THEN 1 ELSE 0 END) AS r25_36_active,
-    MAX(CASE WHEN DATE(rcvpaying_datetime) >= '2021-02-17' AND DATE(rcvpaying_datetime) <= '2022-02-16' THEN 1 ELSE 0 END) AS r37_48_active
+    MAX(CASE WHEN DATE(rcvpaying_datetime) >= '2025-02-17' AND DATE(rcvpaying_datetime) <= '2026-02-16' THEN 1 ELSE 0 END) AS r12_active,
+    MAX(CASE WHEN DATE(rcvpaying_datetime) >= '2024-02-17' AND DATE(rcvpaying_datetime) <= '2025-02-16' THEN 1 ELSE 0 END) AS r13_24_active,
+    MAX(CASE WHEN DATE(rcvpaying_datetime) >= '2023-02-17' AND DATE(rcvpaying_datetime) <= '2024-02-16' THEN 1 ELSE 0 END) AS r25_36_active,
+    MAX(CASE WHEN DATE(rcvpaying_datetime) >= '2022-02-17' AND DATE(rcvpaying_datetime) <= '2021-02-16' THEN 1 ELSE 0 END) AS r37_48_active
 FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
-WHERE DATE(rcvpaying_datetime) < '2025-02-17'
+WHERE DATE(rcvpaying_datetime) < '2026-02-17'
   AND sndcustomer_key IN (SELECT sndcustomer_key FROM CAR_975_BASE where sndcustomer_key is not null)
-  AND UPPER(send_country_name) IN (
-    'INDIA', 'PAKISTAN', 'TURKEY', 'BANGLADESH', 'UNITED ARAB EMIRATES',
-    'LEBANON', 'EGYPT', 'MALAYSIA', 'BAHRAIN', 'MALI', 'IRAQ', 'INDONESIA',
-    'ALBANIA', 'KAZAKHSTAN', 'UZBEKISTAN', 'AFGHANISTAN', 'QATAR', 'OMAN',
-    'SUDAN', 'MALDIVES', 'NIGER', 'TURKMENISTAN', 'COMOROS', 'YEMEN',
-    'BRUNEI DARUSSALAM', 'CHAD', 'KUWAIT', 'DJIBOUTI', 'KYRGYZSTAN',
-    'TAJIKISTAN', 'KOSOVO', 'PALESTINE', 'JORDAN', 'MOROCCO', 'AZERBAIJAN',
-    'BOSNIA AND HERZEGOVINA', 'NIGERIA', 'SENEGAL', 'TUNISIA'
-  )
+  -- AND UPPER(rcv_country_name) IN (
+  --   'INDIA', 'PAKISTAN', 'TURKEY', 'BANGLADESH', 'UNITED ARAB EMIRATES',
+  --   'LEBANON', 'EGYPT', 'MALAYSIA', 'BAHRAIN', 'MALI', 'IRAQ', 'INDONESIA',
+  --   'ALBANIA', 'KAZAKHSTAN', 'UZBEKISTAN', 'AFGHANISTAN', 'QATAR', 'OMAN',
+  --   'SUDAN', 'MALDIVES', 'NIGER', 'TURKMENISTAN', 'COMOROS', 'YEMEN',
+  --   'BRUNEI DARUSSALAM', 'CHAD', 'KUWAIT', 'DJIBOUTI', 'KYRGYZSTAN',
+  --   'TAJIKISTAN', 'KOSOVO', 'PALESTINE', 'JORDAN', 'MOROCCO', 'AZERBAIJAN',
+  --   'BOSNIA AND HERZEGOVINA', 'NIGERIA', 'SENEGAL', 'TUNISIA'
+  -- )
 GROUP BY 1, 2,3
 ;
 
+select count(sndcustomer_key) ,count(distinct sndcustomer_key) from CAR_975_HISTORY;--107,459
 
 -- ============================================================
 -- STEP 2.5: MARKETABILITY — pull email and SMS flags from customer master
@@ -89,7 +90,7 @@ SELECT
 FROM WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW
 WHERE customer_key IN (SELECT sndcustomer_key FROM CAR_975_BASE WHERE sndcustomer_key IS NOT NULL)
 ;
-select count(distinct customer_key) from CAR_975_MARKETABILITY;--121,507
+select count(customer_key),count(distinct customer_key) from CAR_975_MARKETABILITY;--107,458
  
  
 -- ============================================================
@@ -132,10 +133,15 @@ SELECT
 FROM CAR_975_BASE b
 LEFT JOIN CAR_975_HISTORY h
     ON b.sndcustomer_key = h.sndcustomer_key
-   AND b.send_country_name = h.send_country_name
+   -- AND b.send_country_name = h.send_country_name
 LEFT JOIN CAR_975_MARKETABILITY m
     ON b.sndcustomer_key = m.customer_key
 ;
+
+select * from CAR_975_SEGMENTED
+where sndcustomer_key = '1000000000209157482';
+select sndcustomer_key ,count(sndcustomer_key),count(distinct sndcustomer_key) from CAR_975_SEGMENTED
+group by all;--107,458
  
  select distinct segment from CAR_975_SEGMENTED;
 -- ============================================================
