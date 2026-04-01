@@ -113,3 +113,6 @@ ORDER BY 1, 2,
         ELSE 6
     END
 ;
+
+The new to channel is not correct since we are not checking properly in which channel was the customer in before and which 
+channel did they transact in first in the current ramadan period, we need to correct that logic.
