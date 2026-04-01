@@ -125,3 +125,5 @@ FROM CAR_975_SEGMENTED
 GROUP BY 1, 2, 3,4
 ORDER BY 1, 2,3,4
 ;
+i have written this script however i also want to include the marketability flag , email, sms and app marketable and for that 
+we have to join with customer master table.
