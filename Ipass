@@ -1,133 +1,140 @@
-Hi,
+A few things to flag before diving in:
 
- 
+1. **Syntax error** in the base — you have `where where` (duplicated keyword)
+2. **Channel mapping bug** — `POS/AIR/TMT` are mapped to `DIGITAL` in your CASE, they should be `RETAIL`
+3. **Missing date filter** on the base — need to scope to Feb 17–Mar 22
+4. **Missing `txn_status` filter** — flagged below, confirm your paid status value
 
-Can you pull the total number of NCs that have been driven during Ramadan+Eid (February 17 - March 22) from the following corridors:
+Here's the full 4-step pipeline:
 
-
-INDIA
-
-PAKISTAN
-
-TURKEY
-
-BANGLADESH
-
-UNITED ARAB EMIRATES
-
-LEBANON
-
-EGYPT
-
-MALAYSIA
-
-BAHRAIN
-
-MALI
-
-IRAQ
-
-INDONESIA
-
-ALBANIA
-
-KAZAKHSTAN
-
-UZBEKISTAN
-
-AFGHANISTAN
-
-QATAR
-
-OMAN
-
-SUDAN
-
-MALDIVES
-
-NIGER
-
-TURKMENISTAN
-
-COMOROS
-
-YEMEN
-
-BRUNEI DARUSSALAM
-
-CHAD
-
-KUWAIT
-
-DJIBOUTI
-
-KYRGYZSTAN
-
-TAJIKISTAN
-
-KOSOVO
-
-PALESTINE
-
-JORDAN
-
-MOROCCO
-
-AZERBAIJAN
-
-BOSNIA AND HERZEGOVINA
-
-NIGERIA
-
-SENEGAL
-
-TUNISIA
-
-New To Franchise	NewAs Per MBR	Segment	Period	R12 Active	R13-24	R25-36	R37-48
-No	No	R12 Active	1	1	1/0	1/0	1/0
-No	Yes	Lapsing	1	0	1	1/0	1/0
-No	Yes	Lapsed	1	0	0	1	1/0
-No	Yes	Uber Lapsed	1	0	0	0	1
-Yes	Yes	New	1	0	0	0	0
-where it is 1/0 we'll put the customer counts , create the query for it. Also i want channel wise breakdown
-i have created the base query please add if anything else is needed.
-CREATE OR REPLACE TABLE CAR_975_BASE AS 
+```sql
+-- ============================================================
+-- STEP 1: BASE — customers who transacted during Ramadan/Eid
+-- ============================================================
+CREATE OR REPLACE TABLE CAR_975_BASE AS
 SELECT
-sndcustomer_key, 
-send_country_name,
-CASE WHEN
-    pricing_channel IN ('WEB', 'APP') THEN 'DIGITAL'
-    WHEN PRICING_CHANNEL IN ('POS','AIR','TMT') THEN 'DIGITAL'
-    END AS Channel,
-    FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
-    where where UPPER(send_country_name) IN (
-'INDIA', 'PAKISTAN', 'TURKEY',
-'BANGLADESH','UNITED ARAB EMIRATES','LEBANON',
-'EGYPT','MALAYSIA','BAHRAIN',
-'MALI','IRAQ','INDONESIA',
-'ALBANIA','KAZAKHSTAN','UZBEKISTAN',
-'AFGHANISTAN',
-'QATAR',
-'OMAN',
-'SUDAN',
-'MALDIVES',
-'NIGER',
-'TURKMENISTAN',
-'COMOROS',
-'YEMEN',
-'BRUNEI DARUSSALAM',
-'CHAD',
-'KUWAIT',
-'DJIBOUTI',
-'KYRGYZSTAN',
-'TAJIKISTAN',
-'KOSOVO',
-'PALESTINE',
-'JORDAN',
-'MOROCCO',
-'AZERBAIJAN',
-'BOSNIA AND HERZEGOVINA',
-'NIGERIA',
-'SENEGAL',
-'TUNISIA'
-);
+    sndcustomer_key,
+    send_country_name,
+    CASE
+        WHEN pricing_channel IN ('WEB', 'APP')       THEN 'DIGITAL'
+        WHEN pricing_channel IN ('POS', 'AIR', 'TMT') THEN 'RETAIL'
+        ELSE 'OTHER'
+    END AS channel
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+WHERE txn_date BETWEEN '2025-02-17' AND '2025-03-22'
+  -- AND txn_status = 'PAID'  -- ⚠️ confirm your paid status value
+  AND UPPER(send_country_name) IN (
+    'INDIA', 'PAKISTAN', 'TURKEY', 'BANGLADESH', 'UNITED ARAB EMIRATES',
+    'LEBANON', 'EGYPT', 'MALAYSIA', 'BAHRAIN', 'MALI', 'IRAQ', 'INDONESIA',
+    'ALBANIA', 'KAZAKHSTAN', 'UZBEKISTAN', 'AFGHANISTAN', 'QATAR', 'OMAN',
+    'SUDAN', 'MALDIVES', 'NIGER', 'TURKMENISTAN', 'COMOROS', 'YEMEN',
+    'BRUNEI DARUSSALAM', 'CHAD', 'KUWAIT', 'DJIBOUTI', 'KYRGYZSTAN',
+    'TAJIKISTAN', 'KOSOVO', 'PALESTINE', 'JORDAN', 'MOROCCO', 'AZERBAIJAN',
+    'BOSNIA AND HERZEGOVINA', 'NIGERIA', 'SENEGAL', 'TUNISIA'
+  )
+GROUP BY 1, 2, 3  -- deduplicate to customer × send_country × channel
+;
+
+
+-- ============================================================
+-- STEP 2: HISTORY — pre-campaign activity windows per customer
+--         Reference point: Feb 17, 2025 (campaign start)
+--         Scoped to same send countries as base
+-- ============================================================
+CREATE OR REPLACE TABLE CAR_975_HISTORY AS
+SELECT
+    sndcustomer_key,
+    send_country_name,
+    MAX(CASE WHEN txn_date BETWEEN '2024-02-17' AND '2025-02-16' THEN 1 ELSE 0 END) AS r12_active,
+    MAX(CASE WHEN txn_date BETWEEN '2023-02-17' AND '2024-02-16' THEN 1 ELSE 0 END) AS r13_24_active,
+    MAX(CASE WHEN txn_date BETWEEN '2022-02-17' AND '2023-02-16' THEN 1 ELSE 0 END) AS r25_36_active,
+    MAX(CASE WHEN txn_date BETWEEN '2021-02-17' AND '2022-02-16' THEN 1 ELSE 0 END) AS r37_48_active
+FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+WHERE txn_date < '2025-02-17'  -- pre-campaign only
+  -- AND txn_status = 'PAID'  -- ⚠️ confirm your paid status value
+  AND sndcustomer_key IN (SELECT sndcustomer_key FROM CAR_975_BASE)
+  AND UPPER(send_country_name) IN (
+    'INDIA', 'PAKISTAN', 'TURKEY', 'BANGLADESH', 'UNITED ARAB EMIRATES',
+    'LEBANON', 'EGYPT', 'MALAYSIA', 'BAHRAIN', 'MALI', 'IRAQ', 'INDONESIA',
+    'ALBANIA', 'KAZAKHSTAN', 'UZBEKISTAN', 'AFGHANISTAN', 'QATAR', 'OMAN',
+    'SUDAN', 'MALDIVES', 'NIGER', 'TURKMENISTAN', 'COMOROS', 'YEMEN',
+    'BRUNEI DARUSSALAM', 'CHAD', 'KUWAIT', 'DJIBOUTI', 'KYRGYZSTAN',
+    'TAJIKISTAN', 'KOSOVO', 'PALESTINE', 'JORDAN', 'MOROCCO', 'AZERBAIJAN',
+    'BOSNIA AND HERZEGOVINA', 'NIGERIA', 'SENEGAL', 'TUNISIA'
+  )
+GROUP BY 1, 2
+;
+
+
+-- ============================================================
+-- STEP 3: SEGMENTED — join base to history and assign segment
+-- ============================================================
+CREATE OR REPLACE TABLE CAR_975_SEGMENTED AS
+SELECT
+    b.sndcustomer_key,
+    b.send_country_name,
+    b.channel,
+    COALESCE(h.r12_active,    0) AS r12_active,
+    COALESCE(h.r13_24_active, 0) AS r13_24_active,
+    COALESCE(h.r25_36_active, 0) AS r25_36_active,
+    COALESCE(h.r37_48_active, 0) AS r37_48_active,
+    CASE
+        WHEN COALESCE(h.r12_active, 0) = 1
+            THEN 'R12 Active'
+        WHEN COALESCE(h.r12_active, 0) = 0
+         AND COALESCE(h.r13_24_active, 0) = 1
+            THEN 'Lapsing'
+        WHEN COALESCE(h.r12_active, 0) = 0
+         AND COALESCE(h.r13_24_active, 0) = 0
+         AND COALESCE(h.r25_36_active, 0) = 1
+            THEN 'Lapsed'
+        WHEN COALESCE(h.r12_active, 0) = 0
+         AND COALESCE(h.r13_24_active, 0) = 0
+         AND COALESCE(h.r25_36_active, 0) = 0
+         AND COALESCE(h.r37_48_active, 0) = 1
+            THEN 'Uber Lapsed'
+        WHEN COALESCE(h.r12_active, 0) = 0
+         AND COALESCE(h.r13_24_active, 0) = 0
+         AND COALESCE(h.r25_36_active, 0) = 0
+         AND COALESCE(h.r37_48_active, 0) = 0
+            THEN 'New'
+        ELSE 'Unclassified'
+    END AS segment
+FROM CAR_975_BASE b
+LEFT JOIN CAR_975_HISTORY h
+    ON b.sndcustomer_key = h.sndcustomer_key
+   AND b.send_country_name = h.send_country_name
+;
+
+
+-- ============================================================
+-- STEP 4: FINAL OUTPUT — NC count by corridor × channel × segment
+-- ============================================================
+SELECT
+    send_country_name,
+    channel,
+    segment,
+    COUNT(DISTINCT sndcustomer_key) AS nc_count
+FROM CAR_975_SEGMENTED
+GROUP BY 1, 2, 3
+ORDER BY 1, 2,
+    CASE segment
+        WHEN 'R12 Active'   THEN 1
+        WHEN 'Lapsing'      THEN 2
+        WHEN 'Lapsed'       THEN 3
+        WHEN 'Uber Lapsed'  THEN 4
+        WHEN 'New'          THEN 5
+        ELSE 6
+    END
+;
+```
+
+---
+
+**A few design decisions to confirm:**
+
+**History scoped to same send country** — step 2 joins on both `sndcustomer_key` and `send_country_name`. This means a customer who sent from Pakistan in history but is in the base from UAE would be treated as New for UAE. If you want global history regardless of send country, drop the `send_country_name` join condition and group key in step 2.
+
+**Channel deduplication logic** — the base groups to `customer × send_country × channel`, so a customer who sent both via DIGITAL and RETAIL during the period will appear in both rows in the final output. Let me know if you want only their primary channel instead.
+
+**`txn_status` filter** — I've commented it out since I don't know the exact value in your view (`'PAID'`, `'COMPLETE'`, etc.), but you'll want to add it to both steps 1 and 2 to be consistent.
