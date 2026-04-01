@@ -39,6 +39,7 @@ WHERE rn = 1
 ;
 
 select count(sndcustomer_key) ,count(distinct sndcustomer_key) from CAR_975_BASE;--107,459
+select DATEDIFF(DAY, '2026-01-01', '2026-01-02' );
 
 -- ============================================================
 -- STEP 2: HISTORY
@@ -47,25 +48,24 @@ SELECT
     sndcustomer_key,
     send_country_name,
     rcv_country_name,
-    MAX(CASE WHEN DATE(rcvpaying_datetime) >= '2025-02-17' AND DATE(rcvpaying_datetime) <= '2026-02-16' THEN 1 ELSE 0 END) AS r12_active,
-    MAX(CASE WHEN DATE(rcvpaying_datetime) >= '2024-02-17' AND DATE(rcvpaying_datetime) <= '2025-02-16' THEN 1 ELSE 0 END) AS r13_24_active,
-    MAX(CASE WHEN DATE(rcvpaying_datetime) >= '2023-02-17' AND DATE(rcvpaying_datetime) <= '2024-02-16' THEN 1 ELSE 0 END) AS r25_36_active,
-    MAX(CASE WHEN DATE(rcvpaying_datetime) >= '2022-02-17' AND DATE(rcvpaying_datetime) <= '2021-02-16' THEN 1 ELSE 0 END) AS r37_48_active
+    COUNT(CASE WHEN DATEDIFF(DAY, DATE(rcvpaying_datetime) , '2026-02-16') >=0 and 
+    DATEDIFF(DAY, DATE(rcvpaying_datetime) , '2026-02-16') <=365 THEN TXN_ID END) AS r12_TXNS,
+    COUNT(CASE WHEN DATEDIFF(DAY, DATE(rcvpaying_datetime) , '2026-02-16') >=0 and 
+    DATEDIFF(DAY, DATE(rcvpaying_datetime) , '2026-02-16') <=730 THEN TXN_ID END) AS r24_TXNS,
+    COUNT(CASE WHEN DATEDIFF(DAY, DATE(rcvpaying_datetime) , '2026-02-16') >=0 and 
+    DATEDIFF(DAY, DATE(rcvpaying_datetime) , '2026-02-16') <=1095 THEN TXN_ID END) AS r36_TXNS,
+    COUNT(CASE WHEN DATEDIFF(DAY, DATE(rcvpaying_datetime) , '2026-02-16') >=0 and 
+    DATEDIFF(DAY, DATE(rcvpaying_datetime) , '2026-02-16') <= 1460 THEN TXN_ID END) AS r48_TXNS,
+    -- MAX(CASE WHEN DATE(rcvpaying_datetime) >= '2025-02-17' AND DATE(rcvpaying_datetime) <= '2026-02-16' THEN 1 ELSE 0 END) AS r12_active,
+    -- MAX(CASE WHEN DATE(rcvpaying_datetime) >= '2024-02-17' AND DATE(rcvpaying_datetime) <= '2025-02-16' THEN 1 ELSE 0 END) AS r13_24_active,
+    -- MAX(CASE WHEN DATE(rcvpaying_datetime) >= '2023-02-17' AND DATE(rcvpaying_datetime) <= '2024-02-16' THEN 1 ELSE 0 END) AS r25_36_active,
+    -- MAX(CASE WHEN DATE(rcvpaying_datetime) >= '2022-02-17' AND DATE(rcvpaying_datetime) <= '2021-02-16' THEN 1 ELSE 0 END) AS r37_48_active
 FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
 WHERE DATE(rcvpaying_datetime) < '2026-02-17'
   AND sndcustomer_key IN (SELECT sndcustomer_key FROM CAR_975_BASE where sndcustomer_key is not null)
-  -- AND UPPER(rcv_country_name) IN (
-  --   'INDIA', 'PAKISTAN', 'TURKEY', 'BANGLADESH', 'UNITED ARAB EMIRATES',
-  --   'LEBANON', 'EGYPT', 'MALAYSIA', 'BAHRAIN', 'MALI', 'IRAQ', 'INDONESIA',
-  --   'ALBANIA', 'KAZAKHSTAN', 'UZBEKISTAN', 'AFGHANISTAN', 'QATAR', 'OMAN',
-  --   'SUDAN', 'MALDIVES', 'NIGER', 'TURKMENISTAN', 'COMOROS', 'YEMEN',
-  --   'BRUNEI DARUSSALAM', 'CHAD', 'KUWAIT', 'DJIBOUTI', 'KYRGYZSTAN',
-  --   'TAJIKISTAN', 'KOSOVO', 'PALESTINE', 'JORDAN', 'MOROCCO', 'AZERBAIJAN',
-  --   'BOSNIA AND HERZEGOVINA', 'NIGERIA', 'SENEGAL', 'TUNISIA'
-  -- )
 GROUP BY 1, 2,3
 ;
-
+select * from CAR_975_HISTORY;
 select count(sndcustomer_key) ,count(distinct sndcustomer_key) from CAR_975_HISTORY;--107,459
 
 -- ============================================================
@@ -104,59 +104,23 @@ SELECT
     b.channel,
     m.email_marketable_flag,
     m.sms_marketable_flag,
-    COALESCE(h.r12_active,    0) AS r12_active,
-    COALESCE(h.r13_24_active, 0) AS r13_24_active,
-    COALESCE(h.r25_36_active, 0) AS r25_36_active,
-    COALESCE(h.r37_48_active, 0) AS r37_48_active,
-    CASE
-        WHEN COALESCE(h.r12_active, 0) = 1
+    CASE 
+        WHEN  r12_TXNS > 0
             THEN 'R12 Active'
-        WHEN COALESCE(h.r12_active, 0) = 0
-         AND COALESCE(h.r13_24_active, 0) = 1
+        WHEN r12_TXNS = 0 AND r24_TXNS > 0
             THEN 'Lapsing'
-        WHEN COALESCE(h.r12_active, 0) = 0
-         AND COALESCE(h.r13_24_active, 0) = 0
-         AND COALESCE(h.r25_36_active, 0) = 1
+        WHEN r12_TXNS = 0 AND r24_TXNS = 0 AND r36_TXNS > 0
             THEN 'Lapsed'
-        WHEN COALESCE(h.r12_active, 0) = 0
-         AND COALESCE(h.r13_24_active, 0) = 0
-         AND COALESCE(h.r25_36_active, 0) = 0
-         AND COALESCE(h.r37_48_active, 0) = 1
+        WHEN r12_TXNS = 0 AND r24_TXNS = 0 AND r36_TXNS = 0 AND r48_TXNS > 0
             THEN 'Uber Lapsed'
-        WHEN COALESCE(h.r12_active, 0) = 0
-         AND COALESCE(h.r13_24_active, 0) = 0
-         AND COALESCE(h.r25_36_active, 0) = 0
-         AND COALESCE(h.r37_48_active, 0) = 0
+        WHEN r12_TXNS = 0 AND r24_TXNS = 0 AND r36_TXNS = 0 AND r48_TXNS = 0
             THEN 'New'
         ELSE 'Unclassified'
-    END AS segment
+         END AS segment 
+
 FROM CAR_975_BASE b
 LEFT JOIN CAR_975_HISTORY h
     ON b.sndcustomer_key = h.sndcustomer_key
-   -- AND b.send_country_name = h.send_country_name
 LEFT JOIN CAR_975_MARKETABILITY m
     ON b.sndcustomer_key = m.customer_key
 ;
-
-select * from CAR_975_SEGMENTED
-where sndcustomer_key = '1000000000209157482';
-select sndcustomer_key ,count(sndcustomer_key),count(distinct sndcustomer_key) from CAR_975_SEGMENTED
-group by all;--107,458
- 
- select distinct segment from CAR_975_SEGMENTED;
--- ============================================================
--- STEP 4: FINAL OUTPUT
--- ============================================================
-SELECT
-    send_country_name,
-    rcv_country_name,
-    channel,
-    segment,
-    email_marketable_flag,
-    sms_marketable_flag,
-    CASE WHEN segment != 'R12 Active' THEN 'YES' ELSE 'NO' END AS new_as_per_mbr,
-    COUNT(DISTINCT sndcustomer_key)                                          AS nc_count,
-    
-FROM CAR_975_SEGMENTED
-GROUP BY ALL
-ORDER BY 1, 2, 3,4
