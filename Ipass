@@ -1,333 +1,133 @@
--- ============================================================================
--- PPT AND RPT DOMINANT BUCKETS - APN VS NON-APN SENDERS
--- ============================================================================
--- Using the same logic as CAM_1746_FINAL_APN_PROFILING
--- Dominant bucket = the bucket with the most transactions for each customer
--- ============================================================================
+Hi,
 
--- ============================================================================
--- STEP 1: CREATE BASE TABLE FOR ALL CUSTOMERS (IF NOT EXISTS)
--- ============================================================================
--- Skip this if CAM_1746_Cust_Base already exists
--- This is the same as your existing code
+ 
 
--- Already exists from your script above
+Can you pull the total number of NCs that have been driven during Ramadan+Eid (February 17 - March 22) from the following corridors:
 
 
--- ============================================================================
--- STEP 2: DOMINANT PPT BUCKET - APN SENDERS
--- ============================================================================
+INDIA
 
-CREATE OR REPLACE TABLE CAM_1746_APN_DOMINANT_PPT_BUCKET AS
-SELECT *
-FROM (
-    SELECT
-        SNDCUSTOMER_KEY,
-        PPT_bucket,
-        COUNT(DISTINCT TXN_ID) AS txn_count,
-        SUM(SNDPRINCIPAL_USD) AS total_principal_usd,
-        ROW_NUMBER() OVER (
-            PARTITION BY SNDCUSTOMER_KEY
-            ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
-        ) AS rnk
-    FROM CAM_1746_Cust_Base
-    WHERE SNDCUSTOMER_KEY IN (
-        -- APN Senders: Customers with at least 1 ACCOUNT transaction
-        SELECT DISTINCT SNDCUSTOMER_KEY
-        FROM CAM_1746_Cust_Base
-        WHERE PAYOUT_TYPE = 'ACCOUNT'
-    )
-    GROUP BY SNDCUSTOMER_KEY, PPT_bucket
-)
-WHERE rnk = 1;
+PAKISTAN
 
-SELECT COUNT(DISTINCT SNDCUSTOMER_KEY) FROM CAM_1746_APN_DOMINANT_PPT_BUCKET;
+TURKEY
 
+BANGLADESH
 
--- ============================================================================
--- STEP 3: DOMINANT RPT BUCKET - APN SENDERS
--- ============================================================================
+UNITED ARAB EMIRATES
 
-CREATE OR REPLACE TABLE CAM_1746_APN_DOMINANT_RPT_BUCKET AS
-SELECT *
-FROM (
-    SELECT
-        SNDCUSTOMER_KEY,
-        RPT_bucket,
-        COUNT(DISTINCT TXN_ID) AS txn_count,
-        SUM(REVENUE) AS total_revenue,
-        ROW_NUMBER() OVER (
-            PARTITION BY SNDCUSTOMER_KEY
-            ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
-        ) AS rnk
-    FROM CAM_1746_Cust_Base
-    WHERE SNDCUSTOMER_KEY IN (
-        -- APN Senders: Customers with at least 1 ACCOUNT transaction
-        SELECT DISTINCT SNDCUSTOMER_KEY
-        FROM CAM_1746_Cust_Base
-        WHERE PAYOUT_TYPE = 'ACCOUNT'
-    )
-    GROUP BY SNDCUSTOMER_KEY, RPT_bucket
-)
-WHERE rnk = 1;
+LEBANON
 
-SELECT COUNT(DISTINCT SNDCUSTOMER_KEY) FROM CAM_1746_APN_DOMINANT_RPT_BUCKET;
+EGYPT
 
+MALAYSIA
 
--- ============================================================================
--- STEP 4: DOMINANT PPT BUCKET - NON-APN SENDERS
--- ============================================================================
+BAHRAIN
 
-CREATE OR REPLACE TABLE CAM_1746_NON_APN_DOMINANT_PPT_BUCKET AS
-SELECT *
-FROM (
-    SELECT
-        SNDCUSTOMER_KEY,
-        PPT_bucket,
-        COUNT(DISTINCT TXN_ID) AS txn_count,
-        SUM(SNDPRINCIPAL_USD) AS total_principal_usd,
-        ROW_NUMBER() OVER (
-            PARTITION BY SNDCUSTOMER_KEY
-            ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
-        ) AS rnk
-    FROM CAM_1746_Cust_Base
-    WHERE SNDCUSTOMER_KEY NOT IN (
-        -- NON-APN Senders: Customers with NO ACCOUNT transactions
-        SELECT DISTINCT SNDCUSTOMER_KEY
-        FROM CAM_1746_Cust_Base
-        WHERE PAYOUT_TYPE = 'ACCOUNT'
-    )
-    GROUP BY SNDCUSTOMER_KEY, PPT_bucket
-)
-WHERE rnk = 1;
+MALI
 
-SELECT COUNT(DISTINCT SNDCUSTOMER_KEY) FROM CAM_1746_NON_APN_DOMINANT_PPT_BUCKET;
+IRAQ
 
+INDONESIA
 
--- ============================================================================
--- STEP 5: DOMINANT RPT BUCKET - NON-APN SENDERS
--- ============================================================================
+ALBANIA
 
-CREATE OR REPLACE TABLE CAM_1746_NON_APN_DOMINANT_RPT_BUCKET AS
-SELECT *
-FROM (
-    SELECT
-        SNDCUSTOMER_KEY,
-        RPT_bucket,
-        COUNT(DISTINCT TXN_ID) AS txn_count,
-        SUM(REVENUE) AS total_revenue,
-        ROW_NUMBER() OVER (
-            PARTITION BY SNDCUSTOMER_KEY
-            ORDER BY COUNT(DISTINCT TXN_ID) DESC, MAX(txn_dt) DESC
-        ) AS rnk
-    FROM CAM_1746_Cust_Base
-    WHERE SNDCUSTOMER_KEY NOT IN (
-        -- NON-APN Senders: Customers with NO ACCOUNT transactions
-        SELECT DISTINCT SNDCUSTOMER_KEY
-        FROM CAM_1746_Cust_Base
-        WHERE PAYOUT_TYPE = 'ACCOUNT'
-    )
-    GROUP BY SNDCUSTOMER_KEY, RPT_bucket
-)
-WHERE rnk = 1;
+KAZAKHSTAN
 
-SELECT COUNT(DISTINCT SNDCUSTOMER_KEY) FROM CAM_1746_NON_APN_DOMINANT_RPT_BUCKET;
+UZBEKISTAN
 
+AFGHANISTAN
 
--- ============================================================================
--- STEP 6: COMBINED PPT x RPT DISTRIBUTION - APN SENDERS
--- ============================================================================
+QATAR
 
-CREATE OR REPLACE TABLE CAM_1746_APN_PPT_RPT_DISTRIBUTION AS
+OMAN
+
+SUDAN
+
+MALDIVES
+
+NIGER
+
+TURKMENISTAN
+
+COMOROS
+
+YEMEN
+
+BRUNEI DARUSSALAM
+
+CHAD
+
+KUWAIT
+
+DJIBOUTI
+
+KYRGYZSTAN
+
+TAJIKISTAN
+
+KOSOVO
+
+PALESTINE
+
+JORDAN
+
+MOROCCO
+
+AZERBAIJAN
+
+BOSNIA AND HERZEGOVINA
+
+NIGERIA
+
+SENEGAL
+
+TUNISIA
+
+New To Franchise	NewAs Per MBR	Segment	Period	R12 Active	R13-24	R25-36	R37-48
+No	No	R12 Active	1	1	1/0	1/0	1/0
+No	Yes	Lapsing	1	0	1	1/0	1/0
+No	Yes	Lapsed	1	0	0	1	1/0
+No	Yes	Uber Lapsed	1	0	0	0	1
+Yes	Yes	New	1	0	0	0	0
+where it is 1/0 we'll put the customer counts , create the query for it. Also i want channel wise breakdown
+i have created the base query please add if anything else is needed.
+CREATE OR REPLACE TABLE CAR_975_BASE AS 
 SELECT
-    ppt.PPT_bucket AS DOMINANT_PPT_BUCKET,
-    rpt.RPT_bucket AS DOMINANT_RPT_BUCKET,
-    COUNT(DISTINCT ppt.SNDCUSTOMER_KEY) AS CUSTOMER_COUNT,
-    SUM(ppt.txn_count) AS TOTAL_PPT_TXNS,
-    SUM(rpt.txn_count) AS TOTAL_RPT_TXNS,
-    SUM(ppt.total_principal_usd) AS TOTAL_PRINCIPAL,
-    SUM(rpt.total_revenue) AS TOTAL_REVENUE
-FROM CAM_1746_APN_DOMINANT_PPT_BUCKET ppt
-INNER JOIN CAM_1746_APN_DOMINANT_RPT_BUCKET rpt
-    ON ppt.SNDCUSTOMER_KEY = rpt.SNDCUSTOMER_KEY
-GROUP BY ppt.PPT_bucket, rpt.RPT_bucket
-ORDER BY ppt.PPT_bucket, rpt.RPT_bucket;
-
--- View results
-SELECT * FROM CAM_1746_APN_PPT_RPT_DISTRIBUTION;
-
-
--- ============================================================================
--- STEP 7: COMBINED PPT x RPT DISTRIBUTION - NON-APN SENDERS
--- ============================================================================
-
-CREATE OR REPLACE TABLE CAM_1746_NON_APN_PPT_RPT_DISTRIBUTION AS
-SELECT
-    ppt.PPT_bucket AS DOMINANT_PPT_BUCKET,
-    rpt.RPT_bucket AS DOMINANT_RPT_BUCKET,
-    COUNT(DISTINCT ppt.SNDCUSTOMER_KEY) AS CUSTOMER_COUNT,
-    SUM(ppt.txn_count) AS TOTAL_PPT_TXNS,
-    SUM(rpt.txn_count) AS TOTAL_RPT_TXNS,
-    SUM(ppt.total_principal_usd) AS TOTAL_PRINCIPAL,
-    SUM(rpt.total_revenue) AS TOTAL_REVENUE
-FROM CAM_1746_NON_APN_DOMINANT_PPT_BUCKET ppt
-INNER JOIN CAM_1746_NON_APN_DOMINANT_RPT_BUCKET rpt
-    ON ppt.SNDCUSTOMER_KEY = rpt.SNDCUSTOMER_KEY
-GROUP BY ppt.PPT_bucket, rpt.RPT_bucket
-ORDER BY ppt.PPT_bucket, rpt.RPT_bucket;
-
--- View results
-SELECT * FROM CAM_1746_NON_APN_PPT_RPT_DISTRIBUTION;
-
-
--- ============================================================================
--- VERIFICATION QUERIES
--- ============================================================================
-
--- Check customer counts
-SELECT
-    'APN SENDERS - PPT' AS segment,
-    COUNT(DISTINCT SNDCUSTOMER_KEY) AS customer_count
-FROM CAM_1746_APN_DOMINANT_PPT_BUCKET
-
-UNION ALL
-
-SELECT
-    'APN SENDERS - RPT' AS segment,
-    COUNT(DISTINCT SNDCUSTOMER_KEY) AS customer_count
-FROM CAM_1746_APN_DOMINANT_RPT_BUCKET
-
-UNION ALL
-
-SELECT
-    'NON-APN SENDERS - PPT' AS segment,
-    COUNT(DISTINCT SNDCUSTOMER_KEY) AS customer_count
-FROM CAM_1746_NON_APN_DOMINANT_PPT_BUCKET
-
-UNION ALL
-
-SELECT
-    'NON-APN SENDERS - RPT' AS segment,
-    COUNT(DISTINCT SNDCUSTOMER_KEY) AS customer_count
-FROM CAM_1746_NON_APN_DOMINANT_RPT_BUCKET;
-
-
--- Check PPT bucket distribution - APN vs NON-APN
-SELECT 
-    'APN SENDERS' AS segment,
-    PPT_bucket,
-    COUNT(DISTINCT SNDCUSTOMER_KEY) AS customer_count,
-    ROUND(COUNT(DISTINCT SNDCUSTOMER_KEY) * 100.0 / SUM(COUNT(DISTINCT SNDCUSTOMER_KEY)) OVER (PARTITION BY 'APN SENDERS'), 2) AS pct
-FROM CAM_1746_APN_DOMINANT_PPT_BUCKET
-GROUP BY PPT_bucket
-
-UNION ALL
-
-SELECT 
-    'NON-APN SENDERS' AS segment,
-    PPT_bucket,
-    COUNT(DISTINCT SNDCUSTOMER_KEY) AS customer_count,
-    ROUND(COUNT(DISTINCT SNDCUSTOMER_KEY) * 100.0 / SUM(COUNT(DISTINCT SNDCUSTOMER_KEY)) OVER (PARTITION BY 'NON-APN SENDERS'), 2) AS pct
-FROM CAM_1746_NON_APN_DOMINANT_PPT_BUCKET
-GROUP BY PPT_bucket
-
-ORDER BY segment, PPT_bucket;
-
-
--- Check RPT bucket distribution - APN vs NON-APN
-SELECT 
-    'APN SENDERS' AS segment,
-    RPT_bucket,
-    COUNT(DISTINCT SNDCUSTOMER_KEY) AS customer_count,
-    ROUND(COUNT(DISTINCT SNDCUSTOMER_KEY) * 100.0 / SUM(COUNT(DISTINCT SNDCUSTOMER_KEY)) OVER (PARTITION BY 'APN SENDERS'), 2) AS pct
-FROM CAM_1746_APN_DOMINANT_RPT_BUCKET
-GROUP BY RPT_bucket
-
-UNION ALL
-
-SELECT 
-    'NON-APN SENDERS' AS segment,
-    RPT_bucket,
-    COUNT(DISTINCT SNDCUSTOMER_KEY) AS customer_count,
-    ROUND(COUNT(DISTINCT SNDCUSTOMER_KEY) * 100.0 / SUM(COUNT(DISTINCT SNDCUSTOMER_KEY)) OVER (PARTITION BY 'NON-APN SENDERS'), 2) AS pct
-FROM CAM_1746_NON_APN_DOMINANT_RPT_BUCKET
-GROUP BY RPT_bucket
-
-ORDER BY segment, RPT_bucket;
-
-
--- ============================================================================
--- EXCEL EXPORT TABLES
--- ============================================================================
-/*
-EXPORT THESE TWO TABLES TO EXCEL:
----------------------------------
-
-1. CAM_1746_APN_PPT_RPT_DISTRIBUTION
-   - For APN Senders pivot table
-
-2. CAM_1746_NON_APN_PPT_RPT_DISTRIBUTION
-   - For NON-APN Senders pivot table
-
-
-EXCEL PIVOT TABLE SETUP:
-------------------------
-
-PIVOT TABLE 1: APN SENDERS
-- Data source: CAM_1746_APN_PPT_RPT_DISTRIBUTION
-- Rows: DOMINANT_PPT_BUCKET
-- Columns: DOMINANT_RPT_BUCKET
-- Values: CUSTOMER_COUNT (Sum)
-
-PIVOT TABLE 2: NON-APN SENDERS
-- Data source: CAM_1746_NON_APN_PPT_RPT_DISTRIBUTION
-- Rows: DOMINANT_PPT_BUCKET
-- Columns: DOMINANT_RPT_BUCKET
-- Values: CUSTOMER_COUNT (Sum)
-
-Add conditional formatting (color scale) to both pivot tables to show concentration.
-
-
-EXPECTED PATTERNS:
------------------
-
-APN SENDERS:
-- Should show concentration in HIGHER PPT buckets (D, E, F)
-- Should show concentration in LOWER RPT buckets (A, B, C)
-- Pattern: High principal, low revenue = competitive pricing
-
-NON-APN SENDERS:
-- Should show concentration in LOWER PPT buckets (A, B, C)
-- Should show concentration in HIGHER RPT buckets (B, C, D)
-- Pattern: Low principal, higher revenue = normal pricing
-*/
-
-
--- ============================================================================
--- SUMMARY COMPARISON
--- ============================================================================
-
--- Overall statistics comparison
-SELECT
-    'APN SENDERS' AS segment,
-    COUNT(DISTINCT ppt.SNDCUSTOMER_KEY) AS total_customers,
-    COUNT(DISTINCT CASE WHEN ppt.PPT_bucket IN ('A.<$100', 'B.$100-$500') THEN ppt.SNDCUSTOMER_KEY END) AS low_ppt_customers,
-    COUNT(DISTINCT CASE WHEN ppt.PPT_bucket IN ('E.$2,000-$5,000', 'F.$5,000+') THEN ppt.SNDCUSTOMER_KEY END) AS high_ppt_customers,
-    COUNT(DISTINCT CASE WHEN rpt.RPT_bucket IN ('A.<$5', 'B.$5-$10') THEN rpt.SNDCUSTOMER_KEY END) AS low_rpt_customers,
-    COUNT(DISTINCT CASE WHEN rpt.RPT_bucket IN ('F.$40-$80', 'G.$80+') THEN rpt.SNDCUSTOMER_KEY END) AS high_rpt_customers
-FROM CAM_1746_APN_DOMINANT_PPT_BUCKET ppt
-INNER JOIN CAM_1746_APN_DOMINANT_RPT_BUCKET rpt
-    ON ppt.SNDCUSTOMER_KEY = rpt.SNDCUSTOMER_KEY
-
-UNION ALL
-
-SELECT
-    'NON-APN SENDERS' AS segment,
-    COUNT(DISTINCT ppt.SNDCUSTOMER_KEY) AS total_customers,
-    COUNT(DISTINCT CASE WHEN ppt.PPT_bucket IN ('A.<$100', 'B.$100-$500') THEN ppt.SNDCUSTOMER_KEY END) AS low_ppt_customers,
-    COUNT(DISTINCT CASE WHEN ppt.PPT_bucket IN ('E.$2,000-$5,000', 'F.$5,000+') THEN ppt.SNDCUSTOMER_KEY END) AS high_ppt_customers,
-    COUNT(DISTINCT CASE WHEN rpt.RPT_bucket IN ('A.<$5', 'B.$5-$10') THEN rpt.SNDCUSTOMER_KEY END) AS low_rpt_customers,
-    COUNT(DISTINCT CASE WHEN rpt.RPT_bucket IN ('F.$40-$80', 'G.$80+') THEN rpt.SNDCUSTOMER_KEY END) AS high_rpt_customers
-FROM CAM_1746_NON_APN_DOMINANT_PPT_BUCKET ppt
-INNER JOIN CAM_1746_NON_APN_DOMINANT_RPT_BUCKET rpt
-    ON ppt.SNDCUSTOMER_KEY = rpt.SNDCUSTOMER_KEY;
+sndcustomer_key, 
+send_country_name,
+CASE WHEN
+    pricing_channel IN ('WEB', 'APP') THEN 'DIGITAL'
+    WHEN PRICING_CHANNEL IN ('POS','AIR','TMT') THEN 'DIGITAL'
+    END AS Channel,
+    FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
+    where where UPPER(send_country_name) IN (
+'INDIA', 'PAKISTAN', 'TURKEY',
+'BANGLADESH','UNITED ARAB EMIRATES','LEBANON',
+'EGYPT','MALAYSIA','BAHRAIN',
+'MALI','IRAQ','INDONESIA',
+'ALBANIA','KAZAKHSTAN','UZBEKISTAN',
+'AFGHANISTAN',
+'QATAR',
+'OMAN',
+'SUDAN',
+'MALDIVES',
+'NIGER',
+'TURKMENISTAN',
+'COMOROS',
+'YEMEN',
+'BRUNEI DARUSSALAM',
+'CHAD',
+'KUWAIT',
+'DJIBOUTI',
+'KYRGYZSTAN',
+'TAJIKISTAN',
+'KOSOVO',
+'PALESTINE',
+'JORDAN',
+'MOROCCO',
+'AZERBAIJAN',
+'BOSNIA AND HERZEGOVINA',
+'NIGERIA',
+'SENEGAL',
+'TUNISIA'
+);
