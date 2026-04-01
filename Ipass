@@ -27,10 +27,7 @@ GROUP BY 1, 2, 3
 
 
 -- ============================================================
--- STEP 2: HISTORY — pre-campaign activity windows per customer
---         Reference point: Feb 17, 2025 (campaign start)
---         Scoped to same send countries as base
--- ============================================================
+-- STEP 2: HISTORY
 CREATE OR REPLACE TABLE CAR_975_HISTORY AS
 SELECT
     sndcustomer_key,
@@ -41,7 +38,7 @@ SELECT
     MAX(CASE WHEN DATE(rcvpaying_datetime) >= '2021-02-17' AND DATE(rcvpaying_datetime) <= '2022-02-16' THEN 1 ELSE 0 END) AS r37_48_active
 FROM WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW
 WHERE DATE(rcvpaying_datetime) < '2025-02-17'
-  AND sndcustomer_key IN (SELECT sndcustomer_key FROM CAR_975_BASE)
+  AND sndcustomer_key IN (SELECT sndcustomer_key FROM CAR_975_BASE where sndcustomer_key is not null)
   AND UPPER(send_country_name) IN (
     'INDIA', 'PAKISTAN', 'TURKEY', 'BANGLADESH', 'UNITED ARAB EMIRATES',
     'LEBANON', 'EGYPT', 'MALAYSIA', 'BAHRAIN', 'MALI', 'IRAQ', 'INDONESIA',
@@ -96,13 +93,13 @@ LEFT JOIN CAR_975_HISTORY h
 ;
 
 
--- ============================================================
--- STEP 4: FINAL OUTPUT — NC count by corridor × channel × segment
--- ============================================================
+
+-- STEP 4: FINAL OUTPUT 
 SELECT
     send_country_name,
     channel,
     segment,
+    CASE WHEN SEGMENT != 'R12 Active' THEN 'YES' ELSE 'NO' END AS new_as_per_mbr,
     COUNT(DISTINCT sndcustomer_key) AS nc_count
 FROM CAR_975_SEGMENTED
 GROUP BY 1, 2, 3
@@ -116,6 +113,3 @@ ORDER BY 1, 2,
         ELSE 6
     END
 ;
-
-are we including the NEW Customer Definition by MBR ? The definition says a customer is inactive in R12 time period 
-but has txn in the ramadan period. Is that included ? 
