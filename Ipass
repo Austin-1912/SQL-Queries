@@ -38,6 +38,7 @@ FROM (
 WHERE rn = 1
 ;
 
+select count(distinct sndcustomer_key) from CAR_975_BASE;--121,507
 
 -- ============================================================
 -- STEP 2: HISTORY
@@ -67,7 +68,32 @@ GROUP BY 1, 2,3
 
 
 -- ============================================================
--- STEP 3: SEGMENTED — join base to history and assign segment
+-- STEP 2.5: MARKETABILITY — pull email and SMS flags from customer master
+-- ============================================================
+CREATE OR REPLACE TABLE CAR_975_MARKETABILITY AS
+SELECT
+    customer_key,
+    CASE
+        WHEN marketing_flag             = 'Y'
+         AND email_address_on_file_flag = 'Y'
+         AND opt_email                  = 'I' THEN 'Y'
+        ELSE 'N'
+    END AS email_marketable_flag,
+    
+     CASE
+        WHEN marketing_flag             = 'Y'
+         AND mobile_number_on_file_flag = 'Y'
+        AND opt_sms                    = 'I' THEN 'Y'
+        ELSE 'N'
+     END AS sms_marketable_flag,
+FROM WUDNA.SUMMARY_GEN.WUDNA_CUSTOMER_MASTER_VW
+WHERE customer_key IN (SELECT sndcustomer_key FROM CAR_975_BASE WHERE sndcustomer_key IS NOT NULL)
+;
+select count(distinct customer_key) from CAR_975_MARKETABILITY;--121,507
+ 
+ 
+-- ============================================================
+-- STEP 3: SEGMENTED — now includes marketability flags
 -- ============================================================
 CREATE OR REPLACE TABLE CAR_975_SEGMENTED AS
 SELECT
@@ -75,6 +101,8 @@ SELECT
     b.send_country_name,
     b.rcv_country_name,
     b.channel,
+    m.email_marketable_flag,
+    m.sms_marketable_flag,
     COALESCE(h.r12_active,    0) AS r12_active,
     COALESCE(h.r13_24_active, 0) AS r13_24_active,
     COALESCE(h.r25_36_active, 0) AS r25_36_active,
@@ -105,25 +133,24 @@ FROM CAR_975_BASE b
 LEFT JOIN CAR_975_HISTORY h
     ON b.sndcustomer_key = h.sndcustomer_key
    AND b.send_country_name = h.send_country_name
+LEFT JOIN CAR_975_MARKETABILITY m
+    ON b.sndcustomer_key = m.customer_key
 ;
-
-select 
-sndcustomer_key, count(*)
-from CAR_975_SEGMENTED 
-group by 1
-having count(*) >1;
-
--- STEP 4: FINAL OUTPUT 
+ 
+ select distinct segment from CAR_975_SEGMENTED;
+-- ============================================================
+-- STEP 4: FINAL OUTPUT
+-- ============================================================
 SELECT
     send_country_name,
     rcv_country_name,
     channel,
     segment,
-    CASE WHEN SEGMENT != 'R12 Active' THEN 'YES' ELSE 'NO' END AS new_as_per_mbr,
-    COUNT(DISTINCT sndcustomer_key) AS nc_count
+    email_marketable_flag,
+    sms_marketable_flag,
+    CASE WHEN segment != 'R12 Active' THEN 'YES' ELSE 'NO' END AS new_as_per_mbr,
+    COUNT(DISTINCT sndcustomer_key)                                          AS nc_count,
+    
 FROM CAR_975_SEGMENTED
-GROUP BY 1, 2, 3,4
-ORDER BY 1, 2,3,4
-;
-i have written this script however i also want to include the marketability flag , email, sms and app marketable and for that 
-we have to join with customer master table.
+GROUP BY ALL
+ORDER BY 1, 2, 3,4
