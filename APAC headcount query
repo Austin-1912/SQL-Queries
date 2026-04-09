@@ -450,3 +450,7 @@ BUCKETED AS (
 SELECT 
   b.*
 FROM BUCKETED b;
+
+What is happening over here is the numbers are not matching the number of transactions for a particular campaign is higher than 
+the actual transactions that has happened hence the corridor breakdown is being distorted, could you please help to solve this issue.
+Identify what is going wrong in here and solve it.
