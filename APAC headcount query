@@ -1,18 +1,9 @@
 CREATE OR REPLACE TABLE AM_BI_CAMPAIGN_WISE_CORRIDOR_MYWU_UPDATE_CUSTOMER_LEVEL AS
 select 
-a.COUNTRY,
-a.CORRIDOR,
-b.sndcountry_code, b.rcvcountry_code, 
+a.COUNTRY, a.CORRIDOR, b.sndcountry_code, b.rcvcountry_code, 
 b.sndcountry_code || '-' || b.rcvcountry_code as txn_corridor,
--- a.channel,
-a.EVENT_CAPTURED_DT,
-a.CAMPAIGN_NAME,
-a.MARKETING_STRATEGY,
-a.RESEND_FLAG,
-a.ACTIVITY_CODE,
-a.TOTAL_EMAILS_SENT,
-a.EMAILS_UN_DELIVERED,
-a.EMAILS_OPENED_ATLEAST_ONCE_WITHIN_30_DAYS_OF_COMMUNICATION,
+-- a.channel, a.EVENT_CAPTURED_DT, a.CAMPAIGN_NAME, a.MARKETING_STRATEGY, a.RESEND_FLAG, a.ACTIVITY_CODE,
+a.TOTAL_EMAILS_SENT, a.EMAILS_UN_DELIVERED, a.EMAILS_OPENED_ATLEAST_ONCE_WITHIN_30_DAYS_OF_COMMUNICATION,
 a.EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_30_DAYS_OF_COMMUNICATION,
 a.EMAILS_LEADING_TO_A_WU_COM_HIT_WITHIN_30_DAYS_OF_COMMUNICATION,
 a.CUSTOMERS_CONTACTED_ATLEAST_ONCE_BY_EMAIL,
@@ -21,107 +12,24 @@ a.CUSTOMERS_OPENING_ATLEAST_ONE_MAIL_WITHIN_30_DAYS_OF_COMMUNICATION,
 a.CUSTOMERS_CLICKING_ATLEAST_ONE_MAIL_WITHIN_30_DAYS_OF_COMMUNICATION,
 a.CUSTOMERS_COMPLAINING_ABOUT_SPAM,
 a.CUSTOMERS_OPTING_OUT_OF_EMAIL_MARKETING,
-a.CUSTOMERS_VISITING_WU_COM_IN_30_DAYS,
-a.BAD_CLICKS,
-a.UNIQUE_CLICKS,
+a.CUSTOMERS_VISITING_WU_COM_IN_30_DAYS, a.BAD_CLICKS, a.UNIQUE_CLICKS,
 a.EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION,
-a.EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION,
-a.PUSH_OPEN_COUNT,
-a.PUSH_INFLU_OPEN_COUNT,
-a.PUSH_BOUNCE_COUNT,
-a.INAPPMSG_VIEWED_COUNT,
-a.INAPPMSG_CLICKED_COUNT,
-a.CC_CLICKED_COUNT,
-a.CC_VIEWED_COUNT,
-a.CC_DISMISSED_COUNT,
-a.CC_ABORTED_COUNT,
-a.PUSH_SENT_COUNT,
-a.CC_SENT_COUNT,
-a.TYPE,
-a.CAMPAIGN_CANVAS_NAME,
-a.CANVAS_STEP_NAME_NEW,
-a.COMM_CHANNEL,
-a.CUSTOMER_ID,
-a.CUSTOMER_KEY,
-a.TXNS,
-a.REVENUE,
-a.RETAIL_TXNS,
-a.AIR_TXNS,
-a.POS_TXNS,
-a.DIGITAL_TXNS,
-a.APP_TXNS,
-a.TXNS_7DAYS,
-a.RETAIL_TXNS_7DAYS,
-a.AIR_TXNS_7DAYS,
-a.POS_TXNS_7DAYS,
-a.DIGITAL_TXNS_7DAYS,
-a.APP_TXNS_7DAYS,
-a.TMT_TXNS,
-a.ONE_X,
-a.RETAIL_ONLY,
-a.LAPSED,
-a.R6_TXNS,
-a.R6_CHANNEL,
-a.R6_APP_COUNT,
-a.R12_TXNS,
-a.R24_TXNS,
-a.R36_TXNS,
-a.R12_RETAIL_TXNS,
-a.R12_DIGITAL_TXNS,
-a.DIGITAL_TXNS_30DAYS,
-a.R2D,
-a.WINBACKS,
-a.ONEX_TO_TWOX_AND_PLUS,
-a.TXN_CHANNEL,
-a.R48_TXNS,
-a.NEW_CUSTOMER,
-a.TWOX_TO_THREEX_AND_PLUS,
-a.THREEX_TO_FOURX_AND_PLUS,
-a.FOURX_TO_FIVEX_AND_PLUS,
-a.REGISTERED_30_DAYS,
-a.LOYALTY_REGISTRATION,
-a.DIGITAL_REGISTRATION,
-a.TXNS_30_DAYS_1,
-a.PRIOR_REGISTRATION,
-a.R24_RETAIL_TXNS,
-a.R24_DIGITAL_TXNS,
-a.R36_RETAIL_TXNS,
-a.R36_DIGITAL_TXNS,
-a.ACTIVITY_STATUS,
-a.MYWU_FLAG,
-a.CHANNEL_DOMINANCE,
-a.FLAG_ADDRESSABLE,
-a.FLAG_MARKETABLE,
-a.EMAIL_ADDRESSABLE,
-a.EMAIL_MARKETABLE,
-a.SMS_ADDRESSABLE,
-a.SMS_MARKETABLE,
-a.TENURE_STATUS,
-a.REDEEM_30_DAYS,
-a.APP_MARKETABLE,
-a.TXNS_RECENT,
-a.TXNS_RECENT_7DAYS,
-a.REVENUE_RECENT,
-a.REVENUE_RECENT_7DAYS,
-a.TXN_MODE,
-a.RETAIL_RECENT_TXNS,
-a.AIR_RECENT_TXNS,
-a.POS_RECENT_TXNS,
-a.DIGITAL_RECENT_TXNS,
-a.APP_RECENT_TXNS,
-a.RETAIL_RECENT_REVENUE,
-a.AIR_RECENT_REVENUE,
-a.DIGITAL_RECENT_REVENUE,
-a.APP_RECENT_REVENUE,
-a.RETAIL_TXNS_RECENT_7DAYS,
-a.AIR_TXNS_RECENT_7DAYS,
-a.POS_TXNS_RECENT_7DAYS,
-a.DIGITAL_TXNS_RECENT_7DAYS,
-a.APP_TXNS_RECENT_7DAYS,
-a.TPC_FLAG,
-a.HVC_FLAG,
-a.RFM_PERSONA,
-a.TXN_ID  
+a.EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION, a.PUSH_OPEN_COUNT,
+a.PUSH_INFLU_OPEN_COUNT, a.PUSH_BOUNCE_COUNT, a.INAPPMSG_VIEWED_COUNT, a.INAPPMSG_CLICKED_COUNT, a.CC_CLICKED_COUNT,a.CC_VIEWED_COUNT,
+a.CC_DISMISSED_COUNT, a.CC_ABORTED_COUNT, a.PUSH_SENT_COUNT, a.CC_SENT_COUNT, a.TYPE, a.CAMPAIGN_CANVAS_NAME,
+a.CANVAS_STEP_NAME_NEW, a.COMM_CHANNEL, a.CUSTOMER_ID, a.CUSTOMER_KEY, a.TXNS, a.REVENUE, a.RETAIL_TXNS, a.AIR_TXNS,
+a.POS_TXNS, a.DIGITAL_TXNS, a.APP_TXNS, a.TXNS_7DAYS, a.RETAIL_TXNS_7DAYS, a.AIR_TXNS_7DAYS, a.POS_TXNS_7DAYS, a.DIGITAL_TXNS_7DAYS,
+a.APP_TXNS_7DAYS, a.TMT_TXNS, a.ONE_X, a.RETAIL_ONLY, a.LAPSED, a.R6_TXNS, a.R6_CHANNEL, a.R6_APP_COUNT, a.R12_TXNS,a.R24_TXNS,
+a.R36_TXNS, a.R12_RETAIL_TXNS, a.R12_DIGITAL_TXNS, a.DIGITAL_TXNS_30DAYS, a.R2D, a.WINBACKS, a.ONEX_TO_TWOX_AND_PLUS,
+a.TXN_CHANNEL, a.R48_TXNS, a.NEW_CUSTOMER, a.TWOX_TO_THREEX_AND_PLUS, a.THREEX_TO_FOURX_AND_PLUS, a.FOURX_TO_FIVEX_AND_PLUS,
+a.REGISTERED_30_DAYS, a.LOYALTY_REGISTRATION, a.DIGITAL_REGISTRATION, a.TXNS_30_DAYS_1, a.PRIOR_REGISTRATION,
+a.R24_RETAIL_TXNS, a.R24_DIGITAL_TXNS, a.R36_RETAIL_TXNS, a.R36_DIGITAL_TXNS, a.ACTIVITY_STATUS, a.MYWU_FLAG, a.CHANNEL_DOMINANCE,
+a.FLAG_ADDRESSABLE, a.FLAG_MARKETABLE, a.EMAIL_ADDRESSABLE, a.EMAIL_MARKETABLE, a.SMS_ADDRESSABLE, a.SMS_MARKETABLE,
+a.TENURE_STATUS, a.REDEEM_30_DAYS, a.APP_MARKETABLE, a.TXNS_RECENT, a.TXNS_RECENT_7DAYS, a.REVENUE_RECENT, a.REVENUE_RECENT_7DAYS,
+a.TXN_MODE, a.RETAIL_RECENT_TXNS, a.AIR_RECENT_TXNS, a.POS_RECENT_TXNS, a.DIGITAL_RECENT_TXNS, a.APP_RECENT_TXNS, a.RETAIL_RECENT_REVENUE,
+a.AIR_RECENT_REVENUE, a.DIGITAL_RECENT_REVENUE, a.APP_RECENT_REVENUE, a.RETAIL_TXNS_RECENT_7DAYS, a.AIR_TXNS_RECENT_7DAYS,
+a.POS_TXNS_RECENT_7DAYS, a.DIGITAL_TXNS_RECENT_7DAYS, a.APP_TXNS_RECENT_7DAYS, a.TPC_FLAG, a.HVC_FLAG,
+a.RFM_PERSONA, a.TXN_ID  
 from SJ_BI_CAMPAIGN_WISE_EMAIL_COMMUNICATIONS_2_V2_MYWU_UPDATE_CUSTOMER_LEVEL a
 LEFT JOIN WUDNA.SUMMARY_GEN.WUDNA_TXN_MASTER_ANALYTICS_VW b
 ON a.customer_key = b.sndcustomer_key
@@ -136,32 +44,22 @@ a.campaign_name as campaign_name,
 substr(activity_code,3,1) as channel,
 TO_DATE(event_captured_dt) AS EVENT_CAPTURED_dT,
 date_trunc(week,event_captured_dt) as release_week,
-
-
  -- Corridor keys
     txn_corridor,
     ACTIVITY_STATUS,
-    
 SUM(REVENUE_RECENT_7DAYS) AS REVENUE,
 COUNT(CASE WHEN ACTIVITY_STATUS IN ('R6 Active') AND txns_7days > 0 THEN 1 END) AS CHURN_TRANSACTION_7DAYS,     //Churn_reduction_metric
 count(case when upper(txn_channel) in ('RETAIL') and digital_recent_txns > 0 then 1 end ) as test_communications_r2d,
 count(case when upper(txn_channel) in ('RETAIL') and digital_txns_7days > 0 then 1 end ) as test_communications_r2d_7DAYS,	//7_DAYS_ATTRIBUTION_CHANGE_FROM_30_DAYS
-
 count(case when activity_status not in ('R6 Active','R7 to R12 Active','RNT') and lapsed='Y' and txns_7days > 0 then 1 end ) as test_communications_winbacks_RNT_exCLUDED,
-
 count(case when activity_status not in ('R6 Active','R7 to R12 Active','RNT') and retail_txns_7days > 0 then 1 end) as test_communications_winbacks_with_atleast_1_retail_txn_RNT_EXCLUDED,
-
 count(case when activity_status not in ('R6 Active','R7 to R12 Active','RNT') and digital_txns_7days > 0 then 1 end) as test_communications_winbacks_with_atleast_1_digital_txn_RNT_EXCLUDED, 
 count(case when activity_status not in ('R6 Active','R7 to R12 Active') and txns_recent > 0 then 1 end ) as test_communications_winbacks,
-
 count(case when lapsed='Y' and txns_7days > 0 then 1 end ) as test_communications_winbacks_7DAYS, //7_DAYS_ATTRIBUTION_CHANGE_FROM_30_DAYS
-
 count(case when activity_status not in ('R6 Active','R7 to R12 Active') and retail_txns_7days > 0 then 1 end) as test_communications_winbacks_with_atleast_1_retail_txn,
-
 count(case when activity_status not in ('R6 Active','R7 to R12 Active') and digital_txns_7days > 0 then 1 end) as test_communications_winbacks_with_atleast_1_digital_txn, 
 count(case when one_x='Y' and txns_recent > 0 then 1 end ) as test_communications_ONEX_TO_TWOX_AND_PLUS,
 count(case when one_x='Y' and txns_7days > 0 then 1 end ) as test_communications_ONEX_TO_TWOX_AND_PLUS_7DAYS, //7_DAYS_ATTRIBUTION_CHANGE_FROM_30_DAYS
-
 count(case when TWOX_TO_THREEX_AND_PLUS='Y' then 1 end ) as test_communications_TWOX_TO_THREEX_AND_PLUS,
 count(case when THREEX_TO_FOURX_AND_PLUS='Y' then 1 end ) as test_communications_THREEX_TO_FOURX_AND_PLUS,
 count(case when FOURX_TO_FIVEX_AND_PLUS='Y' then 1 end ) as test_communications_FOURX_TO_FIVEX_AND_PLUS,
@@ -172,54 +70,40 @@ count(case when emails_un_delivered=0 and redeem_30_days = 'Y'
 				(SUBSTR(ACTIVITY_CODE,3,1) IN ('E','S','I','C','W') AND  EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0))
 					then 1 end) as test_communications_EXISTING_CUSTOMER,		//7_DAYS_ATTRIBUTION_CHANGE_FROM_30_DAYS
 count(case when emails_un_delivered=0 and MyWU_flag not in ('Non_Member') then 1 end ) as test_communications_LOYALTY_REGISTRATION,
-
 count(case when emails_un_delivered=0 and MyWU_flag not in ('Non_Member') 
 			AND ((SUBSTR(ACTIVITY_CODE,3,1) IN ('P') AND EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0)
 				or
 				(SUBSTR(ACTIVITY_CODE,3,1) IN ('E','S','I','C','W') AND  EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0))
 				then 1 end ) as test_communications_LOYALTY_REGISTRATION_OPENED_CLICKED_7DAYS,	//7_DAYS_ATTRIBUTION_CHANGE_FROM_30_DAYS
-				
 count(case when emails_un_delivered=0 and registered_30_days = 'Y' 
-				AND ((SUBSTR(ACTIVITY_CODE,3,1) IN ('P') AND EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0) 
-				or
-				(SUBSTR(ACTIVITY_CODE,3,1) IN ('E','S','I','C','W') AND  EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0))
+AND ((SUBSTR(ACTIVITY_CODE,3,1) IN ('P') AND EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0) 
+or (SUBSTR(ACTIVITY_CODE,3,1) IN ('E','S','I','C','W') AND  EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0))
 				then 1 end) as test_communications_DIGITAL_REGISTRATION, //7_DAYS_ATTRIBUTION_CHANGE_FROM_30_DAYS
-
 count(case when emails_un_delivered=0 and MyWU_flag in ('Non_Member') then 1 end) as test_communications_REGISTERED_30_DAYS,
-
 count(case when emails_un_delivered=0 and MyWU_flag in ('Non_Member') 
-			AND ((SUBSTR(ACTIVITY_CODE,3,1) IN ('P') AND EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0 )
-				or
-				(SUBSTR(ACTIVITY_CODE,3,1) IN ('E','S','I','C','W') AND  EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0))
+AND ((SUBSTR(ACTIVITY_CODE,3,1) IN ('P') AND EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0 )
+or (SUBSTR(ACTIVITY_CODE,3,1) IN ('E','S','I','C','W') AND  EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0))
 				then 1 end) as test_communications_REGISTERED_7_DAYS,  //7_DAYS_ATTRIBUTION_CHANGE_FROM_30_DAYS
 
 count(case when emails_un_delivered=0 and retail_only='Y' then 1 end ) as test_retail_only_delivered,
-
 count(case when emails_un_delivered=0 
 			and retail_only='Y' 
 			AND ((SUBSTR(ACTIVITY_CODE,3,1) IN ('P') AND EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0) 
 				or
 				(SUBSTR(ACTIVITY_CODE,3,1) IN ('E','S','I','C','W') AND  EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0))
 					then 1 end ) as test_retail_only_delivered_7DAYS, //7_DAYS_ATTRIBUTION_CHANGE_FROM_30_DAYS
-
 count(case when emails_un_delivered=0 and lapsed='Y' then 1 end ) as test_lapsed_only_delivered,	 
-
 count(case when emails_un_delivered=0 
 			and lapsed='Y' 
 			AND ((SUBSTR(ACTIVITY_CODE,3,1) IN ('P') AND EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0 )
 				or
 				(SUBSTR(ACTIVITY_CODE,3,1) IN ('E','S','I','C','W') AND  EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0))
 					then 1 end ) as test_lapsed_only_delivered_opened_clicked_7days, //7_DAYS_ATTRIBUTION_CHANGE_FROM_30_DAYS
-
 count(case when emails_un_delivered=0 and one_x='Y' then 1 end ) as test_1x_delivered,
-
-count(case when emails_un_delivered=0 
-			and one_x='Y' 
-			AND ((SUBSTR(ACTIVITY_CODE,3,1) IN ('P') AND EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0 )
-				or
-				(SUBSTR(ACTIVITY_CODE,3,1) IN ('E','S','I','C','W') AND  EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0))
+count(case when emails_un_delivered=0 and one_x='Y' 
+AND ((SUBSTR(ACTIVITY_CODE,3,1) IN ('P') AND EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0 )
+or (SUBSTR(ACTIVITY_CODE,3,1) IN ('E','S','I','C','W') AND  EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0))
 					then 1 end ) as test_1x_delivered_OPENED_CLICKED_7DAYS,	//7_DAYS_ATTRIBUTION_CHANGE_FROM_30_DAYS
-
 
 count(case when emails_un_delivered=0 and r6_txns>0 then 1 end ) as test_R6_CHURN_delivered,        //Churn_reduction_metric
 count(case when emails_un_delivered=0 and r12_txns=2 then 1 end ) as test_2x_delivered,
@@ -237,7 +121,6 @@ count(case when CUSTOMERS_OPTING_OUT_OF_EMAIL_MARKETING > 0 then 1 end) as opt_o
 count(case when EMAILS_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION > 0 then 1 end) as communications_OPENED_ATLEAST_ONCE_WITHIN_7_DAYS_OF_COMMUNICATION,
 count(case when EMAILS_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION > 0  then 1 end) as communications_WITH_ATLEAST_ONE_LINK_CLICK_WITHIN_7_DAYS_OF_COMMUNICATION, 
 count(case when EMAILS_LEADING_TO_A_WU_COM_HIT_WITHIN_30_DAYS_OF_COMMUNICATION > 0 then 1 end ) as communications_LEADING_TO_A_WU_COM_HIT_WITHIN_30_DAYS_OF_COMMUNICATION,
-
 count(case when txns > 0 then 1 end ) as communications_with_atleast_1_txn,
 count(case when retail_txns > 0 then 1 end ) as communications_with_atleast_1_retail_txn,
 count(case when air_txns > 0 then 1 end ) as communications_with_atleast_1_air_txn,
@@ -277,16 +160,11 @@ sum(CC_DISMISSED_COUNT) CC_DISMISSED_COUNT,
 sum(CC_ABORTED_COUNT) CC_ABORTED_COUNT,
 sum(push_sent_count) push_sent_count,
 sum(cc_sent_count) cc_sent_count
- 
 from AM_BI_CAMPAIGN_WISE_CORRIDOR_MYWU_UPDATE_CUSTOMER_LEVEL a
-
 left outer join "WUDNA"."SUMMARY_GEN"."WUDNA_CUSTOMER_MASTER_VW"  d on a.customer_key=d.customer_key
-
 left outer join "WUDNA"."SUMMARY_GEN"."COUNTRY_VW" b on d.COUNTRY_CODE = b.country_code 
-
 left outer join (select distinct marketing_strategies,campaign_category 
                   from cex_sandbox.campaign_category_V where marketing_strategies is not null) g on a.marketing_strategy=g.marketing_strategies
-
 left join 
 (select 
        distinct concat(NVL(UPPER(campaign_canvas_name),'NA'),'_',NVL(UPPER(CANVAS_STEP_NAME),'NA'),'_',nvl(UPPER(APP_TYPE_NAME),'NA')) 
@@ -296,14 +174,9 @@ left join
        UPPER(APP_TYPE_NAME) APP_TYPE_NAME,
        UPPER(type) type
 from 
-
-(SELECT 
-     case 
-         
-		 WHEN A.customer_key IS NULL OR A.customer_key ='' then B.customer_key
+(SELECT  case WHEN A.customer_key IS NULL OR A.customer_key ='' then B.customer_key
          else A.CUSTOMER_KEY
      end as CUSTOMER_KEY,
-    
      campaign_canvas_name,
      CANVAS_STEP_NAME,
      APP_TYPE_NAME,
@@ -312,15 +185,9 @@ FROM  summary_gen.braze_summary_vw B
 LEFT JOIN  "WUDNA"."SUMMARY_GEN".WUDNA_ACCOUNT_MASTER_VW A 
 ON B.CUSTOMER_KEY = A.CUSTOMER_UMN
 WHERE  B.CUSTOMER_KEY IS NOT NULL)
-
-
-
 ) e on a.campaign_name = e.campaign_name_2 
 where len(a.CUSTOMER_KEY) IN (9,15,19)                                                        
 group by ALL),
-
-
-
 RANKED AS (
   SELECT 
     cte.*,
@@ -330,7 +197,6 @@ RANKED AS (
     ) AS corr_rank
   FROM AK_BIRD_SFMC_CAMPAIGN_AGGREGATED_CTE cte
 ),
-
 -- Collapsing corridors beyond Top-5 into 'Others' and re-aggregate
 BUCKETED AS (
   SELECT
@@ -338,50 +204,39 @@ BUCKETED AS (
     channel,
     EVENT_CAPTURED_DT,
     release_week,
-
     /* bucket corridor */
     CASE WHEN corr_rank <= 5 THEN txn_corridor ELSE 'Others' END AS cam_corridor_bucket,
 
     /* re-aggregate all metrics after bucketing */
     SUM(revenue) AS revenue,
     SUM(churn_transaction_7days) AS churn_transaction_7days,
-
     SUM(test_communications_r2d) AS test_communications_r2d,
     SUM(test_communications_r2d_7days) AS test_communications_r2d_7days,
-
     SUM(test_communications_winbacks_rnt_excluded) AS test_communications_winbacks_rnt_excluded,
     SUM(test_communications_winbacks_with_atleast_1_retail_txn_rnt_excluded) AS test_communications_winbacks_with_atleast_1_retail_txn_rnt_excluded,
     SUM(test_communications_winbacks_with_atleast_1_digital_txn_rnt_excluded) AS test_communications_winbacks_with_atleast_1_digital_txn_rnt_excluded, 
     SUM(test_communications_winbacks) AS test_communications_winbacks,
-
     SUM(test_communications_winbacks_7days) AS test_communications_winbacks_7days,
     SUM(test_communications_winbacks_with_atleast_1_retail_txn) AS test_communications_winbacks_with_atleast_1_retail_txn,
     SUM(test_communications_winbacks_with_atleast_1_digital_txn) AS test_communications_winbacks_with_atleast_1_digital_txn, 
-
     SUM(test_communications_onex_to_twox_and_plus) AS test_communications_onex_to_twox_and_plus,
     SUM(test_communications_onex_to_twox_and_plus_7days) AS test_communications_onex_to_twox_and_plus_7days,
-
     SUM(test_communications_twox_to_threex_and_plus) AS test_communications_twox_to_threex_and_plus,
     SUM(test_communications_threex_to_fourx_and_plus) AS test_communications_threex_to_fourx_and_plus,
     SUM(test_communications_fourx_to_fivex_and_plus) AS test_communications_fourx_to_fivex_and_plus,
     SUM(test_communications_new_customer) AS test_communications_new_customer,
-
     SUM(test_communications_existing_customer) AS test_communications_existing_customer,
     SUM(test_communications_loyalty_registration) AS test_communications_loyalty_registration,
     SUM(test_communications_loyalty_registration_opened_clicked_7days) AS test_communications_loyalty_registration_opened_clicked_7days,
     SUM(test_communications_digital_registration) AS test_communications_digital_registration,
     SUM(test_communications_registered_30_days) AS test_communications_registered_30_days,
     SUM(test_communications_registered_7_days) AS test_communications_registered_7_days,
-
     SUM(test_retail_only_delivered) AS test_retail_only_delivered,
     SUM(test_retail_only_delivered_7days) AS test_retail_only_delivered_7days,
-
     SUM(test_lapsed_only_delivered) AS test_lapsed_only_delivered,
     SUM(test_lapsed_only_delivered_opened_clicked_7days) AS test_lapsed_only_delivered_opened_clicked_7days,
-
     SUM(test_1x_delivered) AS test_1x_delivered,
     SUM(test_1x_delivered_opened_clicked_7days) AS test_1x_delivered_opened_clicked_7days,
-
     SUM(test_r6_churn_delivered) AS test_r6_churn_delivered,
     SUM(test_2x_delivered) AS test_2x_delivered,
     SUM(test_3x_delivered) AS test_3x_delivered,
@@ -389,7 +244,6 @@ BUCKETED AS (
     SUM(test_new_delivered) AS test_new_delivered,
     SUM(test_existing_delivered) AS test_existing_delivered,
     SUM(test_non_registred_delivered) AS test_non_registred_delivered,
-
     SUM(communications_sent) AS communications_sent,
     SUM(communications_undelivered) AS communications_undelivered,
     SUM(communications_opened_atleast_once_within_30_days_of_communication) AS communications_opened_atleast_once_within_30_days_of_communication,
@@ -399,33 +253,28 @@ BUCKETED AS (
     SUM(communications_opened_atleast_once_within_7_days_of_communication) AS communications_opened_atleast_once_within_7_days_of_communication,
     SUM(communications_with_atleast_one_link_click_within_7_days_of_communication) AS communications_with_atleast_one_link_click_within_7_days_of_communication, 
     SUM(communications_leading_to_a_wu_com_hit_within_30_days_of_communication) AS communications_leading_to_a_wu_com_hit_within_30_days_of_communication,
-
     SUM(communications_with_atleast_1_txn) AS communications_with_atleast_1_txn,
     SUM(communications_with_atleast_1_retail_txn) AS communications_with_atleast_1_retail_txn,
     SUM(communications_with_atleast_1_air_txn) AS communications_with_atleast_1_air_txn,
     SUM(communications_with_atleast_1_pos_txn) AS communications_with_atleast_1_pos_txn,
     SUM(communications_with_atleast_1_digital_txn) AS communications_with_atleast_1_digital_txn,
     SUM(communications_with_atleast_1_app_txn) AS communications_with_atleast_1_app_txn,
-
     SUM(test_communications_with_atleast_1_txn_7days) AS test_communications_with_atleast_1_txn_7days,
     SUM(test_communications_with_atleast_1_retail_txn_7days) AS test_communications_with_atleast_1_retail_txn_7days,
     SUM(test_communications_with_atleast_1_air_txn_7days) AS test_communications_with_atleast_1_air_txn_7days,
     SUM(test_communications_with_atleast_1_pos_txn_7days) AS test_communications_with_atleast_1_pos_txn_7days,
     SUM(test_communications_with_atleast_1_digital_txn_7days) AS test_communications_with_atleast_1_digital_txn_7days,
     SUM(test_communications_with_atleast_1_app_txn_7days) AS test_communications_with_atleast_1_app_txn_7days,
-
     SUM(txns) AS txns,
     SUM(retail_txns) AS retail_txns,
     SUM(air_txns) AS air_txns,
     SUM(digital_txns) AS digital_txns,
     SUM(app_txns) AS app_txns,
     SUM(pos_txns) AS pos_txns,
-
     SUM(test_redeem_only_delivered) AS test_redeem_only_delivered,
     SUM(test_member_only_delivered) AS test_member_only_delivered,
     SUM(test_enrolled_only_delivered) AS test_enrolled_only_delivered,
     SUM(test_non_member_only_delivered) AS test_non_member_only_delivered,
-
     SUM(push_open_count)        AS push_open_count,
     SUM(push_influ_open_count)  AS push_influ_open_count,
     SUM(push_bounce_count)      AS push_bounce_count,
@@ -445,7 +294,6 @@ BUCKETED AS (
   GROUP BY
     ALL
 )
-
 -- Final select: add your parsing (journey/product etc.) on the bucketed rows
 SELECT 
   b.*
