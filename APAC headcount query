@@ -1,219 +1,307 @@
-I see the issue! In the BUCKETED CTE, you're joining on:
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_EMAIL_SMS_WH_CUST_LEVEL AS
+SELECT 
+    customer_key,
+    RELEASE_2_VENDOR_DATE AS CAMPAIGN_DATE,
+    CAMPAIGN_DESC AS CAMPAIGN_NAME,
+    COUNT(CASE WHEN SUBSTR(activity_code,1,1) = 'S' THEN 1 END) AS TEST_CUSTOMERS,
+    COUNT(CASE WHEN SUBSTR(activity_code,1,1) = 'C' THEN 1 END) AS CONTROL_CUSTOMERS,
+    COUNT(CASE WHEN SUBSTR(activity_code,1,1) = 'G' THEN 1 END) AS GLOBAL_HOLDOUT_CUSTOMERS
+FROM "WUDNA"."SUMMARY_GEN"."WUDNA_SOLICITATION_HISTORY_VW"
+WHERE 
+      UPPER(CAMPAIGN_DESC) NOT LIKE 'TEST%'
+  AND UPPER(CAMPAIGN_DESC) NOT LIKE '%UNKNOWN%'
+  AND UPPER(CAMPAIGN_DESC) NOT LIKE '%RCVX%'
+  AND DATE(RELEASE_2_VENDOR_DATE) >= '2026-01-01'
+  AND DATE(RELEASE_2_VENDOR_DATE) < DATE_TRUNC('MONTH', CURRENT_DATE())
+GROUP BY 
+    all;
 
-```sql
-LEFT JOIN RANKED r
-    ON  cte.campaign_name = r.campaign_name
-    AND cte.txn_corridor  = r.txn_corridor
-```
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_EMAIL_SMS_WH_AGG AS 
+select 
+    CAMPAIGN_NAME,
+    CAMPAIGN_DATE,
+    SUM(TEST_CUSTOMERS) AS TOTAL_TEST_CUSTOMERS,
+    SUM(CONTROL_CUSTOMERS) AS TOTAL_CONTROL_CUSTOMERS,
+    SUM(GLOBAL_HOLDOUT_CUSTOMERS) AS TOTAL_GLOBAL_HOLDOUT_CUSTOMERS
+FROM  AM_ONE_STOP_CAM_TRACKER_EMAIL_SMS_WH_CUST_LEVEL
+    GROUP BY ALL;
 
-But you should be joining on `r` (RANKED), not `cte`. Also, you're missing the ACTIVITY_STATUS in the join, which causes multiple matches.
 
-**The problem:** Each corridor in the CTE has multiple activity_status rows, but RANKED has the same corridor appearing multiple times (once per activity_status). So the join creates a many-to-many relationship.
-
----
-
-## **Complete Fixed Script:**
-
-```sql
-CREATE OR REPLACE TABLE AM_BI_CAMPAIGN_WISE_CORRIDOR_AGG_TEST AS
-WITH AK_BIRD_SFMC_CAMPAIGN_AGGREGATED_CTE as (
-    -- Your entire CTE exactly as is - no changes here
-    select 
-        a.campaign_name as campaign_name,
-        substr(activity_code,3,1) as channel,
-        TO_DATE(event_captured_dt) AS EVENT_CAPTURED_dT,
-        date_trunc(week,event_captured_dt) as release_week,
-        txn_corridor,
-        ACTIVITY_STATUS,
-        -- all your SUM/COUNT aggregations
-        SUM(REVENUE_RECENT_7DAYS) AS REVENUE,
-        -- ... (keep all your existing aggregations)
-        sum(txns) as txns,
-        sum(retail_txns) as retail_txns,
-        -- ... (all the rest)
-    from AM_BI_CAMPAIGN_WISE_CORRIDOR_MYWU_UPDATE_CUSTOMER_LEVEL a
-    left outer join "WUDNA"."SUMMARY_GEN"."WUDNA_CUSTOMER_MASTER_VW" d 
-        on a.customer_key=d.customer_key
-    left outer join "WUDNA"."SUMMARY_GEN"."COUNTRY_VW" b 
-        on d.COUNTRY_CODE = b.country_code 
-    left outer join (
-        select distinct marketing_strategies, campaign_category 
-        from cex_sandbox.campaign_category_V 
-        where marketing_strategies is not null
-    ) g on a.marketing_strategy=g.marketing_strategies
-    left join (
-        select distinct 
-            concat(NVL(UPPER(campaign_canvas_name),'NA'),'_',NVL(UPPER(CANVAS_STEP_NAME),'NA'),'_',nvl(UPPER(APP_TYPE_NAME),'NA')) campaign_name_2,
-            UPPER(campaign_canvas_name) campaign_canvas_name,
-            UPPER(CANVAS_STEP_NAME) CANVAS_STEP_NAME,
-            UPPER(APP_TYPE_NAME) APP_TYPE_NAME,
-            UPPER(type) type
-        from (
-            SELECT 
-                case 
-                    WHEN A.customer_key IS NULL OR A.customer_key ='' then B.customer_key
-                    else A.CUSTOMER_KEY
-                end as CUSTOMER_KEY,
-                campaign_canvas_name,
-                CANVAS_STEP_NAME,
-                APP_TYPE_NAME,
-                type
-            FROM summary_gen.braze_summary_vw B
-            LEFT JOIN "WUDNA"."SUMMARY_GEN".WUDNA_ACCOUNT_MASTER_VW A 
-                ON B.CUSTOMER_KEY = A.CUSTOMER_UMN
-            WHERE B.CUSTOMER_KEY IS NOT NULL
-        )
-    ) e on a.campaign_name = e.campaign_name_2 
-    where len(a.CUSTOMER_KEY) IN (9,15,19)
-    group by ALL
-),
-
--- Aggregate across activity_status to get corridor-level txns
-CORRIDOR_TOTALS AS (
-  SELECT 
-    campaign_name,
-    txn_corridor,
-    SUM(txns) as corridor_total_txns
-  FROM AK_BIRD_SFMC_CAMPAIGN_AGGREGATED_CTE
-  GROUP BY campaign_name, txn_corridor
-),
-
--- Rank corridors based on total txns
-CORRIDOR_RANKED AS (
-  SELECT 
-    campaign_name,
-    txn_corridor,
-    corridor_total_txns,
-    ROW_NUMBER() OVER (
-      PARTITION BY campaign_name
-      ORDER BY corridor_total_txns DESC NULLS LAST, txn_corridor ASC
-    ) AS corr_rank
-  FROM CORRIDOR_TOTALS
-),
-
--- Join back to get the rank for each original row (including activity_status)
-RANKED AS (
-  SELECT 
-    cte.*,
-    cr.corr_rank
-  FROM AK_BIRD_SFMC_CAMPAIGN_AGGREGATED_CTE cte
-  LEFT JOIN CORRIDOR_RANKED cr
-    ON cte.campaign_name = cr.campaign_name
-    AND COALESCE(cte.txn_corridor, '') = COALESCE(cr.txn_corridor, '')
-),
-
--- Bucket corridors: Top 5 vs Others, then re-aggregate
-BUCKETED AS (
-  SELECT
-    campaign_name,
-    channel,
-    EVENT_CAPTURED_DT,
-    release_week,
-    activity_status,
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_APP_TEST_CUST_LEVEL AS 
+    select
+	case when length(A.CUSTOMER_KEY) =19 then A.CUSTOMER_KEY else B.CUSTOMER_KEY end as CUSTOMER_KEY,
+    UPPER(A.CAMPAIGN_CANVAS_NAME) as CAMPAIGN_NAME,
+    case when substr(activity_code,3,1)='P' AND push_sent_date IS NOT NULL then push_sent_date
+    when substr(activity_code,3,1)='I' AND inappmsg_viewed_date IS NOT NULL then inappmsg_viewed_date
+    when substr(activity_code,3,1)='C' AND cc_sent_date IS NOT NULL then cc_sent_date
+    ELSE TO_DATE('2099-01-01') -- SETTING AN ABSURD DATE SO THAT NO TXN DATA GETS JOINEDÂ 
+    END AS CAMPAIGN_DATE,
+    'TEST_CUSTS' as TEST_FLAG-- creating one column  from all other event type date columns
+from 
+    SUMMARY_GEN.BRAZE_SUMMARY_VW A
+Left Join "WUDNA"."SUMMARY_GEN"."WUDNA_ACCOUNT_MASTER_VW" B on A.CUSTOMER_KEY = B.CUSTOMER_UMN	
+where 
+    A.CUSTOMER_KEY is not null 
+	and B.CUSTOMER_KEY is not null
+    and to_date(CAMPAIGN_DATE) not like '2099-01-01' 
+    AND to_date(CAMPAIGN_DATE) >= '2025-02-01'
+    and to_date(CAMPAIGN_DATE) < DATE_TRUNC('MONTH', CURRENT_DATE()) -- Change the date every month refresh--changed to may 2025--PK
+    and TYPE='CAMPAIGN' 
+    and Activity_code like 'S%'  
+    and regexp_substr(B.customer_key,'[a-zA-Z]') is null
+	and length(A.customer_key) in (9,19)
+    AND not upper(CAMPAIGN_CANVAS_NAME) ILIKE any ('TEST%','%UNKNOWN%','%RCVX%')
+    AND DATE(CAMPAIGN_DATE) >= '2025-01-01'
+    ;
     
-    -- Bucket corridor based on rank
-    CASE WHEN corr_rank <= 5 THEN txn_corridor ELSE 'Others' END AS cam_corridor_bucket,
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_APP_TEST_AGG AS 
+SELECT
+CAMPAIGN_NAME,
+CAMPAIGN_DATE,
+TEST_CUSTOMERS,
+COUNT(DISTINCT CUSTOMER_KEY) AS TOTAL_TEST_CUSTOMERS,
+    0 AS TOTAL_CONTROL_CUSTOMERS,
+    0 AS TOTAL_GLOBAL_HOLDOUT_CUSTOMERS
+FROM AM_ONE_STOP_CAM_TRACKER_APP_TEST_CUST_LEVEL
+group by campaign_name, campaign_date;
 
-    -- Re-aggregate all metrics after bucketing
-    SUM(revenue) AS revenue,
-    SUM(churn_transaction_7days) AS churn_transaction_7days,
-    SUM(test_communications_r2d) AS test_communications_r2d,
-    SUM(test_communications_r2d_7days) AS test_communications_r2d_7days,
-    SUM(test_communications_winbacks_rnt_excluded) AS test_communications_winbacks_rnt_excluded,
-    SUM(test_communications_winbacks_with_atleast_1_retail_txn_rnt_excluded) AS test_communications_winbacks_with_atleast_1_retail_txn_rnt_excluded,
-    SUM(test_communications_winbacks_with_atleast_1_digital_txn_rnt_excluded) AS test_communications_winbacks_with_atleast_1_digital_txn_rnt_excluded, 
-    SUM(test_communications_winbacks) AS test_communications_winbacks,
-    SUM(test_communications_winbacks_7days) AS test_communications_winbacks_7days,
-    SUM(test_communications_winbacks_with_atleast_1_retail_txn) AS test_communications_winbacks_with_atleast_1_retail_txn,
-    SUM(test_communications_winbacks_with_atleast_1_digital_txn) AS test_communications_winbacks_with_atleast_1_digital_txn, 
-    SUM(test_communications_onex_to_twox_and_plus) AS test_communications_onex_to_twox_and_plus,
-    SUM(test_communications_onex_to_twox_and_plus_7days) AS test_communications_onex_to_twox_and_plus_7days,
-    SUM(test_communications_twox_to_threex_and_plus) AS test_communications_twox_to_threex_and_plus,
-    SUM(test_communications_threex_to_fourx_and_plus) AS test_communications_threex_to_fourx_and_plus,
-    SUM(test_communications_fourx_to_fivex_and_plus) AS test_communications_fourx_to_fivex_and_plus,
-    SUM(test_communications_new_customer) AS test_communications_new_customer,
-    SUM(test_communications_existing_customer) AS test_communications_existing_customer,
-    SUM(test_communications_loyalty_registration) AS test_communications_loyalty_registration,
-    SUM(test_communications_loyalty_registration_opened_clicked_7days) AS test_communications_loyalty_registration_opened_clicked_7days,
-    SUM(test_communications_digital_registration) AS test_communications_digital_registration,
-    SUM(test_communications_registered_30_days) AS test_communications_registered_30_days,
-    SUM(test_communications_registered_7_days) AS test_communications_registered_7_days,
-    SUM(test_retail_only_delivered) AS test_retail_only_delivered,
-    SUM(test_retail_only_delivered_7days) AS test_retail_only_delivered_7days,
-    SUM(test_lapsed_only_delivered) AS test_lapsed_only_delivered,
-    SUM(test_lapsed_only_delivered_opened_clicked_7days) AS test_lapsed_only_delivered_opened_clicked_7days,
-    SUM(test_1x_delivered) AS test_1x_delivered,
-    SUM(test_1x_delivered_opened_clicked_7days) AS test_1x_delivered_opened_clicked_7days,
-    SUM(test_r6_churn_delivered) AS test_r6_churn_delivered,
-    SUM(test_2x_delivered) AS test_2x_delivered,
-    SUM(test_3x_delivered) AS test_3x_delivered,
-    SUM(test_4x_delivered) AS test_4x_delivered,
-    SUM(test_new_delivered) AS test_new_delivered,
-    SUM(test_existing_delivered) AS test_existing_delivered,
-    SUM(test_non_registred_delivered) AS test_non_registred_delivered,
-    SUM(communications_sent) AS communications_sent,
-    SUM(communications_undelivered) AS communications_undelivered,
-    SUM(communications_opened_atleast_once_within_30_days_of_communication) AS communications_opened_atleast_once_within_30_days_of_communication,
-    SUM(communications_with_atleast_one_link_click_within_30_days_of_communication) AS communications_with_atleast_one_link_click_within_30_days_of_communication,
-    SUM(complaints) AS complaints,
-    SUM(opt_outs) AS opt_outs,
-    SUM(communications_opened_atleast_once_within_7_days_of_communication) AS communications_opened_atleast_once_within_7_days_of_communication,
-    SUM(communications_with_atleast_one_link_click_within_7_days_of_communication) AS communications_with_atleast_one_link_click_within_7_days_of_communication, 
-    SUM(communications_leading_to_a_wu_com_hit_within_30_days_of_communication) AS communications_leading_to_a_wu_com_hit_within_30_days_of_communication,
-    SUM(communications_with_atleast_1_txn) AS communications_with_atleast_1_txn,
-    SUM(communications_with_atleast_1_retail_txn) AS communications_with_atleast_1_retail_txn,
-    SUM(communications_with_atleast_1_air_txn) AS communications_with_atleast_1_air_txn,
-    SUM(communications_with_atleast_1_pos_txn) AS communications_with_atleast_1_pos_txn,
-    SUM(communications_with_atleast_1_digital_txn) AS communications_with_atleast_1_digital_txn,
-    SUM(communications_with_atleast_1_app_txn) AS communications_with_atleast_1_app_txn,
-    SUM(test_communications_with_atleast_1_txn_7days) AS test_communications_with_atleast_1_txn_7days,
-    SUM(test_communications_with_atleast_1_retail_txn_7days) AS test_communications_with_atleast_1_retail_txn_7days,
-    SUM(test_communications_with_atleast_1_air_txn_7days) AS test_communications_with_atleast_1_air_txn_7days,
-    SUM(test_communications_with_atleast_1_pos_txn_7days) AS test_communications_with_atleast_1_pos_txn_7days,
-    SUM(test_communications_with_atleast_1_digital_txn_7days) AS test_communications_with_atleast_1_digital_txn_7days,
-    SUM(test_communications_with_atleast_1_app_txn_7days) AS test_communications_with_atleast_1_app_txn_7days,
-    SUM(txns) AS txns,
-    SUM(retail_txns) AS retail_txns,
-    SUM(air_txns) AS air_txns,
-    SUM(digital_txns) AS digital_txns,
-    SUM(app_txns) AS app_txns,
-    SUM(pos_txns) AS pos_txns,
-    SUM(test_redeem_only_delivered) AS test_redeem_only_delivered,
-    SUM(test_member_only_delivered) AS test_member_only_delivered,
-    SUM(test_enrolled_only_delivered) AS test_enrolled_only_delivered,
-    SUM(test_non_member_only_delivered) AS test_non_member_only_delivered,
-    SUM(push_open_count) AS push_open_count,
-    SUM(push_influ_open_count) AS push_influ_open_count,
-    SUM(push_bounce_count) AS push_bounce_count,
-    SUM(inappmsg_viewed_count) AS inappmsg_viewed_count,
-    SUM(inappmsg_clicked_count) AS inappmsg_clicked_count,
-    SUM(cc_clicked_count) AS cc_clicked_count,
-    SUM(cc_viewed_count) AS cc_viewed_count,
-    SUM(cc_dismissed_count) AS cc_dismissed_count,
-    SUM(cc_aborted_count) AS cc_aborted_count,
-    SUM(push_sent_count) AS push_sent_count,
-    SUM(cc_sent_count) AS cc_sent_count
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_APP_GH_CUST_LEVEL AS 
+select 
+    UPPER(substr(campaign_canvas_name,4,len(campaign_canvas_name))) as CAMPAIGN_NAME,
+    case when length(A.CUSTOMER_KEY) =19 then A.CUSTOMER_KEY
+         else B.CUSTOMER_KEY
+    end as CUSTOMER_KEY,
+    CASE when substr(activity_code,3,1)='W' AND WEBHOOK_SENT_DATE IS NOT NULL then WEBHOOK_SENT_DATE
+    ELSE TO_DATE('2099-01-01') -- SETTING AN ABSURD DATE SO THAT NO TXN DATA GETS JOINEDÂ 
+    END AS CAMPAIGN_DATE,
+    'GLOBAL_HOLD' as GLOBAL_HOLDOUT_CUSTOMERS-- creating one column  from all other event type date columns
+from 
+    SUMMARY_GEN.BRAZE_SUMMARY_VW A  
+Left Join "WUDNA"."SUMMARY_GEN"."WUDNA_ACCOUNT_MASTER_VW" B on A.CUSTOMER_KEY = B.CUSTOMER_UMN
+where 
+    A.CUSTOMER_KEY is not null 
+	and B.CUSTOMER_KEY is not null
+    and to_date(CAMPAIGN_DATE) not like '2099-01-01'
+    AND to_date(CAMPAIGN_DATE) >= '2025-02-01' -- Change the date every month refresh--changed to may 2025--PK
+    and to_date(CAMPAIGN_DATE) < DATE_TRUNC('MONTH', CURRENT_DATE())
+    AND TYPE='CAMPAIGN' 
+    and Activity_code like 'G%'
+    and regexp_substr(B.customer_key,'[a-zA-Z]') is null
+	and length(A.customer_key) in (9,19)
+    AND not upper(CAMPAIGN_CANVAS_NAME) ILIKE any ('TEST%','%UNKNOWN%','%RCVX%')
+    AND DATE(CAMPAIGN_DATE) >= '2025-01-01';
+
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_APP_GH_AGG AS 
+    SELECT 
+        CAMPAIGN_NAME,
+        CAMPAIGN_DATE,
+        GLOBAL_HOLDOUT_CUSTOMERS,
+        0 AS TOTAL_TEST_CUSTOMERS,
+        0 AS TOTAL_CONTROL_CUSTOMERS,
+        COUNT(DISTINCT CUSTOMER_KEY) AS TOTAL_GLOBAL_CUSTOMERS        
+    FROM AM_ONE_STOP_CAM_TRACKER_APP_GH_CUST_LEVEL
+    GROUP BY ALL;
+
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_APP_CH_CUST_LEVEL AS 
+select 
+            DISTINCT case when length(A.CUSTOMER_KEY) =19 then A.CUSTOMER_KEY else C.CUSTOMER_KEY
+            end as CUSTOMER_KEY,
+			UPPER(A.CAMPAIGN_CANVAS_NAME) as CAMPAIGN_NAME , 
+			to_date(CAMPAIGN_CH_ENROLLED_DATE) CAMPAIGN_DATE
+            'CONTROL_CUST' as CONTROL_HOLDOUT_CUSTOMERS
+		from 
+			SUMMARY_GEN.BRAZE_SUMMARY_VW A 
+            left Join "WUDNA"."SUMMARY_GEN"."WUDNA_ACCOUNT_MASTER_VW" C on A.CUSTOMER_KEY = C.CUSTOMER_UMN
+		WHERE 
+		    C.CUSTOMER_KEY is not null and
+		    TYPE='CAMPAIGN' and ACTIVITY_CODE like 'C%' 
+			and to_date(CAMPAIGN_DATE) not like '2099-01-01'
+            AND to_date(CAMPAIGN_DATE) >= '2025-02-01'
+            and to_date(CAMPAIGN_DATE) < < DATE_TRUNC('MONTH', CURRENT_DATE()) -- Change the date every month refresh--changed date to May 2025--PK
+			and length(A.customer_key) in (9,19)
+        and regexp_substr(B.customer_key,'[a-zA-Z]') is null
+	and length(A.customer_key) in (9,19)
+    AND not upper(CAMPAIGN_CANVAS_NAME) ILIKE any ('TEST%','%UNKNOWN%','%RCVX%')
+    AND DATE(CAMPAIGN_DATE) >= '2025-01-01';
+;
+
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_APP_CH_AGG AS 
+    SELECT 
+        CAMPAIGN_NAME,
+        CAMPAIGN_DATE,
+        CONTROL_HOLDOUT_CUSTOMERS,
+        0 AS TOTAL_TEST_CUSTOMERS,
+        COUNT(DISTINCT CUSTOMER_KEY) AS TOTAL_CONTROL_CUSTOMERS,
+        0 AS TOTAL_GLOBAL_CUSTOMERS        
+    FROM AM_ONE_STOP_CAM_TRACKER_APP_CH_CUST_LEVEL
+    GROUP BY ALL;
+
+
     
-  FROM RANKED
-  WHERE UPPER(campaign_name) NOT LIKE 'TEST%'
-    AND UPPER(campaign_name) NOT LIKE '%UNKNOWN%'
-    AND UPPER(campaign_name) NOT LIKE '%RCVX%'
-    AND DATE(EVENT_CAPTURED_DT) >= '2026-01-01'
-  GROUP BY ALL
-)
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_CAM_UNION AS 
+SELECT * FROM AM_ONE_STOP_CAM_TRACKER_APP_TEST_AGG
+UNION
+SELECT * FROM AM_ONE_STOP_CAM_TRACKER_APP_GH_AGG
+UNION
+SELECT * FROM AM_ONE_STOP_CAM_TRACKER_APP_CH_AGG
+;
 
-SELECT *
-FROM BUCKETED;
-```
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_TEST_CUST_LEVEL AS 
+select 
+        UPPER(A.CAMPAIGN_CANVAS_NAME) as CAMPAIGN_NAME, 
+        case when length(A.CUSTOMER_KEY) =19 then A.CUSTOMER_KEY
+             else B.CUSTOMER_KEY
+        end as CUSTOMER_KEY,
 
----
+        case when substr(activity_code_new,3,1)='P' AND push_sent_date IS NOT NULL then push_sent_date
+            when substr(activity_code_new,3,1)='I' AND inappmsg_viewed_date IS NOT NULL then inappmsg_viewed_date
+            when substr(activity_code_new,  3,1)='C' AND cc_sent_date IS NOT NULL then cc_sent_date
+            when substr(activity_code_new,3,1)='W' AND Webhook_sent_date IS NOT NULL then webhook_sent_date
+        ELSE TO_DATE('2099-01-01') -- SETTING AN ABSURD DATE SO THAT NO TXN DATA GETS JOINED
+        END AS CAMPAIGN_DATE,
+        'TEST_CUST' as TEST_CUSTOMERS
+        
+from SUMMARY_GEN.BRAZE_SUMMARY_VW A
+Left Join "WUDNA"."SUMMARY_GEN".WUDNA_ACCOUNT_MASTER_VW B on A.CUSTOMER_KEY = B.CUSTOMER_UMN
+ 
+where
+    A.CUSTOMER_KEY is not null 
+	and B.CUSTOMER_KEY is not null 
+    and to_date(CAMPAIGN_DATE) not like '2099-01-01' 
+    and TYPE='CANVAS' 
+    and Activity_code_new like 'S%'
+    AND to_date(CAMPAIGN_DATE) >= '2025-02-01'
+    and to_date(CAMPAIGN_DATE) < DATE_TRUNC('MONTH', CURRENT_DATE()) -- Change the date every month refresh--changed it to May 2025--PK
+    and regexp_substr(B.customer_key, '[a-zA-Z]') is null
+    and canvas_step_name_new not in ('X')
+    and length(A.customer_key) in (9,19)
+        AND not upper(CAMPAIGN_CANVAS_NAME) ILIKE any ('TEST%','%UNKNOWN%','%RCVX%')
+    AND DATE(CAMPAIGN_DATE) >= '2025-01-01'
+order by 
+    customer_key,
+    COMMUNICATION_DATE;
 
-## **Key Changes:**
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_TEST_AGG AS 
+    SELECT
+CAMPAIGN_NAME,
+CAMPAIGN_DATE,
+TEST_CUSTOMERS,
+COUNT(DISTINCT CUSTOMER_KEY) AS TOTAL_TEST_CUSTOMERS,
+    0 AS TOTAL_CONTROL_CUSTOMERS,
+    0 AS TOTAL_GLOBAL_HOLDOUT_CUSTOMERS
+FROM AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_TEST_CUST_LEVEL
+group by campaign_name, campaign_date;
 
-1. **BUCKETED now selects from `RANKED` directly** (not from CTE with a join)
-2. **Uses `corr_rank` column that's already in RANKED**
-3. **Removed the redundant LEFT JOIN** that was causing the issue
 
----
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_CONTROL_CUST_LEVEL AS 
+select 
+        UPPER(A.CAMPAIGN_CANVAS_NAME) as CAMPAIGN_NAME, 
+        case when length(A.CUSTOMER_KEY) =19 then A.CUSTOMER_KEY
+             else B.CUSTOMER_KEY
+        end as CUSTOMER_KEY,
 
-**This should work!** Test it and let me know the result for your test campaign.
+        case when substr(activity_code_new,3,1)='P' AND push_sent_date IS NOT NULL then push_sent_date
+            when substr(activity_code_new,3,1)='I' AND inappmsg_viewed_date IS NOT NULL then inappmsg_viewed_date
+            when substr(activity_code_new,  3,1)='C' AND cc_sent_date IS NOT NULL then cc_sent_date
+            when substr(activity_code_new,3,1)='W' AND Webhook_sent_date IS NOT NULL then webhook_sent_date
+        ELSE TO_DATE('2099-01-01') -- SETTING AN ABSURD DATE SO THAT NO TXN DATA GETS JOINED
+        END AS CAMPAIGN_DATE,
+        'CONTROL_CUST' as CONTROL_HOLDOUT_CUSTOMERS
+from SUMMARY_GEN.BRAZE_SUMMARY_VW A
+Left Join "WUDNA"."SUMMARY_GEN".WUDNA_ACCOUNT_MASTER_VW B on A.CUSTOMER_KEY = B.CUSTOMER_UMN
+ 
+where
+    A.CUSTOMER_KEY is not null 
+	and B.CUSTOMER_KEY is not null 
+    and to_date(CAMPAIGN_DATE) not like '2099-01-01' 
+    and TYPE='CANVAS' 
+    and Activity_code_new like 'C%'
+    AND to_date(CAMPAIGN_DATE) >= '2025-02-01'
+    and to_date(CAMPAIGN_DATE) < DATE_TRUNC('MONTH', CURRENT_DATE()) -- Change the date every month refresh--changed it to May 2025--PK
+    and regexp_substr(B.customer_key, '[a-zA-Z]') is null
+    and canvas_step_name_new not in ('X')
+    and length(A.customer_key) in (9,19)
+        AND not upper(CAMPAIGN_CANVAS_NAME) ILIKE any ('TEST%','%UNKNOWN%','%RCVX%')
+    AND DATE(CAMPAIGN_DATE) >= '2025-01-01'
+order by 
+    customer_key,
+    COMMUNICATION_DATE;
+
+    CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_CONTROL_AGG AS 
+    SELECT 
+        CAMPAIGN_NAME,
+        CAMPAIGN_DATE,
+        CONTROL_HOLDOUT_CUSTOMERS,
+        0 AS TOTAL_TEST_CUSTOMERS,
+        COUNT(DISTINCT CUSTOMER_KEY) AS TOTAL_CONTROL_CUSTOMERS,
+        0 AS TOTAL_GLOBAL_CUSTOMERS        
+    FROM AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_CONTROL_CUST_LEVEL
+    GROUP BY ALL;
+
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_GH_CUST_LEVEL AS 
+select 
+        UPPER(A.CAMPAIGN_CANVAS_NAME) as CAMPAIGN_NAME, 
+        case when length(A.CUSTOMER_KEY) =19 then A.CUSTOMER_KEY
+             else B.CUSTOMER_KEY
+        end as CUSTOMER_KEY,
+
+        case when substr(activity_code_new,3,1)='P' AND push_sent_date IS NOT NULL then push_sent_date
+            when substr(activity_code_new,3,1)='I' AND inappmsg_viewed_date IS NOT NULL then inappmsg_viewed_date
+            when substr(activity_code_new,  3,1)='C' AND cc_sent_date IS NOT NULL then cc_sent_date
+            when substr(activity_code_new,3,1)='W' AND Webhook_sent_date IS NOT NULL then webhook_sent_date
+        ELSE TO_DATE('2099-01-01') -- SETTING AN ABSURD DATE SO THAT NO TXN DATA GETS JOINED
+        END AS CAMPAIGN_DATE,
+        'GLOBAL_HOLD' as GLOBAL_HOLDOUT_CUSTOMERS
+from SUMMARY_GEN.BRAZE_SUMMARY_VW A
+Left Join "WUDNA"."SUMMARY_GEN".WUDNA_ACCOUNT_MASTER_VW B on A.CUSTOMER_KEY = B.CUSTOMER_UMN
+ 
+where
+    A.CUSTOMER_KEY is not null 
+	and B.CUSTOMER_KEY is not null 
+    and to_date(CAMPAIGN_DATE) not like '2099-01-01' 
+    and TYPE='CANVAS' 
+    and Activity_code_new like 'C%'
+    AND to_date(CAMPAIGN_DATE) >= '2025-02-01'
+    and to_date(CAMPAIGN_DATE) < DATE_TRUNC('MONTH', CURRENT_DATE()) -- Change the date every month refresh--changed it to May 2025--PK
+    and regexp_substr(B.customer_key, '[a-zA-Z]') is null
+    and canvas_step_name_new not in ('X')
+    and length(A.customer_key) in (9,19)
+        AND not upper(CAMPAIGN_CANVAS_NAME) ILIKE any ('TEST%','%UNKNOWN%','%RCVX%')
+    AND DATE(CAMPAIGN_DATE) >= '2025-01-01'
+order by 
+    customer_key,
+    COMMUNICATION_DATE;
+
+    CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_GH_AGG AS 
+    SELECT 
+        CAMPAIGN_NAME,
+        CAMPAIGN_DATE,
+        CONTROL_HOLDOUT_CUSTOMERS,
+        0 AS TOTAL_TEST_CUSTOMERS,
+        0 AS TOTAL_CONTROL_CUSTOMERS,
+        COUNT(DISTINCT CUSTOMER_KEY) AS TOTAL_GLOBAL_CUSTOMERS        
+    FROM AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_CONTROL_CUST_LEVEL
+    GROUP BY ALL;
+
+
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_CANVAS_UNION AS 
+SELECT * FROM AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_TEST_AGG
+UNION
+SELECT * FROM AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_GH_AGG
+UNION
+SELECT * FROM AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_CONTROL_AGG
+;
+
+
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_APP_UNION
+SELECT * FROM AM_ONE_STOP_CAM_TRACKER_CAM_UNION
+UNION
+SELECT * FROM AM_ONE_STOP_CAM_TRACKER_CANVAS_UNION;
+
+
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_FINAL_TABLE
+SELECT * FROM AM_ONE_STOP_CAM_TRACKER_EMAIL_SMS_WH_AGG
+UNION
+SELECT * FROM AM_ONE_STOP_CAM_TRACKER_APP_UNION;
+
+SELECT * FROM AM_ONE_STOP_CAM_TRACKER_FINAL_TABLE;
