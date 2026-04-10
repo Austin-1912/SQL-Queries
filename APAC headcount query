@@ -1,307 +1,356 @@
+I found **10 bugs** — a mix of syntax errors, wrong column references, broken UNIONs, and date filter inconsistencies. Let me walk through them systematically before showing the fixed script.
+
+---
+
+## Bugs Found
+
+**Syntax Errors**
+1. `AM_ONE_STOP_CAM_TRACKER_APP_CH_CUST_LEVEL` — missing `AS` before `CAMPAIGN_DATE`, and double `< <` operator
+2. `AM_ONE_STOP_CAM_TRACKER_APP_UNION` and `FINAL_TABLE` — missing `AS` keyword in `CREATE OR REPLACE TABLE ... SELECT`
+
+**Wrong Column/Alias References**
+3. `APP_TEST_CUST_LEVEL` — column aliased `TEST_FLAG` but `APP_TEST_AGG` references `TEST_CUSTOMERS`
+4. `APP_CH_CUST_LEVEL` — join alias is `C` but `regexp_substr` references `B.customer_key`
+5. `CANVAS_APP_TEST/CONTROL_CUST_LEVEL` — `ORDER BY COMMUNICATION_DATE` references a non-existent column; should be `CAMPAIGN_DATE`
+
+**Wrong Logic**
+6. `APP_GH_CUST_LEVEL` — `UPPER(substr(campaign_canvas_name,4,...))` strips first 3 chars, so GH campaign names won't match TEST names in the union
+7. `CANVAS_APP_GH_CUST_LEVEL` — `Activity_code_new like 'C%'` should be `'G%'` (this is the Global Holdout table)
+8. `CANVAS_APP_GH_AGG` — reads from `CANVAS_APP_CONTROL_CUST_LEVEL` instead of `CANVAS_APP_GH_CUST_LEVEL`
+
+**UNION Column Mismatches**
+9. `CAM_UNION` — TEST_AGG, GH_AGG, and CH_AGG each have different 3rd column names and different last column names; UNION resolves by position but semantics are broken
+10. `FINAL_TABLE` — EMAIL_SMS_WH_AGG has 5 columns, APP_UNION inherits 6 columns from the broken sub-UNIONs; UNION fails or produces garbage
+
+**Date Filters**
+All app/canvas tables filter `>= '2025-01-01'` or `>= '2025-02-01'` but the requirement is Jan 2026 forward.
+
+---
+
+## Corrected Script
+
+The fix standardizes all AGG tables to the same 5 columns: `CAMPAIGN_NAME, CAMPAIGN_DATE, TOTAL_TEST_CUSTOMERS, TOTAL_CONTROL_CUSTOMERS, TOTAL_GLOBAL_HOLDOUT_CUSTOMERS`.
+
+```sql
+-- ============================================================
+-- STREAM 1: EMAIL / SMS / WEBHOOK (SOLICITATION HISTORY)
+-- ============================================================
+
 CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_EMAIL_SMS_WH_CUST_LEVEL AS
-SELECT 
+SELECT
     customer_key,
-    RELEASE_2_VENDOR_DATE AS CAMPAIGN_DATE,
-    CAMPAIGN_DESC AS CAMPAIGN_NAME,
-    COUNT(CASE WHEN SUBSTR(activity_code,1,1) = 'S' THEN 1 END) AS TEST_CUSTOMERS,
-    COUNT(CASE WHEN SUBSTR(activity_code,1,1) = 'C' THEN 1 END) AS CONTROL_CUSTOMERS,
-    COUNT(CASE WHEN SUBSTR(activity_code,1,1) = 'G' THEN 1 END) AS GLOBAL_HOLDOUT_CUSTOMERS
+    RELEASE_2_VENDOR_DATE                                                        AS CAMPAIGN_DATE,
+    CAMPAIGN_DESC                                                                AS CAMPAIGN_NAME,
+    COUNT(CASE WHEN SUBSTR(activity_code,1,1) = 'S' THEN 1 END)                AS TEST_CUSTOMERS,
+    COUNT(CASE WHEN SUBSTR(activity_code,1,1) = 'C' THEN 1 END)                AS CONTROL_CUSTOMERS,
+    COUNT(CASE WHEN SUBSTR(activity_code,1,1) = 'G' THEN 1 END)                AS GLOBAL_HOLDOUT_CUSTOMERS
 FROM "WUDNA"."SUMMARY_GEN"."WUDNA_SOLICITATION_HISTORY_VW"
-WHERE 
+WHERE
       UPPER(CAMPAIGN_DESC) NOT LIKE 'TEST%'
   AND UPPER(CAMPAIGN_DESC) NOT LIKE '%UNKNOWN%'
   AND UPPER(CAMPAIGN_DESC) NOT LIKE '%RCVX%'
   AND DATE(RELEASE_2_VENDOR_DATE) >= '2026-01-01'
-  AND DATE(RELEASE_2_VENDOR_DATE) < DATE_TRUNC('MONTH', CURRENT_DATE())
-GROUP BY 
-    all;
+  AND DATE(RELEASE_2_VENDOR_DATE) <  DATE_TRUNC('MONTH', CURRENT_DATE())
+GROUP BY ALL;
 
-CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_EMAIL_SMS_WH_AGG AS 
-select 
+
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_EMAIL_SMS_WH_AGG AS
+SELECT
     CAMPAIGN_NAME,
     CAMPAIGN_DATE,
-    SUM(TEST_CUSTOMERS) AS TOTAL_TEST_CUSTOMERS,
-    SUM(CONTROL_CUSTOMERS) AS TOTAL_CONTROL_CUSTOMERS,
-    SUM(GLOBAL_HOLDOUT_CUSTOMERS) AS TOTAL_GLOBAL_HOLDOUT_CUSTOMERS
-FROM  AM_ONE_STOP_CAM_TRACKER_EMAIL_SMS_WH_CUST_LEVEL
-    GROUP BY ALL;
+    SUM(TEST_CUSTOMERS)             AS TOTAL_TEST_CUSTOMERS,
+    SUM(CONTROL_CUSTOMERS)          AS TOTAL_CONTROL_CUSTOMERS,
+    SUM(GLOBAL_HOLDOUT_CUSTOMERS)   AS TOTAL_GLOBAL_HOLDOUT_CUSTOMERS
+FROM AM_ONE_STOP_CAM_TRACKER_EMAIL_SMS_WH_CUST_LEVEL
+GROUP BY ALL;
 
 
-CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_APP_TEST_CUST_LEVEL AS 
-    select
-	case when length(A.CUSTOMER_KEY) =19 then A.CUSTOMER_KEY else B.CUSTOMER_KEY end as CUSTOMER_KEY,
-    UPPER(A.CAMPAIGN_CANVAS_NAME) as CAMPAIGN_NAME,
-    case when substr(activity_code,3,1)='P' AND push_sent_date IS NOT NULL then push_sent_date
-    when substr(activity_code,3,1)='I' AND inappmsg_viewed_date IS NOT NULL then inappmsg_viewed_date
-    when substr(activity_code,3,1)='C' AND cc_sent_date IS NOT NULL then cc_sent_date
-    ELSE TO_DATE('2099-01-01') -- SETTING AN ABSURD DATE SO THAT NO TXN DATA GETS JOINEDÂ 
-    END AS CAMPAIGN_DATE,
-    'TEST_CUSTS' as TEST_FLAG-- creating one column  from all other event type date columns
-from 
-    SUMMARY_GEN.BRAZE_SUMMARY_VW A
-Left Join "WUDNA"."SUMMARY_GEN"."WUDNA_ACCOUNT_MASTER_VW" B on A.CUSTOMER_KEY = B.CUSTOMER_UMN	
-where 
-    A.CUSTOMER_KEY is not null 
-	and B.CUSTOMER_KEY is not null
-    and to_date(CAMPAIGN_DATE) not like '2099-01-01' 
-    AND to_date(CAMPAIGN_DATE) >= '2025-02-01'
-    and to_date(CAMPAIGN_DATE) < DATE_TRUNC('MONTH', CURRENT_DATE()) -- Change the date every month refresh--changed to may 2025--PK
-    and TYPE='CAMPAIGN' 
-    and Activity_code like 'S%'  
-    and regexp_substr(B.customer_key,'[a-zA-Z]') is null
-	and length(A.customer_key) in (9,19)
-    AND not upper(CAMPAIGN_CANVAS_NAME) ILIKE any ('TEST%','%UNKNOWN%','%RCVX%')
-    AND DATE(CAMPAIGN_DATE) >= '2025-01-01'
-    ;
-    
-CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_APP_TEST_AGG AS 
+-- ============================================================
+-- STREAM 2: APP CAMPAIGNS (BRAZE TYPE = 'CAMPAIGN')
+-- ============================================================
+
+-- TEST
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_APP_TEST_CUST_LEVEL AS
 SELECT
-CAMPAIGN_NAME,
-CAMPAIGN_DATE,
-TEST_CUSTOMERS,
-COUNT(DISTINCT CUSTOMER_KEY) AS TOTAL_TEST_CUSTOMERS,
-    0 AS TOTAL_CONTROL_CUSTOMERS,
-    0 AS TOTAL_GLOBAL_HOLDOUT_CUSTOMERS
-FROM AM_ONE_STOP_CAM_TRACKER_APP_TEST_CUST_LEVEL
-group by campaign_name, campaign_date;
-
-CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_APP_GH_CUST_LEVEL AS 
-select 
-    UPPER(substr(campaign_canvas_name,4,len(campaign_canvas_name))) as CAMPAIGN_NAME,
-    case when length(A.CUSTOMER_KEY) =19 then A.CUSTOMER_KEY
-         else B.CUSTOMER_KEY
-    end as CUSTOMER_KEY,
-    CASE when substr(activity_code,3,1)='W' AND WEBHOOK_SENT_DATE IS NOT NULL then WEBHOOK_SENT_DATE
-    ELSE TO_DATE('2099-01-01') -- SETTING AN ABSURD DATE SO THAT NO TXN DATA GETS JOINEDÂ 
+    CASE WHEN LENGTH(A.CUSTOMER_KEY) = 19 THEN A.CUSTOMER_KEY ELSE B.CUSTOMER_KEY END AS CUSTOMER_KEY,
+    UPPER(A.CAMPAIGN_CANVAS_NAME) AS CAMPAIGN_NAME,
+    CASE
+        WHEN SUBSTR(activity_code,3,1) = 'P' AND push_sent_date      IS NOT NULL THEN push_sent_date
+        WHEN SUBSTR(activity_code,3,1) = 'I' AND inappmsg_viewed_date IS NOT NULL THEN inappmsg_viewed_date
+        WHEN SUBSTR(activity_code,3,1) = 'C' AND cc_sent_date         IS NOT NULL THEN cc_sent_date
+        ELSE TO_DATE('2099-01-01')
     END AS CAMPAIGN_DATE,
-    'GLOBAL_HOLD' as GLOBAL_HOLDOUT_CUSTOMERS-- creating one column  from all other event type date columns
-from 
-    SUMMARY_GEN.BRAZE_SUMMARY_VW A  
-Left Join "WUDNA"."SUMMARY_GEN"."WUDNA_ACCOUNT_MASTER_VW" B on A.CUSTOMER_KEY = B.CUSTOMER_UMN
-where 
-    A.CUSTOMER_KEY is not null 
-	and B.CUSTOMER_KEY is not null
-    and to_date(CAMPAIGN_DATE) not like '2099-01-01'
-    AND to_date(CAMPAIGN_DATE) >= '2025-02-01' -- Change the date every month refresh--changed to may 2025--PK
-    and to_date(CAMPAIGN_DATE) < DATE_TRUNC('MONTH', CURRENT_DATE())
-    AND TYPE='CAMPAIGN' 
-    and Activity_code like 'G%'
-    and regexp_substr(B.customer_key,'[a-zA-Z]') is null
-	and length(A.customer_key) in (9,19)
-    AND not upper(CAMPAIGN_CANVAS_NAME) ILIKE any ('TEST%','%UNKNOWN%','%RCVX%')
-    AND DATE(CAMPAIGN_DATE) >= '2025-01-01';
-
-CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_APP_GH_AGG AS 
-    SELECT 
-        CAMPAIGN_NAME,
-        CAMPAIGN_DATE,
-        GLOBAL_HOLDOUT_CUSTOMERS,
-        0 AS TOTAL_TEST_CUSTOMERS,
-        0 AS TOTAL_CONTROL_CUSTOMERS,
-        COUNT(DISTINCT CUSTOMER_KEY) AS TOTAL_GLOBAL_CUSTOMERS        
-    FROM AM_ONE_STOP_CAM_TRACKER_APP_GH_CUST_LEVEL
-    GROUP BY ALL;
-
-CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_APP_CH_CUST_LEVEL AS 
-select 
-            DISTINCT case when length(A.CUSTOMER_KEY) =19 then A.CUSTOMER_KEY else C.CUSTOMER_KEY
-            end as CUSTOMER_KEY,
-			UPPER(A.CAMPAIGN_CANVAS_NAME) as CAMPAIGN_NAME , 
-			to_date(CAMPAIGN_CH_ENROLLED_DATE) CAMPAIGN_DATE
-            'CONTROL_CUST' as CONTROL_HOLDOUT_CUSTOMERS
-		from 
-			SUMMARY_GEN.BRAZE_SUMMARY_VW A 
-            left Join "WUDNA"."SUMMARY_GEN"."WUDNA_ACCOUNT_MASTER_VW" C on A.CUSTOMER_KEY = C.CUSTOMER_UMN
-		WHERE 
-		    C.CUSTOMER_KEY is not null and
-		    TYPE='CAMPAIGN' and ACTIVITY_CODE like 'C%' 
-			and to_date(CAMPAIGN_DATE) not like '2099-01-01'
-            AND to_date(CAMPAIGN_DATE) >= '2025-02-01'
-            and to_date(CAMPAIGN_DATE) < < DATE_TRUNC('MONTH', CURRENT_DATE()) -- Change the date every month refresh--changed date to May 2025--PK
-			and length(A.customer_key) in (9,19)
-        and regexp_substr(B.customer_key,'[a-zA-Z]') is null
-	and length(A.customer_key) in (9,19)
-    AND not upper(CAMPAIGN_CANVAS_NAME) ILIKE any ('TEST%','%UNKNOWN%','%RCVX%')
-    AND DATE(CAMPAIGN_DATE) >= '2025-01-01';
-;
-
-CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_APP_CH_AGG AS 
-    SELECT 
-        CAMPAIGN_NAME,
-        CAMPAIGN_DATE,
-        CONTROL_HOLDOUT_CUSTOMERS,
-        0 AS TOTAL_TEST_CUSTOMERS,
-        COUNT(DISTINCT CUSTOMER_KEY) AS TOTAL_CONTROL_CUSTOMERS,
-        0 AS TOTAL_GLOBAL_CUSTOMERS        
-    FROM AM_ONE_STOP_CAM_TRACKER_APP_CH_CUST_LEVEL
-    GROUP BY ALL;
+    'TEST_CUST' AS TEST_CUSTOMERS   -- FIX: renamed from TEST_FLAG to match AGG reference
+FROM SUMMARY_GEN.BRAZE_SUMMARY_VW A
+LEFT JOIN "WUDNA"."SUMMARY_GEN"."WUDNA_ACCOUNT_MASTER_VW" B ON A.CUSTOMER_KEY = B.CUSTOMER_UMN
+WHERE
+    A.CUSTOMER_KEY IS NOT NULL
+    AND B.CUSTOMER_KEY IS NOT NULL
+    AND TO_DATE(CAMPAIGN_DATE) != '2099-01-01'
+    AND TO_DATE(CAMPAIGN_DATE) >= '2026-01-01'           -- FIX: was 2025-02-01
+    AND TO_DATE(CAMPAIGN_DATE) <  DATE_TRUNC('MONTH', CURRENT_DATE())
+    AND TYPE = 'CAMPAIGN'
+    AND Activity_code LIKE 'S%'
+    AND REGEXP_SUBSTR(B.customer_key, '[a-zA-Z]') IS NULL
+    AND LENGTH(A.customer_key) IN (9,19)
+    AND NOT UPPER(CAMPAIGN_CANVAS_NAME) ILIKE ANY ('TEST%','%UNKNOWN%','%RCVX%');
 
 
-    
-CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_CAM_UNION AS 
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_APP_TEST_AGG AS
+SELECT
+    CAMPAIGN_NAME,
+    CAMPAIGN_DATE,
+    COUNT(DISTINCT CUSTOMER_KEY)    AS TOTAL_TEST_CUSTOMERS,
+    0                               AS TOTAL_CONTROL_CUSTOMERS,
+    0                               AS TOTAL_GLOBAL_HOLDOUT_CUSTOMERS
+FROM AM_ONE_STOP_CAM_TRACKER_APP_TEST_CUST_LEVEL
+GROUP BY CAMPAIGN_NAME, CAMPAIGN_DATE;
+
+
+-- GLOBAL HOLDOUT
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_APP_GH_CUST_LEVEL AS
+SELECT
+    UPPER(A.CAMPAIGN_CANVAS_NAME) AS CAMPAIGN_NAME,   -- FIX: was stripping first 3 chars, breaking name alignment
+    CASE WHEN LENGTH(A.CUSTOMER_KEY) = 19 THEN A.CUSTOMER_KEY ELSE B.CUSTOMER_KEY END AS CUSTOMER_KEY,
+    CASE
+        WHEN SUBSTR(activity_code,3,1) = 'W' AND WEBHOOK_SENT_DATE IS NOT NULL THEN WEBHOOK_SENT_DATE
+        ELSE TO_DATE('2099-01-01')
+    END AS CAMPAIGN_DATE,
+    'GLOBAL_HOLD' AS GLOBAL_HOLDOUT_CUSTOMERS
+FROM SUMMARY_GEN.BRAZE_SUMMARY_VW A
+LEFT JOIN "WUDNA"."SUMMARY_GEN"."WUDNA_ACCOUNT_MASTER_VW" B ON A.CUSTOMER_KEY = B.CUSTOMER_UMN
+WHERE
+    A.CUSTOMER_KEY IS NOT NULL
+    AND B.CUSTOMER_KEY IS NOT NULL
+    AND TO_DATE(CAMPAIGN_DATE) != '2099-01-01'
+    AND TO_DATE(CAMPAIGN_DATE) >= '2026-01-01'           -- FIX: was 2025-02-01
+    AND TO_DATE(CAMPAIGN_DATE) <  DATE_TRUNC('MONTH', CURRENT_DATE())
+    AND TYPE = 'CAMPAIGN'
+    AND Activity_code LIKE 'G%'
+    AND REGEXP_SUBSTR(B.customer_key, '[a-zA-Z]') IS NULL
+    AND LENGTH(A.customer_key) IN (9,19)
+    AND NOT UPPER(CAMPAIGN_CANVAS_NAME) ILIKE ANY ('TEST%','%UNKNOWN%','%RCVX%');
+
+
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_APP_GH_AGG AS
+SELECT
+    CAMPAIGN_NAME,
+    CAMPAIGN_DATE,
+    0                                        AS TOTAL_TEST_CUSTOMERS,
+    0                                        AS TOTAL_CONTROL_CUSTOMERS,
+    COUNT(DISTINCT CUSTOMER_KEY)             AS TOTAL_GLOBAL_HOLDOUT_CUSTOMERS  -- FIX: standardized column name
+FROM AM_ONE_STOP_CAM_TRACKER_APP_GH_CUST_LEVEL
+GROUP BY CAMPAIGN_NAME, CAMPAIGN_DATE;
+
+
+-- CONTROL HOLDOUT
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_APP_CH_CUST_LEVEL AS
+SELECT DISTINCT
+    CASE WHEN LENGTH(A.CUSTOMER_KEY) = 19 THEN A.CUSTOMER_KEY ELSE C.CUSTOMER_KEY END AS CUSTOMER_KEY,
+    UPPER(A.CAMPAIGN_CANVAS_NAME)                                                       AS CAMPAIGN_NAME,
+    TO_DATE(CAMPAIGN_CH_ENROLLED_DATE)                                                  AS CAMPAIGN_DATE,  -- FIX: added AS
+    'CONTROL_CUST'                                                                      AS CONTROL_HOLDOUT_CUSTOMERS
+FROM SUMMARY_GEN.BRAZE_SUMMARY_VW A
+LEFT JOIN "WUDNA"."SUMMARY_GEN"."WUDNA_ACCOUNT_MASTER_VW" C ON A.CUSTOMER_KEY = C.CUSTOMER_UMN
+WHERE
+    C.CUSTOMER_KEY IS NOT NULL
+    AND TYPE = 'CAMPAIGN'
+    AND ACTIVITY_CODE LIKE 'C%'
+    AND TO_DATE(CAMPAIGN_CH_ENROLLED_DATE) != '2099-01-01'
+    AND TO_DATE(CAMPAIGN_CH_ENROLLED_DATE) >= '2026-01-01'   -- FIX: was 2025-02-01
+    AND TO_DATE(CAMPAIGN_CH_ENROLLED_DATE) <  DATE_TRUNC('MONTH', CURRENT_DATE())  -- FIX: removed duplicate <
+    AND REGEXP_SUBSTR(C.customer_key, '[a-zA-Z]') IS NULL    -- FIX: alias was B, should be C
+    AND LENGTH(A.customer_key) IN (9,19)
+    AND NOT UPPER(CAMPAIGN_CANVAS_NAME) ILIKE ANY ('TEST%','%UNKNOWN%','%RCVX%');
+
+
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_APP_CH_AGG AS
+SELECT
+    CAMPAIGN_NAME,
+    CAMPAIGN_DATE,
+    0                               AS TOTAL_TEST_CUSTOMERS,
+    COUNT(DISTINCT CUSTOMER_KEY)    AS TOTAL_CONTROL_CUSTOMERS,
+    0                               AS TOTAL_GLOBAL_HOLDOUT_CUSTOMERS  -- FIX: standardized column name
+FROM AM_ONE_STOP_CAM_TRACKER_APP_CH_CUST_LEVEL
+GROUP BY CAMPAIGN_NAME, CAMPAIGN_DATE;
+
+
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_CAM_UNION AS
 SELECT * FROM AM_ONE_STOP_CAM_TRACKER_APP_TEST_AGG
-UNION
+UNION ALL
 SELECT * FROM AM_ONE_STOP_CAM_TRACKER_APP_GH_AGG
-UNION
-SELECT * FROM AM_ONE_STOP_CAM_TRACKER_APP_CH_AGG
-;
+UNION ALL
+SELECT * FROM AM_ONE_STOP_CAM_TRACKER_APP_CH_AGG;
 
-CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_TEST_CUST_LEVEL AS 
-select 
-        UPPER(A.CAMPAIGN_CANVAS_NAME) as CAMPAIGN_NAME, 
-        case when length(A.CUSTOMER_KEY) =19 then A.CUSTOMER_KEY
-             else B.CUSTOMER_KEY
-        end as CUSTOMER_KEY,
 
-        case when substr(activity_code_new,3,1)='P' AND push_sent_date IS NOT NULL then push_sent_date
-            when substr(activity_code_new,3,1)='I' AND inappmsg_viewed_date IS NOT NULL then inappmsg_viewed_date
-            when substr(activity_code_new,  3,1)='C' AND cc_sent_date IS NOT NULL then cc_sent_date
-            when substr(activity_code_new,3,1)='W' AND Webhook_sent_date IS NOT NULL then webhook_sent_date
-        ELSE TO_DATE('2099-01-01') -- SETTING AN ABSURD DATE SO THAT NO TXN DATA GETS JOINED
-        END AS CAMPAIGN_DATE,
-        'TEST_CUST' as TEST_CUSTOMERS
-        
-from SUMMARY_GEN.BRAZE_SUMMARY_VW A
-Left Join "WUDNA"."SUMMARY_GEN".WUDNA_ACCOUNT_MASTER_VW B on A.CUSTOMER_KEY = B.CUSTOMER_UMN
- 
-where
-    A.CUSTOMER_KEY is not null 
-	and B.CUSTOMER_KEY is not null 
-    and to_date(CAMPAIGN_DATE) not like '2099-01-01' 
-    and TYPE='CANVAS' 
-    and Activity_code_new like 'S%'
-    AND to_date(CAMPAIGN_DATE) >= '2025-02-01'
-    and to_date(CAMPAIGN_DATE) < DATE_TRUNC('MONTH', CURRENT_DATE()) -- Change the date every month refresh--changed it to May 2025--PK
-    and regexp_substr(B.customer_key, '[a-zA-Z]') is null
-    and canvas_step_name_new not in ('X')
-    and length(A.customer_key) in (9,19)
-        AND not upper(CAMPAIGN_CANVAS_NAME) ILIKE any ('TEST%','%UNKNOWN%','%RCVX%')
-    AND DATE(CAMPAIGN_DATE) >= '2025-01-01'
-order by 
-    customer_key,
-    COMMUNICATION_DATE;
+-- ============================================================
+-- STREAM 3: APP CANVASES (BRAZE TYPE = 'CANVAS')
+-- ============================================================
 
-CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_TEST_AGG AS 
-    SELECT
-CAMPAIGN_NAME,
-CAMPAIGN_DATE,
-TEST_CUSTOMERS,
-COUNT(DISTINCT CUSTOMER_KEY) AS TOTAL_TEST_CUSTOMERS,
-    0 AS TOTAL_CONTROL_CUSTOMERS,
-    0 AS TOTAL_GLOBAL_HOLDOUT_CUSTOMERS
+-- TEST
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_TEST_CUST_LEVEL AS
+SELECT
+    UPPER(A.CAMPAIGN_CANVAS_NAME) AS CAMPAIGN_NAME,
+    CASE WHEN LENGTH(A.CUSTOMER_KEY) = 19 THEN A.CUSTOMER_KEY ELSE B.CUSTOMER_KEY END AS CUSTOMER_KEY,
+    CASE
+        WHEN SUBSTR(activity_code_new,3,1) = 'P' AND push_sent_date      IS NOT NULL THEN push_sent_date
+        WHEN SUBSTR(activity_code_new,3,1) = 'I' AND inappmsg_viewed_date IS NOT NULL THEN inappmsg_viewed_date
+        WHEN SUBSTR(activity_code_new,3,1) = 'C' AND cc_sent_date         IS NOT NULL THEN cc_sent_date
+        WHEN SUBSTR(activity_code_new,3,1) = 'W' AND Webhook_sent_date    IS NOT NULL THEN webhook_sent_date
+        ELSE TO_DATE('2099-01-01')
+    END AS CAMPAIGN_DATE,
+    'TEST_CUST' AS TEST_CUSTOMERS
+FROM SUMMARY_GEN.BRAZE_SUMMARY_VW A
+LEFT JOIN "WUDNA"."SUMMARY_GEN".WUDNA_ACCOUNT_MASTER_VW B ON A.CUSTOMER_KEY = B.CUSTOMER_UMN
+WHERE
+    A.CUSTOMER_KEY IS NOT NULL
+    AND B.CUSTOMER_KEY IS NOT NULL
+    AND TO_DATE(CAMPAIGN_DATE) != '2099-01-01'
+    AND TYPE = 'CANVAS'
+    AND Activity_code_new LIKE 'S%'
+    AND TO_DATE(CAMPAIGN_DATE) >= '2026-01-01'            -- FIX: was 2025-02-01
+    AND TO_DATE(CAMPAIGN_DATE) <  DATE_TRUNC('MONTH', CURRENT_DATE())
+    AND REGEXP_SUBSTR(B.customer_key, '[a-zA-Z]') IS NULL
+    AND canvas_step_name_new NOT IN ('X')
+    AND LENGTH(A.customer_key) IN (9,19)
+    AND NOT UPPER(CAMPAIGN_CANVAS_NAME) ILIKE ANY ('TEST%','%UNKNOWN%','%RCVX%')
+ORDER BY customer_key, CAMPAIGN_DATE;             -- FIX: COMMUNICATION_DATE → CAMPAIGN_DATE
+
+
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_TEST_AGG AS
+SELECT
+    CAMPAIGN_NAME,
+    CAMPAIGN_DATE,
+    COUNT(DISTINCT CUSTOMER_KEY)    AS TOTAL_TEST_CUSTOMERS,
+    0                               AS TOTAL_CONTROL_CUSTOMERS,
+    0                               AS TOTAL_GLOBAL_HOLDOUT_CUSTOMERS
 FROM AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_TEST_CUST_LEVEL
-group by campaign_name, campaign_date;
+GROUP BY CAMPAIGN_NAME, CAMPAIGN_DATE;
 
 
-CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_CONTROL_CUST_LEVEL AS 
-select 
-        UPPER(A.CAMPAIGN_CANVAS_NAME) as CAMPAIGN_NAME, 
-        case when length(A.CUSTOMER_KEY) =19 then A.CUSTOMER_KEY
-             else B.CUSTOMER_KEY
-        end as CUSTOMER_KEY,
-
-        case when substr(activity_code_new,3,1)='P' AND push_sent_date IS NOT NULL then push_sent_date
-            when substr(activity_code_new,3,1)='I' AND inappmsg_viewed_date IS NOT NULL then inappmsg_viewed_date
-            when substr(activity_code_new,  3,1)='C' AND cc_sent_date IS NOT NULL then cc_sent_date
-            when substr(activity_code_new,3,1)='W' AND Webhook_sent_date IS NOT NULL then webhook_sent_date
-        ELSE TO_DATE('2099-01-01') -- SETTING AN ABSURD DATE SO THAT NO TXN DATA GETS JOINED
-        END AS CAMPAIGN_DATE,
-        'CONTROL_CUST' as CONTROL_HOLDOUT_CUSTOMERS
-from SUMMARY_GEN.BRAZE_SUMMARY_VW A
-Left Join "WUDNA"."SUMMARY_GEN".WUDNA_ACCOUNT_MASTER_VW B on A.CUSTOMER_KEY = B.CUSTOMER_UMN
- 
-where
-    A.CUSTOMER_KEY is not null 
-	and B.CUSTOMER_KEY is not null 
-    and to_date(CAMPAIGN_DATE) not like '2099-01-01' 
-    and TYPE='CANVAS' 
-    and Activity_code_new like 'C%'
-    AND to_date(CAMPAIGN_DATE) >= '2025-02-01'
-    and to_date(CAMPAIGN_DATE) < DATE_TRUNC('MONTH', CURRENT_DATE()) -- Change the date every month refresh--changed it to May 2025--PK
-    and regexp_substr(B.customer_key, '[a-zA-Z]') is null
-    and canvas_step_name_new not in ('X')
-    and length(A.customer_key) in (9,19)
-        AND not upper(CAMPAIGN_CANVAS_NAME) ILIKE any ('TEST%','%UNKNOWN%','%RCVX%')
-    AND DATE(CAMPAIGN_DATE) >= '2025-01-01'
-order by 
-    customer_key,
-    COMMUNICATION_DATE;
-
-    CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_CONTROL_AGG AS 
-    SELECT 
-        CAMPAIGN_NAME,
-        CAMPAIGN_DATE,
-        CONTROL_HOLDOUT_CUSTOMERS,
-        0 AS TOTAL_TEST_CUSTOMERS,
-        COUNT(DISTINCT CUSTOMER_KEY) AS TOTAL_CONTROL_CUSTOMERS,
-        0 AS TOTAL_GLOBAL_CUSTOMERS        
-    FROM AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_CONTROL_CUST_LEVEL
-    GROUP BY ALL;
-
-CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_GH_CUST_LEVEL AS 
-select 
-        UPPER(A.CAMPAIGN_CANVAS_NAME) as CAMPAIGN_NAME, 
-        case when length(A.CUSTOMER_KEY) =19 then A.CUSTOMER_KEY
-             else B.CUSTOMER_KEY
-        end as CUSTOMER_KEY,
-
-        case when substr(activity_code_new,3,1)='P' AND push_sent_date IS NOT NULL then push_sent_date
-            when substr(activity_code_new,3,1)='I' AND inappmsg_viewed_date IS NOT NULL then inappmsg_viewed_date
-            when substr(activity_code_new,  3,1)='C' AND cc_sent_date IS NOT NULL then cc_sent_date
-            when substr(activity_code_new,3,1)='W' AND Webhook_sent_date IS NOT NULL then webhook_sent_date
-        ELSE TO_DATE('2099-01-01') -- SETTING AN ABSURD DATE SO THAT NO TXN DATA GETS JOINED
-        END AS CAMPAIGN_DATE,
-        'GLOBAL_HOLD' as GLOBAL_HOLDOUT_CUSTOMERS
-from SUMMARY_GEN.BRAZE_SUMMARY_VW A
-Left Join "WUDNA"."SUMMARY_GEN".WUDNA_ACCOUNT_MASTER_VW B on A.CUSTOMER_KEY = B.CUSTOMER_UMN
- 
-where
-    A.CUSTOMER_KEY is not null 
-	and B.CUSTOMER_KEY is not null 
-    and to_date(CAMPAIGN_DATE) not like '2099-01-01' 
-    and TYPE='CANVAS' 
-    and Activity_code_new like 'C%'
-    AND to_date(CAMPAIGN_DATE) >= '2025-02-01'
-    and to_date(CAMPAIGN_DATE) < DATE_TRUNC('MONTH', CURRENT_DATE()) -- Change the date every month refresh--changed it to May 2025--PK
-    and regexp_substr(B.customer_key, '[a-zA-Z]') is null
-    and canvas_step_name_new not in ('X')
-    and length(A.customer_key) in (9,19)
-        AND not upper(CAMPAIGN_CANVAS_NAME) ILIKE any ('TEST%','%UNKNOWN%','%RCVX%')
-    AND DATE(CAMPAIGN_DATE) >= '2025-01-01'
-order by 
-    customer_key,
-    COMMUNICATION_DATE;
-
-    CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_GH_AGG AS 
-    SELECT 
-        CAMPAIGN_NAME,
-        CAMPAIGN_DATE,
-        CONTROL_HOLDOUT_CUSTOMERS,
-        0 AS TOTAL_TEST_CUSTOMERS,
-        0 AS TOTAL_CONTROL_CUSTOMERS,
-        COUNT(DISTINCT CUSTOMER_KEY) AS TOTAL_GLOBAL_CUSTOMERS        
-    FROM AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_CONTROL_CUST_LEVEL
-    GROUP BY ALL;
+-- CONTROL
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_CONTROL_CUST_LEVEL AS
+SELECT
+    UPPER(A.CAMPAIGN_CANVAS_NAME) AS CAMPAIGN_NAME,
+    CASE WHEN LENGTH(A.CUSTOMER_KEY) = 19 THEN A.CUSTOMER_KEY ELSE B.CUSTOMER_KEY END AS CUSTOMER_KEY,
+    CASE
+        WHEN SUBSTR(activity_code_new,3,1) = 'P' AND push_sent_date      IS NOT NULL THEN push_sent_date
+        WHEN SUBSTR(activity_code_new,3,1) = 'I' AND inappmsg_viewed_date IS NOT NULL THEN inappmsg_viewed_date
+        WHEN SUBSTR(activity_code_new,3,1) = 'C' AND cc_sent_date         IS NOT NULL THEN cc_sent_date
+        WHEN SUBSTR(activity_code_new,3,1) = 'W' AND Webhook_sent_date    IS NOT NULL THEN webhook_sent_date
+        ELSE TO_DATE('2099-01-01')
+    END AS CAMPAIGN_DATE,
+    'CONTROL_CUST' AS CONTROL_HOLDOUT_CUSTOMERS
+FROM SUMMARY_GEN.BRAZE_SUMMARY_VW A
+LEFT JOIN "WUDNA"."SUMMARY_GEN".WUDNA_ACCOUNT_MASTER_VW B ON A.CUSTOMER_KEY = B.CUSTOMER_UMN
+WHERE
+    A.CUSTOMER_KEY IS NOT NULL
+    AND B.CUSTOMER_KEY IS NOT NULL
+    AND TO_DATE(CAMPAIGN_DATE) != '2099-01-01'
+    AND TYPE = 'CANVAS'
+    AND Activity_code_new LIKE 'C%'
+    AND TO_DATE(CAMPAIGN_DATE) >= '2026-01-01'            -- FIX: was 2025-02-01
+    AND TO_DATE(CAMPAIGN_DATE) <  DATE_TRUNC('MONTH', CURRENT_DATE())
+    AND REGEXP_SUBSTR(B.customer_key, '[a-zA-Z]') IS NULL
+    AND canvas_step_name_new NOT IN ('X')
+    AND LENGTH(A.customer_key) IN (9,19)
+    AND NOT UPPER(CAMPAIGN_CANVAS_NAME) ILIKE ANY ('TEST%','%UNKNOWN%','%RCVX%')
+ORDER BY customer_key, CAMPAIGN_DATE;             -- FIX: COMMUNICATION_DATE → CAMPAIGN_DATE
 
 
-CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_CANVAS_UNION AS 
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_CONTROL_AGG AS
+SELECT
+    CAMPAIGN_NAME,
+    CAMPAIGN_DATE,
+    0                               AS TOTAL_TEST_CUSTOMERS,
+    COUNT(DISTINCT CUSTOMER_KEY)    AS TOTAL_CONTROL_CUSTOMERS,
+    0                               AS TOTAL_GLOBAL_HOLDOUT_CUSTOMERS  -- FIX: standardized column name
+FROM AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_CONTROL_CUST_LEVEL
+GROUP BY CAMPAIGN_NAME, CAMPAIGN_DATE;
+
+
+-- GLOBAL HOLDOUT
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_GH_CUST_LEVEL AS
+SELECT
+    UPPER(A.CAMPAIGN_CANVAS_NAME) AS CAMPAIGN_NAME,
+    CASE WHEN LENGTH(A.CUSTOMER_KEY) = 19 THEN A.CUSTOMER_KEY ELSE B.CUSTOMER_KEY END AS CUSTOMER_KEY,
+    CASE
+        WHEN SUBSTR(activity_code_new,3,1) = 'P' AND push_sent_date      IS NOT NULL THEN push_sent_date
+        WHEN SUBSTR(activity_code_new,3,1) = 'I' AND inappmsg_viewed_date IS NOT NULL THEN inappmsg_viewed_date
+        WHEN SUBSTR(activity_code_new,3,1) = 'C' AND cc_sent_date         IS NOT NULL THEN cc_sent_date
+        WHEN SUBSTR(activity_code_new,3,1) = 'W' AND Webhook_sent_date    IS NOT NULL THEN webhook_sent_date
+        ELSE TO_DATE('2099-01-01')
+    END AS CAMPAIGN_DATE,
+    'GLOBAL_HOLD' AS GLOBAL_HOLDOUT_CUSTOMERS
+FROM SUMMARY_GEN.BRAZE_SUMMARY_VW A
+LEFT JOIN "WUDNA"."SUMMARY_GEN".WUDNA_ACCOUNT_MASTER_VW B ON A.CUSTOMER_KEY = B.CUSTOMER_UMN
+WHERE
+    A.CUSTOMER_KEY IS NOT NULL
+    AND B.CUSTOMER_KEY IS NOT NULL
+    AND TO_DATE(CAMPAIGN_DATE) != '2099-01-01'
+    AND TYPE = 'CANVAS'
+    AND Activity_code_new LIKE 'G%'                       -- FIX: was 'C%', should be 'G%' for Global Holdout
+    AND TO_DATE(CAMPAIGN_DATE) >= '2026-01-01'            -- FIX: was 2025-02-01
+    AND TO_DATE(CAMPAIGN_DATE) <  DATE_TRUNC('MONTH', CURRENT_DATE())
+    AND REGEXP_SUBSTR(B.customer_key, '[a-zA-Z]') IS NULL
+    AND canvas_step_name_new NOT IN ('X')
+    AND LENGTH(A.customer_key) IN (9,19)
+    AND NOT UPPER(CAMPAIGN_CANVAS_NAME) ILIKE ANY ('TEST%','%UNKNOWN%','%RCVX%')
+ORDER BY customer_key, CAMPAIGN_DATE;
+
+
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_GH_AGG AS
+SELECT
+    CAMPAIGN_NAME,
+    CAMPAIGN_DATE,
+    0                               AS TOTAL_TEST_CUSTOMERS,
+    0                               AS TOTAL_CONTROL_CUSTOMERS,
+    COUNT(DISTINCT CUSTOMER_KEY)    AS TOTAL_GLOBAL_HOLDOUT_CUSTOMERS
+FROM AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_GH_CUST_LEVEL     -- FIX: was reading from CONTROL table
+GROUP BY CAMPAIGN_NAME, CAMPAIGN_DATE;
+
+
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_CANVAS_UNION AS
 SELECT * FROM AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_TEST_AGG
-UNION
-SELECT * FROM AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_GH_AGG
-UNION
+UNION ALL
 SELECT * FROM AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_CONTROL_AGG
-;
+UNION ALL
+SELECT * FROM AM_ONE_STOP_CAM_TRACKER_CANVAS_APP_GH_AGG;
 
 
-CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_APP_UNION
+-- ============================================================
+-- FINAL ROLLUP
+-- ============================================================
+
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_APP_UNION AS  -- FIX: missing AS
 SELECT * FROM AM_ONE_STOP_CAM_TRACKER_CAM_UNION
-UNION
+UNION ALL
 SELECT * FROM AM_ONE_STOP_CAM_TRACKER_CANVAS_UNION;
 
 
-CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_FINAL_TABLE
-SELECT * FROM AM_ONE_STOP_CAM_TRACKER_EMAIL_SMS_WH_AGG
-UNION
-SELECT * FROM AM_ONE_STOP_CAM_TRACKER_APP_UNION;
+CREATE OR REPLACE TABLE AM_ONE_STOP_CAM_TRACKER_FINAL_TABLE AS  -- FIX: missing AS
+SELECT
+    CAMPAIGN_NAME,
+    DATE(CAMPAIGN_DATE)             AS CAMPAIGN_DATE,
+    SUM(TOTAL_TEST_CUSTOMERS)       AS TOTAL_TEST_CUSTOMERS,
+    SUM(TOTAL_CONTROL_CUSTOMERS)    AS TOTAL_CONTROL_CUSTOMERS,
+    SUM(TOTAL_GLOBAL_HOLDOUT_CUSTOMERS) AS TOTAL_GLOBAL_HOLDOUT_CUSTOMERS
+FROM (
+    SELECT * FROM AM_ONE_STOP_CAM_TRACKER_EMAIL_SMS_WH_AGG
+    UNION ALL
+    SELECT * FROM AM_ONE_STOP_CAM_TRACKER_APP_UNION
+)
+GROUP BY CAMPAIGN_NAME, DATE(CAMPAIGN_DATE)
+ORDER BY CAMPAIGN_DATE, CAMPAIGN_NAME;
+
 
 SELECT * FROM AM_ONE_STOP_CAM_TRACKER_FINAL_TABLE;
+```
+
+---
+
+## Key Structural Change at the Final Step
+
+Rather than a raw `UNION`, the final table wraps the union in a `GROUP BY` + `SUM`. This collapses the partial-zeros pattern (each AGG contributes zeros for the groups it doesn't own) into clean aggregated totals per campaign per date — which is exactly what Power BI needs to slice correctly.
+
+One thing to confirm with you: the `APP_CH_CUST_LEVEL` date logic uses `CAMPAIGN_CH_ENROLLED_DATE` rather than a derived event date like the other app tables. Make sure that column actually carries the right date for control holdout records in your Braze view.
